@@ -1,10 +1,10 @@
 # Fibers tutorial
 
 Run these files from the repository root in numeric order. Each is intentionally
-small enough to read as a complete programme and contains assertions for the
+small enough to read as a complete program and contains assertions for the
 behaviour it demonstrates.
 
-The first two programmes are deliberately generic. The remaining examples
+The first two programs are deliberately generic. The remaining examples
 move through emergency coordination, robotics, field communications, desktop
 applications, firmware, games, servers and embedded hosts. The domains change;
 the concurrency vocabulary does not.

@@ -39,3 +39,10 @@ Every test file has an explicit portability classification. The builder fails wh
 ## Repository checks
 
 `make check` runs shell and Lua syntax, formatting, local links, module resolution, package boundaries and generated Luau build checks.
+
+
+## Phase-integrity regression
+
+Changes to task admission, cancellation, Closure, effects or trusted resources must run the speculative phase-integrity tests. These tests verify that speculative callbacks remain deterministic, non-yielding and externally inert; that losing branches do not admit work or mutate ownership; and that runtime phase state is restored after errors.
+
+The detailed authoring contract is in [Extending Fibers](../advanced/extending.md).

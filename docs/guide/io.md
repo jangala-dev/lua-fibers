@@ -1,5 +1,7 @@
 # Files, pipes, processes and sockets
 
+This guide is application-facing. It assumes the option and lifetime rules in [Options](options.md) and [Lifetimes](lifetimes.md); reactor and handle invariants are kept in [I/O design](../design/io.md).
+
 Fibers restores the practical shape of the earlier I/O layer while retaining
 version 1 custody and option semantics.
 
@@ -492,8 +494,7 @@ may lower it and use `attempt_timeout` to release slots held by black-holed
 connections. The first successful Stream moves into the caller's scope, and the
 call returns only after
 the private race has closed every losing query, Dial and Stream. Use `socket.dial_op` when admission itself must participate in a choice, then
-select from the returned `Dial` lifecycle. See
-[`docs/guide/happy-eyeballs.md`](happy-eyeballs.md).
+select from the returned `Dial` lifecycle. The following sections give the complete connection policy and reporting contract.
 
 The general entry points dispatch by endpoint kind:
 
@@ -526,6 +527,232 @@ Source binding is explicit through a numeric address:
 }
 ```
 
+
+### Resolver protocol and selection
+
+The public resolution surface above is backed by the following complete resolver contract.
+
+### Implemented protocol behaviour
+
+The resolver currently provides:
+
+- concurrent A and AAAA questions;
+- strict transaction id, peer, question, class and type validation;
+- an EDNS(0) UDP payload advertisement, defaulting to 1232 octets;
+- retries across configured recursive servers before the next attempt round;
+- DNS-over-TCP fallback for truncated UDP responses;
+- bounded CNAME following and loop detection;
+- positive RRset caching and SOA-derived negative caching;
+- `/etc/resolv.conf` name-server, search, timeout, attempts and `ndots` parsing;
+- `/etc/hosts` lookup before DNS;
+- secure transaction-id entropy from an injected callback or `/dev/urandom`;
+- a bounded positive and negative cache, defaulting to 1024 entries;
+- deterministic explicit configuration for embedded and ManualHost use.
+
+Input decoding is bounded by message size, record count, label length, expanded
+name length and compression-pointer depth. Malformed or unrelated datagrams are
+discarded while the transaction deadline remains open.
+
+Resolver configuration, hosts data and `/dev/urandom` are read through
+`fibers.file`; the DNS path does not call `io.open`. A small Cell once-gate
+serialises each lazy file load, so concurrent A and AAAA producers share one
+non-blocking read and cancellation reopens an unfinished load.
+
+Transaction ids are taken from an injected `random_u16` callback when supplied,
+then from `/dev/urandom` through `fibers.file`. Resolution fails by default when
+neither secure source is available. A process-local weak fallback exists only
+for constrained or deterministic environments which explicitly set
+`allow_weak_random = true`.
+
+`maximum_cache_entries` bounds the resolver cache and defaults to 1024. Set it
+to zero to disable caching. Eviction is deterministic first-in, first-out after
+expired entries have been removed.
+
+### Selection policy
+
+An explicit resolver always wins:
+
+```lua
+socket.resolve_name('example.org', 443, { resolver = resolver })
+```
+
+The shorthand options `dns = true` and `nameservers = {...}`
+construct a resolver for that query. Where a native host advertises
+`resolver_blocking = true` and provides both datagram and stream sockets, the
+socket resolver creates one DNS resolver per Runtime and reuses its cache.
+
+If automatic DNS configuration is unavailable, resolution returns a configuration
+error. Supply an explicit resolver where the host resolver is required.
+
+### Deliberate limits
+
+This is a stub resolver which depends on a configured recursive server. It does
+not perform iterative recursion, DNSSEC validation, mDNS, LLMNR, DNS over TLS or
+DNS over HTTPS. It currently resolves numeric service ports only. Address
+ordering and connection racing remain responsibilities of
+[`socket.connect`](io.md#named-connection-policy) rather than the DNS layer.
+
+### Named-connection policy
+
+Named connections use Happy Eyeballs coordination over the independently closing A and AAAA result streams. The following options and reports form the public application contract.
+
+### Candidate policy
+
+Every new family completion is merged with the current unattempted set. A
+single global destination-ordering policy then ranks all currently available
+IPv4 and IPv6 destinations before family interleaving. The first address in
+that global order determines the initially preferred family; it is not fixed to
+IPv6.
+
+Routing and source-address-sensitive RFC 6724 policy is injected rather than
+guessed by the coordinator:
+
+```lua
+local connection, report = socket.connect(socket.name_endpoint('example.org', 443), {
+  order_destinations = function(addresses, endpoint, opts)
+    return application_destination_order(addresses, endpoint, opts)
+  end,
+})
+```
+
+A host may instead provide `sort_destination_addresses`. One of these global
+policies is required by default: the coordinator does not invent a portable
+RFC 6724 ranking from address family alone. A host which cannot supply routing
+and source-address-aware ordering may opt in explicitly to stable resolver
+order:
+
+```lua
+local connection, report = socket.connect(socket.name_endpoint('example.org', 443), {
+  destination_ordering = 'stable',
+})
+```
+
+This is reported as `destination_ordering = 'stable'` and is an intentional
+non-RFC fallback, not an implicit claim of RFC 6724 compliance.
+
+Ordering callbacks participate in guarded option construction. They therefore
+must be immediate, deterministic, non-yielding and side-effect free. Fibers
+passes an isolated copy in stable arrival/current-policy order and validates
+that the returned list contains only known destinations; omitted destinations
+are appended rather than discarded. Stable input order remains available as the
+final RFC 6724 tie-break.
+
+After global ordering, `first_family_count` controls how many addresses from the
+initially preferred family may be launched before ordinary alternation. The
+default is one. Later DNS results re-order only the unattempted set; Dials which
+have already begun continue unchanged.
+
+### Timing and connection options
+
+The principal options are:
+
+```lua
+{
+  resolution_delay = 0.050,
+  attempt_delay = 0.250, -- minimum 0.010
+  first_family_count = 1,
+  timeout = 10.0,
+  -- timeout = false, -- disable the deadline
+  -- deadline = absolute_monotonic_time,
+  maximum_candidates = 64,
+  -- By default maximum_active_attempts equals maximum_candidates.
+  -- maximum_active_attempts = 4, -- explicit bounded-host profile
+  -- attempt_timeout = 2.0,       -- releases a bounded slot after this interval
+
+  nodelay = true,
+  local_address_inet6 = socket.ipv6_address('::', 0),
+  local_address_inet4 = socket.ipv4_address('0.0.0.0', 0),
+
+  resolver = resolver,
+  resolver_options = {},
+}
+```
+
+A relative `timeout` begins when the admitted Dial driver starts and defaults to
+30 seconds when omitted. Set `timeout = false` to disable it. An absolute `deadline` uses the Runtime's monotonic clock. RFC
+8305's 10 millisecond minimum connection-attempt delay is enforced.
+
+`maximum_candidates` bounds retained DNS destinations and defaults to 64; the
+report records any dropped candidates. In the general profile,
+`maximum_active_attempts` defaults to that same bound, so a black-holed earlier
+connection does not prevent later candidates from being launched at their
+stagger times merely because four attempts are already pending. A constrained
+host may set a smaller explicit bound.
+
+A smaller active-attempt bound is an explicit resource/liveness trade-off. Use
+`attempt_timeout` to give every numeric Dial an absolute per-attempt deadline; a
+timed-out Dial fails, closes and releases its slot so the next candidate can be
+admitted. Without an attempt timeout, a full set of black-holed attempts may
+hold every slot until the overall deadline. Reports expose
+`capacity_limited`, `unattempted_count`, `active_attempts` and
+`blocked_by_attempt_capacity` so this condition is observable.
+
+Family-specific local addresses avoid applying an IPv4 bind address to an IPv6
+attempt or the reverse. Ordinary Stream capacity and chunk-size options are
+forwarded to each numeric Dial.
+
+### Reports and failures
+
+Success returns a report alongside the Stream:
+
+```lua
+{
+  kind = 'dial',
+  strategy = 'happy_eyeballs_v2',
+  status = 'connected',
+  destination_ordering = 'host',
+  maximum_candidates = 64,
+  maximum_active_attempts = 64,
+  capacity_limited = false,
+  winner = {
+    address = address,
+    family = 'inet6',
+    attempt = 1,
+  },
+  attempts = {
+    {
+      address = address,
+      family = 'inet6',
+      status = 'succeeded',
+      started_at = 0.0,
+      completed_at = 0.012,
+    },
+  },
+  families = {
+    inet6 = { done = true, addresses = {...} },
+    inet4 = { done = false, addresses = {...} },
+  },
+}
+```
+
+On terminal failure, `connect` returns `nil, err`; the same report is
+available as `err.report`. Individual attempt errors are retained. Resolver
+errors are returned directly when no connection attempt could be made;
+otherwise terminal exhaustion is reported as `connect_failed` with the attempt
+history.
+
+Reports use monotonic Runtime times. They are intended for diagnostics and
+conformance tests rather than as a persistent serialisation format.
+
+### Scope and custody guarantee
+
+The internal custody tree is:
+
+```text
+Dial (strategy: happy_eyeballs_v2)
+└── private driver scope
+    ├── resolver Query
+    ├── numeric Dial 1
+    ├── numeric Dial 2
+    └── selected Stream, until collected
+```
+
+The winning numeric Dial first moves its Stream into the private driver scope.
+Collecting the Dial result then moves that Stream into the caller's target
+scope. Every other resource remains in the private tree and is closed through
+ordinary Closure. This prevents a late successful attempt from leaking a
+socket after another attempt has already won.
+
 ## Datagram sockets
 
 Datagram sockets are message-oriented resources, not Streams. Construction is
@@ -554,7 +781,7 @@ udp:closed_op()
 ```
 
 Each has the exact direct twin described in
-[`direct-and-options.md`](direct-and-options.md). A received value is a record:
+[`options.md`](options.md). A received value is a record:
 
 ```lua
 {
@@ -680,4 +907,4 @@ local audit = IO.report(fibers.current_runtime(), {
 
 The audit reports live handle custody, registration generations, close
 failures, stale readiness deliveries and lifecycle violations. See
-[`../advanced/io-invariants.md`](../advanced/io-invariants.md).
+[I/O design](../design/io.md).

@@ -273,7 +273,7 @@ verify-luajit: rocks
 	luajit tests/embedding/hosts/test_nixio.lua
 	luajit tests/embedding/hosts/test_fd_nixio.lua
 
-# Luau has no --version option. Execute and analyse a small typed programme
+# Luau has no --version option. Execute and analyse a small typed program
 # instead, which checks both installed CLI binaries.
 verify-luau: luau
 	smoke="$(BUILD_ROOT)/verify-luau.luau"

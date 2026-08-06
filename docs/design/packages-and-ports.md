@@ -1,11 +1,192 @@
-# Port architectures
+# Packages and ports
+
+This document describes package boundaries, reduced profiles and the intended shape of Fibers on supported or prospective hosts.
+
+## Packages and profiles
+
+Fibers v1 separates the semantic system, host-neutral I/O contracts, operating-system implementations and engine integrations. Package installation is deliberately coarser than deployment selection.
+
+### Published package families
+
+```text
+fibers-core
+fibers-io
+fibers-io-linux
+fibers-io-ffi
+fibers-io-cffi
+fibers-io-luaposix
+fibers-io-nixio
+fibers-roblox
+fibers-diagnostics
+fibers-reference
+```
+
+`fibers-core` contains the operation language, evaluator, Runtime, structured Lifetimes, portable resources and the generic embedding boundary. It does not probe native packages.
+
+`fibers-io` contains host-neutral I/O contracts and facilities: errors, handles, readiness, the reactor, host-backed Streams, sockets, files, DNS and processes. Portable Flow-backed Streams and memory pairs remain in `fibers-core`. It does not select an implementation.
+
+`fibers-io-linux` contains the shared Linux binding implementation used by the LuaJIT FFI and CFFI loaders. It does not choose a binding library itself.
+
+Each `fibers-io-<backend>` package supplies a coherent operating-system implementation. A backend package may provide polling, time, sockets, files, pipes and processes together, while deployment tooling may retain only the modules reached by the application.
+
+`fibers-roblox` is an engine integration rather than an I/O backend. Luau itself is a language and distribution target, not a statement about available files, sockets or processes.
+
+### Canonical namespaces
+
+```text
+fibers.embed.*       generic external delivery and bounded driving
+fibers.io.*          host-neutral I/O contracts and native backends
+fibers.net.*         neutral network value types
+fibers.roblox.*      Roblox scheduling and engine adapters
+```
+
+Automatic native I/O backend probing is isolated in:
+
+```lua
+local Auto = require('fibers.io.auto')
+local host = Auto.default()
+```
+
+Portable hosts, engine integrations and constrained I/O programs should select explicitly:
+
+```lua
+local Nixio = require('fibers.io.nixio')
+local result = fibers.run(main, { host = Nixio.new() })
+```
+
+### Composable platforms
+
+Backend packages provide coherent complete hosts, but the common I/O layer does
+not require an application to use one backend for every capability.
+`fibers.io.Platform` assembles independent providers and validates the readiness
+domain used by handle-producing facilities:
+
+```lua
+local IO = require('fibers.io')
+local FFI = require('fibers.io.luajit_linux').new()
+local Posix = require('fibers.io.luaposix').new()
+
+local platform = IO.Platform.new({
+  providers = {
+    clock = FFI,
+    wait = FFI,
+    socket = FFI,
+    file = Posix,
+    process = Posix,
+    resolver = application_resolver,
+  },
+})
+```
+
+The example is accepted only when the selected wait driver can observe the
+handles produced by the file and process providers. Backends declare a
+`wait_domain`; differing domains require an explicit compatibility policy.
+Resolver-only providers are not constrained because they do not place handles
+in the readiness set.
+
+A complete backend remains the ordinary case:
+
+```lua
+local backend = require('fibers.io.nixio').new()
+local platform = IO.Platform.from(backend)
+```
+
+Package selection and capability composition are separate. Installing
+`fibers-io-nixio` makes the complete nixio family available; an exact-closure
+build still includes only the modules reached from the selected entries.
+
+### Generic embedding
+
+`fibers.embed.Application` owns a Runtime and root Scope and advances them without blocking the surrounding host:
+
+```lua
+local Embed = require('fibers.embed')
+
+local host = Embed.Queue.new({
+  now = monotonic_now,
+})
+
+local app = Embed.Application.new(main, {
+  host = host,
+  owns_host = false,
+})
+
+local status = app:advance({
+  horizon = monotonic_now() + turn_budget,
+  max_steps = 128,
+  max_work = 512,
+})
+```
+
+Host callbacks enqueue deliveries through `Embed.Queue`; they do not enter the evaluator recursively. The surrounding event loop decides when to call `advance` again from `needs_immediate_resume`, `next_deadline` and external interests.
+
+Roblox builds on this boundary. `fibers.roblox.app` adds `task.defer`, `task.delay` and RunService phase scheduling; `fibers.roblox.host` adds the BindableEvent completion bridge. The semantic driver is no longer Roblox-specific.
+
+### Exact-closure deployments
+
+Published packages make features available. A deployment profile selects the precise module roots used by one program.
+
+```sh
+lua scripts/build-profile.lua \
+  --entry fibers \
+  --entry fibers.channel \
+  --entry fibers.io.nixio \
+  --output build/application \
+  --report build/application/REPORT.txt
+```
+
+Named example profiles are also provided:
+
+```sh
+lua scripts/build-profile.lua --profile core-minimal --output build/core
+lua scripts/build-profile.lua --profile roblox --output build/roblox
+lua scripts/build-profile.lua --profile io-nixio --output build/nixio
+```
+
+The builder follows literal module dependencies, emits only the reachable source tree and reports the contribution of each published package. It can instead produce one `package.preload` bundle with `--bundle`.
+
+Runtime-selected dependencies are listed in `packages/dynamic_requires.lua`. They are not silently added to a constrained build. In particular, diagnostics and automatic backend discovery remain optional.
+
+### Dependency direction
+
+The intended direction is:
+
+```text
+operation language and kernel
+        ↓
+Runtime, Lifetimes and portable resources
+        ↓
+generic embedding boundary
+        ↓
+host-neutral I/O facilities
+        ↓
+native I/O backends or engine adapters
+```
+
+A low-level backend must not depend on a high-level socket façade. Network address values therefore live under `fibers.net.address`, below both socket facilities and native providers.
+
+### Luau artefacts
+
+Luau distributions are generated forms of `fibers-core` and selected integrations, not a separate semantic package. Likely release artefacts include:
+
+```text
+Lua module tree
+standalone Luau alias tree
+Roblox/Wally ModuleScript tree
+single embedded module registry
+```
+
+One Fibers Runtime remains a serial transactional world. Separate Luau Actors or other independently scheduled VM instances communicate through external messages; transactions and custody transfers do not span those runtimes implicitly.
+
+
+## Port architectures
 
 This note records the intended architecture for ports of the Fibers semantics.
 It is a design direction rather than part of the Lua version 1 API contract.
 The normative portable material is the option algebra, proof outcomes, commit
 protocol, callback phases and Lifetime laws.
 
-## Shared semantic centre
+### Shared semantic centre
 
 Every port should retain one semantic core:
 
@@ -35,7 +216,7 @@ The three callback phases apply unchanged in every language:
 Capacity exhaustion in a bounded implementation is Unknown, never Retry. An
 implementation limit must not prove that a preferred option is absent.
 
-## Luau and Roblox profile
+### Luau and Roblox profile
 
 The generated Luau target is the first language-port experiment and should
 remain source-compatible with the Lua semantic centre. Roblox adds an embedded
@@ -87,7 +268,7 @@ not part of the initial profile.
 The portable gameplay examples should serve as shared Lua, Luau, Roblox and
 browser demonstrations. See `docs/guide/roblox.md`.
 
-## Rust family
+### Rust family
 
 The Rust implementation should be layered rather than forced into one storage
 or host profile.
@@ -107,7 +288,7 @@ The core should be a pollable state machine. It should not require Tokio,
 Embassy or a browser executor and should not create one host task per Fibers
 fiber.
 
-### Internal Rust fibers
+#### Internal Rust fibers
 
 A Fibers fiber is an ordinary Rust async function or async block stored and
 polled by the Fibers runtime:
@@ -147,7 +328,7 @@ The host executor remains responsible for waking and polling the root future.
 Fibers is responsible for transactional admission, cancellation, scheduling and
 Closure of its internal fibers.
 
-### Waking
+#### Waking
 
 Each internal fiber needs a small erased Waker containing at least:
 
@@ -164,7 +345,7 @@ waking a different future which later reused the same slot.
 Fibers-native resources can normally enqueue a FiberId directly. An arbitrary
 host Future receives the same per-fiber Waker when Fibers polls it.
 
-### Work budgeting
+#### Work budgeting
 
 One outer poll must perform bounded work before yielding to its host executor.
 Separate limits should cover:
@@ -179,7 +360,7 @@ Closure work per turn
 A turn limit yields and retains work. A proof or storage capacity limit returns
 Unknown with a capacity reason. These outcomes are not interchangeable.
 
-## Embassy and MCU profile
+### Embassy and MCU profile
 
 Fibers applications should be direct users of Embassy and MCU futures. Device
 drivers do not need to be wrapped in one Embassy task per logical Fibers fiber.
@@ -212,7 +393,7 @@ ordinary Embassy Future     sequential wait inside one fiber
 Fibers option adapter       participant in choice, and_then, products or fallback
 ```
 
-### Strict no_std/no_alloc storage
+#### Strict no_std/no_alloc storage
 
 Removing Embassy tasks does not remove async frame storage. Every live async
 function has a compiler-generated state-machine frame which must remain pinned.
@@ -246,14 +427,14 @@ allows admission to compose lawfully with fallback or overload policy. Lack of
 capacity must be represented explicitly; it must not become an accidental panic
 or an unsound proof of general absence.
 
-### Cancellation
+#### Cancellation
 
 Cancellation is cooperative. It is observed when an internal future yields to
 Fibers or reaches a Fibers transaction boundary. A CPU loop or blocking foreign
 call can still delay the runtime. The Lifetime retains custody until the future
 finishes and Closure completes or fails explicitly.
 
-## Browser WASM profile
+### Browser WASM profile
 
 The browser profile should use one root Rust Future driven by the JavaScript
 event loop. Internal Fibers fibers should not each become a JavaScript Promise or
@@ -283,7 +464,7 @@ Embassy interrupt or driver wake  -> wake root Fibers future
 Promise or EventTarget delivery   -> wake root Fibers future
 ```
 
-### Useful browser adapters
+#### Useful browser adapters
 
 ```text
 Promise                 one-shot external completion
@@ -310,7 +491,7 @@ profile need not use WebAssembly threads. Separate workers should initially own
 separate Fibers worlds and communicate through explicit channels; distributing
 one transaction across workers would require a different commit protocol.
 
-### Practical value
+#### Practical value
 
 The first strong WASM use may be the hosted twin of an MCU application:
 
@@ -325,7 +506,7 @@ same protocol and lifetime logic
 This supports deterministic simulation, failure injection, browser-based device
 tools, protocol demonstrations and differential testing of application logic.
 
-## WASI and hosted Rust
+### WASI and hosted Rust
 
 An allocated `no_std + alloc` or `std` implementation should retain dynamic
 option graphs, flexible participant sets and rich diagnostics. It is the most
@@ -339,7 +520,7 @@ admission, certified overload fallback, graceful shutdown, streaming custody or
 cleanup which may itself fail. Simple stateless request handling does not require
 the full algebra.
 
-## Kotlin profile
+### Kotlin profile
 
 Kotlin coroutines should provide suspension, dispatch and ordinary parent-child
 job integration. They should not replace the Fibers evaluator.
@@ -370,7 +551,7 @@ Kotlin is likely to use allocated graphs and continuations. Its principal value
 would be a common concurrency model across Android, JVM services and MCU-facing
 protocol code, rather than no-allocation operation.
 
-## Port order
+### Port order
 
 A prudent sequence is:
 
@@ -389,7 +570,7 @@ The portable conformance corpus should compare possible committed worlds,
 resource writes, participant sets, effects, defeat obligations, Retry facts and
 Unknown reasons. Matching returned values alone is insufficient.
 
-## External references
+### External references
 
 These projects describe the host mechanisms assumed by this note:
 

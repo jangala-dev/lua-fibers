@@ -1,7 +1,7 @@
 # Examples
 
 Examples are grouped by audience and stability. Every tutorial and gameplay
-file is a small standalone programme which can be run from the repository root.
+file is a small standalone program which can be run from the repository root.
 
 ## Tutorial
 
@@ -138,7 +138,7 @@ host handles.
 
 ## Case studies
 
-`case_studies/` contains trusted kernel programmes such as Petri and Calendar.
+`case_studies/` contains trusted kernel programs such as Petri and Calendar.
 They are contributor case studies, not installed version 1 modules. Their tests
 live beside each case study.
 

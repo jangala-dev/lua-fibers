@@ -1,5 +1,7 @@
 # The Fibers option algebra in relation to CSP, CML, Transactional Events and Reagents
 
+This comparison uses the semantic vocabulary developed in [The option algebra](../advanced/option-algebra.md). It is comparative design material, not an alternate user guide.
+
 This document places the `fibers` option algebra beside four established approaches to concurrent programming:
 
 - Communicating Sequential Processes (CSP);
@@ -23,7 +25,7 @@ The arrows indicate inherited questions and increasingly rich composition, not d
 
 | Dimension | CSP | CML | Transactional Events | Reagents | fibers |
 |---|---|---|---|---|---|
-| Principal semantic object | Continuing process behaviour | One selectable event | Transactional event programme | Atomic concurrent function/reaction | One inert option denoting compatible committed worlds |
+| Principal semantic object | Continuing process behaviour | One selectable event | Transactional event program | Atomic concurrent function/reaction | One inert option denoting compatible committed worlds |
 | Main interaction | Events and synchronous channels | Two-party rendezvous | All-or-nothing sequences of rendezvous | Atomic-reference updates and synchronous swaps | Versioned state, exchange, recruitment, custody and consequences |
 | Alternative | Internal/external process choice | Nondeterministic event choice | Nondeterministic transactional choice | Optionally left-biased choice | Unordered `choice`; validated priority through `or_else` |
 | Sequencing | Prefix and process sequencing | Work before or after one selected event | Transactional `thenEvt` | End-to-end composition | Transactional `and_then` |
@@ -139,7 +141,7 @@ The fallback tier is admitted only after the preferred transactional scope has p
 
 ### Primitive authoring
 
-Transactional Events make compound channel protocols much easier to author than CML. Guarded receive and multi-stage request/reply arrangements can remain local event programmes rather than manually managed cancellation protocols.
+Transactional Events make compound channel protocols much easier to author than CML. Guarded receive and multi-stage request/reply arrangements can remain local event programs rather than manually managed cancellation protocols.
 
 The original core does not provide the same general facility-authoring substrate as `fibers`. Stateful resources can be encoded using channel protocols or added beneath the event implementation. `fibers` instead lets a trusted facility describe versioned transitions, claims, finite or lazy witnessed successors, exchanges and host observations directly.
 
@@ -252,7 +254,7 @@ Compatible sibling supply may participate in the same committed world.
 
 ## 6. Present strengths and limitations
 
-`fibers` is strongest where a programme needs one coherent decision across several kinds of managed resource:
+`fibers` is strongest where a program needs one coherent decision across several kinds of managed resource:
 
 - synchronous exchange;
 - state transitions and allocation;
@@ -288,4 +290,4 @@ Primary sources used for this comparison:
 - Kevin Donnelly and Matthew Fluet, “Transactional Events”, ICFP 2006: <https://www.cs.cornell.edu/people/fluet/research/tx-events/ICFP06/icfp06.pdf>
 - Aaron Turon, “Reagents: Expressing and Composing Fine-Grained Concurrency”, PLDI 2012: <https://aturon.github.io/academic/pldi-2012-reagents.pdf>
 
-The reference list is deliberately limited to primary material. The terminology used for `fibers` is defined in `../advanced/option-algebra.md` and `../contributing/trusted-resource-leaves.md`.
+The reference list is deliberately limited to primary material. The terminology used for `fibers` is defined in `../advanced/option-algebra.md` and `../advanced/extending.md#trusted-primitive-resource-authoring`.

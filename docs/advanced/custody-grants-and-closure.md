@@ -1,4 +1,6 @@
-# Lifetimes: custody, Grants and Closure
+# Custody, Grants and Closure
+
+This document gives the complete advanced account of responsibility, authority and structural completion. For ordinary task and scope programming, begin with [Lifetimes](../guide/lifetimes.md).
 
 Fibers has two fundamental semantic concepts:
 

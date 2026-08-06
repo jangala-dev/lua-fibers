@@ -1,7 +1,7 @@
 # Gameplay examples
 
 These examples apply the ordinary Fibers vocabulary to recognisable game
-mechanics. They are portable Lua programmes rather than Roblox-specific code,
+mechanics. They are portable Lua programs rather than Roblox-specific code,
 so the same examples can later run under stock Lua, the generated Luau target
 and a browser playground.
 

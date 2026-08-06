@@ -2,7 +2,7 @@
 
 Public examples use `local Op = require('fibers.op')`; the contextual `fibers` module supplies `perform`, not option constructors.
 
-This document states the semantic model implemented by `fibers`. It is not a complete formalisation, but it defines the distinctions which implementations and trusted facilities must preserve.
+For ordinary application use, begin with [Options](../guide/options.md). This document states the more exact semantic model implemented by `fibers`. It is not a complete formalisation, but it defines the distinctions which implementations and trusted facilities must preserve.
 
 ## 1. Transactions describe worlds
 
@@ -652,7 +652,7 @@ custody and Closure
 Flow and stream losing-branch safety
 ```
 
-Fairness and uniform probability between perpetually available alternatives are not currently promised. `choice_seed` makes traversal reproducible for the same programme, request sequence and external inputs. Search budgets are optional controls and must never alter fallback semantics. Across pending roots, positive-before-fallback is scoped to conservative dependency components: unrelated ready or `Unknown` work does not form a global barrier, while work which may change the preferred proof remains in the same component.
+Fairness and uniform probability between perpetually available alternatives are not currently promised. `choice_seed` makes traversal reproducible for the same program, request sequence and external inputs. Search budgets are optional controls and must never alter fallback semantics. Across pending roots, positive-before-fallback is scoped to conservative dependency components: unrelated ready or `Unknown` work does not form a global barrier, while work which may change the preferred proof remains in the same component.
 
 ## 22. Summary
 

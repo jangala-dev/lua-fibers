@@ -347,7 +347,7 @@ do
   assert_eq(weak.marker, nil, 'closed Task should not retain body captures')
 end
 
--- The public resource-toolkit pieces compose in one ordinary programme.
+-- The public resource-toolkit pieces compose in one ordinary program.
 do
   local inbox = FibersRendezvous.new():label('atom-kit-inbox')
   local flag = FibersCell.new(false):label('atom-kit-flag')

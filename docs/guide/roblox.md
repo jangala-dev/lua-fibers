@@ -1,5 +1,7 @@
 # Fibers for Roblox: from one scene to a whole game
 
+This is a specialised application guide. The canonical option and lifetime laws remain in [Options](options.md) and [Lifetimes](lifetimes.md).
+
 Fibers is intended to let ambitious game logic read like the mechanic it
 implements:
 
@@ -48,7 +50,7 @@ a requirement to poll Fibers every frame:
 
 ```luau
 local app = Roblox.prepare(function(root)
-    -- the root Fibers programme
+    -- the root Fibers program
 end, {
     name = "game-client",
     max_steps_per_turn = 128,
@@ -80,7 +82,7 @@ does not establish `Retry` and cannot admit an `or_else` fallback.
 Most applications can place a scheduling policy above this boundary:
 
 ```luau
-local app = Roblox.attach(rootProgramme, {
+local app = Roblox.attach(rootProgram, {
     scheduling = "event", -- the default
 })
 ```
@@ -92,7 +94,7 @@ It does not poll every frame.
 Frame-sensitive systems may instead select a phase:
 
 ```luau
-local app = Roblox.attach(rootProgramme, {
+local app = Roblox.attach(rootProgram, {
     scheduling = "phase",
     phase = RunService.Heartbeat,
     max_seconds_per_turn = 0.001,
@@ -188,7 +190,7 @@ A polished cutscene commonly owns:
 Put that work under one scene scope:
 
 ```luau
-local outcome = fibers.scope({ name = "opening-cinematic" }, function(scene)
+local outcome = fibers.scope({ label = "opening-cinematic" }, function(scene)
     local camera = scene:spawn(playOpeningCamera):label("camera")
     local dialogue = scene:spawn(playOpeningDialogue):label("dialogue")
     local blocking = scene:spawn(runNpcBlocking):label("npc-blocking")
@@ -256,7 +258,7 @@ outlive the player.
 
 ```luau
 local function servePlayer(player: Player)
-    return fibers.scope({ name = `player:{player.UserId}` }, function(session)
+    return fibers.scope({ label = `player:{player.UserId}` }, function(session)
         session:spawn(function()
             refreshProfileLockUntilSessionEnds(player)
         end):label("profile-lock")
@@ -408,7 +410,7 @@ Use a collecting supervisor:
 
 ```luau
 local eventResult = fibers.try_scope({
-    name = "eclipse-festival",
+    label = "eclipse-festival",
     closure = Closure.supervisor({ child_failure = "collect" }),
 }, function(event)
     event:spawn(runMoonrise):label("headline-moonrise")
@@ -704,9 +706,9 @@ outstanding Closure rather than erasing it during unwinding.
 ## Further reading
 
 - [`getting-started.md`](getting-started.md)
-- [`direct-and-options.md`](direct-and-options.md)
+- [`options.md`](options.md)
 - [`../advanced/option-algebra.md`](../advanced/option-algebra.md)
-- [`../advanced/lifetimes-and-custody.md`](../advanced/lifetimes-and-custody.md)
-- [`../advanced/ports.md`](../advanced/ports.md)
+- [`../advanced/custody-grants-and-closure.md`](../advanced/custody-grants-and-closure.md)
+- [`../design/packages-and-ports.md#port-architectures`](../design/packages-and-ports.md#port-architectures)
 - [`../../examples/gameplay/`](../../examples/gameplay/)
 - [`../../examples/roblox/`](../../examples/roblox/)

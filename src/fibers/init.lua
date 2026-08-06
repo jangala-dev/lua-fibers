@@ -1,4 +1,4 @@
--- Root lifecycle and contextual operations for Fibers programmes.
+-- Root lifecycle and contextual operations for Fibers programs.
 --
 -- `run` and `try_run` establish a Runtime and root Scope. The remaining
 -- operations are interpreted by the currently running fiber. Types,

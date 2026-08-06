@@ -1,4 +1,6 @@
-# Embedding and host integration
+# Embedding
+
+This guide explains how to drive Fibers from a bounded or foreign host. It is application-facing: kernel and package architecture are covered in [Packages and ports](../design/packages-and-ports.md).
 
 `fibers` does not require control of the process event loop. An application may use the root lifecycle prelude or drive a `Runtime` directly.
 
@@ -24,7 +26,7 @@ local rt = Runtime.new({ host = host })
 
 rt:spawn_raw(function()
   -- embedded root fiber
-end):label('root')
+end)
 ```
 
 The driver methods are:
@@ -124,7 +126,7 @@ local rt = Runtime.new({
 })
 ```
 
-For each dynamic `choice` occurrence, the evaluator derives a deterministic branch permutation from this seed and replay-visible runtime identities. It does not consume `math.random`. Given the same seed, programme, request sequence and external inputs, the same evaluator reproduces the traversal.
+For each dynamic `choice` occurrence, the evaluator derives a deterministic branch permutation from this seed and replay-visible runtime identities. It does not consume `math.random`. Given the same seed, program, request sequence and external inputs, the same evaluator reproduces the traversal.
 
 This is a replay aid, not a fairness or probability contract. A different host delivery order, task/request construction order, solver version or option graph may produce a different execution. Record the seed alongside failure diagnostics.
 
@@ -337,7 +339,7 @@ handle:close(reason)
 
 Opening a Stream commits its custody and both reactor-registration effects together. If the option loses, no handle is attached and no reactor service starts. Retirement is structural: both registrations retire, active leases close, the handle closes exactly once, and `closed_op` observes complete Flow and registration closure.
 
-See [`flows-and-streams.md`](flows-and-streams.md) for the Flow lease contracts and reactor service model.
+See the [Flow and Stream contract](resources.md#detailed-flow-and-stream-contract) for leases and portable byte semantics, and [I/O design](../design/io.md) for the reactor service model.
 
 ## Process capability
 

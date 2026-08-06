@@ -63,7 +63,7 @@ local function run_scheduled(scheduler, fn)
     scheduler:run_until(function()
       return done
     end),
-    'scheduled programme did not complete'
+    'scheduled program did not complete'
   )
   scheduler:run_until_idle()
   if not values[1] then
@@ -321,7 +321,7 @@ do
       fibers.perform(Sleep.sleep_op(2))
       woke = true
     end, { host = host, owns_host = false })
-    assert_truthy(result.ok, 'timer programme should succeed')
+    assert_truthy(result.ok, 'timer program should succeed')
   end)
   assert_truthy(woke, 'timer should resume the Fibers fiber')
   assert_eq(scheduler.now, 12, 'fake Roblox clock should reach the deadline')
@@ -631,7 +631,7 @@ do
     scheduler:run_until(function()
       return result ~= nil
     end),
-    'shutdown programme did not settle'
+    'shutdown program did not settle'
   )
   scheduler:run_until_idle()
   assert_truthy(not result.ok, 'root cancellation should be represented as a structured failure')

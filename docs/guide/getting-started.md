@@ -1,372 +1,253 @@
-# Programming guide
+# Getting started
 
-Fibers presents a small application-facing concurrency language. Direct methods provide a gentle sequential surface; `_op` methods expose the same actions as inert options for composition.
+This guide builds one small service from sequential fiber code into a composable and structured program.
+
+For the complete public algebra, see [Options](options.md). For task and scope behaviour, see [Lifetimes](lifetimes.md).
+
+## 1. Run a fiber
 
 ```lua
 local fibers = require('fibers')
+
+fibers.run(function()
+  print('service started')
+end)
+```
+
+`fibers.run` creates a Runtime and root scope, runs the body, accounts for retained work, then closes the Runtime.
+
+## 2. Spawn structured work
+
+```lua
+local fibers = require('fibers')
+
+fibers.run(function(scope)
+  local task = scope:spawn(function()
+    return load_configuration()
+  end)
+
+  local configuration = task:await()
+  start_service(configuration)
+end)
+```
+
+The task belongs to the current scope. The scope remains responsible for it until its complete Lifetime reaches an outcome.
+
+`fibers.spawn(fn, opts)` is shorthand for spawning in the current scope.
+
+## 3. Communicate through a channel
+
+```lua
+local fibers = require('fibers')
+local channel = require('fibers.channel')
+
+local commands = channel.new()
+local results = channel.new()
+
+fibers.run(function(scope)
+  scope:spawn(function()
+    while true do
+      local command = commands:get()
+      results:put(handle(command))
+    end
+  end)
+
+  commands:put('refresh')
+  print(results:get())
+end)
+```
+
+The direct methods suspend only when a compatible participant is not presently available.
+
+Use `channel.new(capacity)` for a bounded FIFO and `channel.new(math.huge)` for an unbounded FIFO.
+
+## 4. Describe an action without performing it
+
+Every direct channel action has an `_op` form:
+
+```lua
+local receive_command = commands:get_op()
+local send_result = results:put_op('done')
+```
+
+These are options: inert descriptions which can be combined.
+
+Perform one explicitly with:
+
+```lua
+local command = fibers.perform(receive_command)
+```
+
+The direct and option forms are equivalent:
+
+```lua
+commands:get()
+-- is exactly
+fibers.perform(commands:get_op())
+```
+
+## 5. Select an acceptable result
+
+```lua
 local Op = require('fibers.op')
 local Sleep = require('fibers.sleep')
-local channel = require('fibers.channel')
-local Cell = require('fibers.resource.cell')
-local Pulse = require('fibers.pulse')
-local Mailbox = require('fibers.mailbox')
-local Stream = require('fibers.stream')
-```
 
-Import only the facilities a programme uses. Runtime embedding, host adapters, transactional resource materials and custody machinery live in their own named modules.
-
-## Run, spawn and perform
-
-Most programmes begin with `fibers.run`:
-
-```lua
-fibers.run(function(scope)
-  local configuration_task = scope:spawn(function()
-    return 'configuration loaded'
-  end):label('load-configuration')
-
-  assert(configuration_task:await() == 'configuration loaded')
-end)
-```
-
-`fibers.run` creates a runtime and root scope, then drives them through the selected host. `fibers.spawn` is shorthand for spawning in the current scope.
-
-```lua
-fibers.run(function()
-  local cache_task = fibers.spawn(function()
-    return 'cache warm'
-  end)
-  assert(cache_task:await() == 'cache warm')
-end)
-```
-
-Nested scopes use `fibers.scope`. The raising forms `fibers.run` and `fibers.scope` return body values or raise after the boundary has accounted for retained custody. `fibers.try_run` and `fibers.try_scope` return a `ScopeResult`.
-
-```lua
-local outcome = fibers.try_scope(function()
-  return 'ok'
-end)
-
-if outcome.ok then
-  assert(outcome:unpack() == 'ok')
-else
-  print(outcome:tostring())
-end
-```
-
-## Direct methods and options
-
-Selected everyday facilities expose both forms:
-
-```lua
-local update = status_updates:get()
-```
-
-is exactly:
-
-```lua
-local update = fibers.perform(status_updates:get_op())
-```
-
-Use direct methods for ordinary sequential code. Use `_op` when an action must
-participate in `choice`, `or_else`, `and_then`, `each` or `together`. Detailed
-guidance is in [`direct-and-options.md`](direct-and-options.md).
-
-## Options
-
-An option is an inert transaction description. Constructing one does not perform it.
-
-An `Op` can be thought of as an option: an inert transaction description. Resource methods ending in `_op` construct these values.
-
-```lua
-local op = Op.always(42)
-assert(fibers.perform(op) == 42)
-```
-
-The principal combinators are:
-
-```text
-op:map(function(...) ... end)
-op:and_then(next_op)
-Op.guard(function(...) return contextual_op end)
-op:or_else(fallback_op)
-op:wrap(function(...) ... end)
-op:on_defeat(effect)
-```
-
-Fibers has three callback phases. Search callbacks such as `guard`, `map`, resource transitions and effect keying are speculative and replayable. Effect `prepare` is also pure and replayable; it returns a discharge plan but must not reserve, mutate, spawn, perform or yield. Effect `discharge` runs after state commits. `wrap` then runs for the resumed participant and may perform another option. These rules are normative; see `../advanced/option-algebra.md`.
-
-### Choice
-
-`choice` is unordered disjunction:
-
-```lua
-local selected = fibers.perform(Op.choice(
-  scene_finished:get_op(),
-  skip_requested:get_op()
-))
-```
-
-If both branches can commit, either result is valid. Source position does not give a branch priority.
-
-A timeout is ordinary choice:
-
-```lua
 local result = fibers.perform(Op.choice(
-  voice_lines:get_op(),
-  Sleep.sleep_op(1):wrap(function()
-    return '[continue with subtitles]'
+  results:get_op(),
+  Sleep.sleep_op(5):map(function()
+    return nil, 'deadline reached'
   end)
 ))
 ```
 
-`or_else` provides validated immediate fallback. Its fallback is eligible only after the preferred option has been completely refuted under recorded managed facts.
+`choice` says that either coherent result is acceptable. Source order is not priority.
+
+## 6. Sequence one transaction
+
+Suppose the service has bounded capacity and should accept a request only when it can also publish it:
 
 ```lua
-local intention = fibers.perform(
-  attack_op(agent, target)
-    :or_else(take_cover_op(agent))
-    :or_else(return_to_patrol_op(agent))
+local Counter = require('fibers.resource.counter')
+
+local capacity = Counter.bounded(16)
+
+local admit = capacity:take_op(1)
+  :and_then(commands:put_op('refresh'))
+
+fibers.perform(admit)
+```
+
+The capacity change and communication commit together. If the command cannot be delivered, the capacity is not consumed.
+
+When the next option depends on provisional values, use `Op.guard`:
+
+```lua
+local exchange = commands:get_op():and_then(
+  Op.guard(function(command)
+    return results:put_op(handle(command))
+  end)
 )
 ```
 
-### Products
+## 7. Fall back without waiting
 
-`each` combines independent requirements in one commit:
+```lua
+local next_command = commands:get_op()
+  :or_else(Op.always('idle'))
+
+local command = fibers.perform(next_command)
+```
+
+The fallback is considered when the preferred action cannot happen now. “Now” includes every coherent transaction which can commit without a future change, not merely one local readiness check.
+
+A timeout remains an ordinary choice with a timer. `or_else` is not a timer.
+
+## 8. Combine several requirements
+
+Use `each` when every lane must stand on its own:
 
 ```lua
 local reservations = fibers.perform(Op.each({
-  camera_channels:take_op(1),
-  animation_channels:take_op(1),
+  cpu_slots:take_op(1),
+  network_slots:take_op(1),
 }))
 ```
 
-`together` additionally permits compatible sibling hand-off:
+Use `together` when compatible lanes may deliberately support one another:
 
 ```lua
 fibers.perform(Op.together({
-  cue_bus:inlet():write_op('GO'),
-  cue_bus:outlet():read_some_op(2),
+  flow:inlet():write_op('GO'),
+  flow:outlet():read_some_op(2),
 }))
 ```
 
-Use `each` when every lane must stand on its own. Use `together` when lanes intentionally communicate or transfer transactional stock.
+Products return one nil-preserving packed row per lane. See [Product results](options.md#product-results).
 
-## Channels
+## 9. Handle task failure through the scope
 
-Channel is the ordinary communication facility:
+The root scope is a nursery. If a child task fails, the boundary fails, requests closure of remaining siblings and accounts for retained work before returning.
 
 ```lua
-local commands = channel.new()                  -- synchronous
-local buffered_events = channel.new(16)         -- bounded FIFO
-local unbounded_events = channel.new(math.huge) -- unbounded FIFO
+local result = fibers.try_run(function(scope)
+  scope:spawn(function()
+    error('worker failed')
+  end)
+
+  wait_for_shutdown()
+end)
+
+if not result.ok then
+  print(result:tostring())
+end
 ```
 
-Both forms expose `put_op` and `get_op`.
+Use a supervisor scope when child failures should be collected or handled under another explicit policy. See [Lifetimes](lifetimes.md).
+
+## 10. Add labels when observation needs them
+
+Labels are optional diagnostic metadata, not part of correct construction:
 
 ```lua
+local commands = channel.new(16)
+  :label('service-commands')
+
+local worker = fibers.spawn(run_worker)
+  :label('configuration-watcher')
+```
+
+Options may also be labelled without changing their meaning:
+
+```lua
+local next_event = Op.choice(
+  commands:get_op():label('receive-command'),
+  shutdown:get_op():label('receive-shutdown')
+):label('select-service-event')
+```
+
+See [Execution and observability](../advanced/execution-and-observability.md).
+
+## 11. Assert a coordinator reduction does not suspend
+
+```lua
+while true do
+  local event = fibers.perform(next_event_op(state))
+
+  fibers.without_suspension(function()
+    reduce_event(state, event)
+  end)
+end
+```
+
+The region may perform operations which commit immediately. It fails before the current fiber is parked or another application fiber is allowed to run first.
+
+## 12. Use host-backed I/O
+
+Host facilities use the same option and lifetime model:
+
+```lua
+local file = require('fibers.file')
+local AutoIO = require('fibers.io.auto')
+
 fibers.run(function()
-  fibers.spawn(function()
-    commands:put('refresh configuration')
-  end)
+  local contents = assert(file.read_all('/etc/resolv.conf', {
+    max = 64 * 1024,
+  }))
 
-  assert(commands:get() == 'refresh configuration')
-end)
+  print(contents)
+end, {
+  host = AutoIO.default(),
+})
 ```
 
-The lower-level synchronous exchange resource remains available as `fibers.resource.rendezvous` for facilities which need its exact law.
+Open files, Streams, Processes, Listeners, Dials and datagram sockets are retained under Lifetime custody until moved or closed.
 
-## Transactional state
+See [Files, pipes, processes and sockets](io.md).
 
-Use `Cell` for one replaceable fact:
+## Next steps
 
-```lua
-local quest = Cell.new({ stage = 'find_key', clues = 1 }):label('moon-gate-quest')
-
-local advance = quest:read_op():and_then(
-  Op.guard(function(current)
-    if current.stage ~= 'find_key' or current.clues < 1 then
-      return Op.never()
-    end
-    return quest:write_op({ stage = 'open_gate', clues = current.clues })
-  end)
-)
-
-fibers.perform(advance)
-
-local current = quest:wait_until(function(value)
-  return value.stage == 'open_gate'
-end)
-
-local clue_count = quest:match(function(value)
-  if value.stage == 'open_gate' then
-    return true, value.clues
-  end
-end)
-```
-
-`wait_until` returns the complete satisfying value. `match` returns values projected by its matcher after the leading truthy result. Use `wait_until_op` and `match_op` when the wait must compose with another operation.
-
-For an ordered state machine, define a typed transition:
-
-```lua
-local Increment = Machine.update('counter.increment', function(value, payload)
-  local next_value = value + payload.by
-  return Machine.Ready.write(next_value, next_value)
-end, nil, function(payload)
-  assert(type(payload.by) == 'number', 'by must be a number')
-end)
-
-local counter = Machine.new(0):label('counter')
-local next_value = fibers.perform(counter:transition_op(Increment, { by = 1 }))
-assert(next_value == 1)
-```
-
-## Notification and messaging
-
-`Pulse` represents coalescing change notification. `Mailbox` provides split sender and receiver endpoints, closure and selectable overflow policies. Both expose options and compose with the same choice and product vocabulary.
-
-```lua
-local weather_changed = Pulse.new()
-local combat_tx, combat_rx = Mailbox.new(16)
-
-weather_changed:signal()
-combat_tx:send('perfect parry')
-assert(combat_rx:recv() == 'perfect parry')
-```
-
-`Mailbox.new` waits for space. The explicit variants select the other overflow
-laws without string-valued constructor options:
-
-```lua
-local latest_tx = Mailbox.reject_newest(16)
-latest_tx:label('latest-events')
-local rolling_tx = Mailbox.drop_oldest(16)
-rolling_tx:label('rolling-events')
-```
-
-## Flows and streams
-
-`Flow` is the supported transactional byte-building block. It provides stable producer and consumer endpoints, backpressure, exact byte reads, closure and retained-byte leases.
-
-```lua
-local Flow = require('fibers.resource.flow')
-local dialogue_flow = Flow.new(4096)
-
-dialogue_flow:inlet():write('The gate is open.\n')
-assert(dialogue_flow:outlet():read_line() == 'The gate is open.')
-```
-
-`Stream` is the familiar readable, writable or duplex facility built from one or two Flows:
-
-```lua
-local narrator, subtitles = Stream.memory_pair({ capacity = 4096 })
-
-narrator:write('The gate is open.\n')
-assert(subtitles:read_line() == 'The gate is open.')
-```
-
-Host-backed streams are supplied by `fibers-io` and opened transactionally:
-
-```lua
-local HostStream = require('fibers.io.stream')
-local stream = fibers.perform(HostStream.open_op(handle, {
-  name = 'connection',
-  read = true,
-  write = true,
-}))
-```
-
-All host-backed stream directions in one Runtime share one lazily created reactor. If the open option loses, no registration is discharged and no reactor starts. See `../advanced/flows-and-streams.md` and `../advanced/embedding.md`.
-
-## Time
-
-Application code may use the direct form:
-
-```lua
-Sleep.sleep(0.25)
-```
-
-The composable form remains `Sleep.sleep_op(0.25)`.
-
-The relative deadline is fixed once per perform attempt; validation restart does not slide it forwards.
-
-## Scopes, cancellation and Closure
-
-Most lifetime-bearing values should be created or admitted inside a scope:
-
-```lua
-fibers.scope(function(scope)
-  local task = scope:spawn(function()
-    return 'ok'
-  end)
-
-  assert(fibers.perform(task:await_op()) == 'ok')
-end)
-```
-
-The public application vocabulary remains small. Advanced custody, Grants and Closure are described in `../advanced/lifetimes-and-custody.md`.
-
-## Protected calls
-
-Applications may use `fibers.pcall` and `fibers.xpcall`. Reusable libraries
-which should not depend on the root lifecycle façade may import
-`fibers.protected`:
-
-```lua
-local Protected = require('fibers.protected')
-
-local ok, value = Protected.pcall(function()
-  return fibers.perform(op)
-end)
-```
-
-These helpers provide yieldable protection on Lua 5.1 as well as later versions.
-
-## Resource toolkit, recipes and case studies
-
-Facility authors can compose the supported resource toolkit:
-
-```text
-fibers.resource.rendezvous
-fibers.resource.counter
-fibers.resource.index
-fibers.resource.keyed
-fibers.resource.lease
-fibers.resource.signal
-fibers.resource.event_queue
-fibers.resource.clock
-fibers.io.readiness
-```
-
-`Keyed` is the law for independent addressable presence slots:
-
-```lua
-local Keyed = require('fibers.resource.keyed')
-local items = Keyed.new():label('items')
-
-items:get_op(key)            -- require presence; keep the value
-items:take_op(key)           -- require presence; consume the value
-items:put_op(key, value)     -- establish or replace
-items:insert_op(key, value)  -- require absence; establish
-items:contains_op(key)       -- proof-directed boolean
-items:remove_op(key)         -- proof-directed boolean removal
-```
-
-Values are non-nil; nil denotes absence.  Keys are independent transactional locations rather than entries in one ordered collection.
-
-See `../advanced/facility-authoring.md` and `../../examples/recipes/` for complete facilities built only from supported interfaces.
-
-Petri and Calendar are trusted kernel case studies under `examples/case_studies/`. They are not installed modules or version 1 API commitments. Phase remains a work-in-progress prototype under `docs/notes/`.
-
-## Further reading
-
-- `direct-and-options.md` — direct methods and composable options
-- `roblox.md` — step-by-step game logic, scene lifetimes and Roblox host architecture
-- `../advanced/option-algebra.md` — option semantics and laws
-- `../advanced/lifetimes-and-custody.md` — custody, Grants and Closure
-- `../advanced/flows-and-streams.md` — Flow leases, Streams and the shared reactor
-- `../advanced/embedding.md` — direct runtime driving and hosts
-- `../advanced/facility-authoring.md` — composing supported public facilities
-- `../contributing/trusted-resource-leaves.md` — closed kernel resource programmes
-- `../design/kernel.md` — kernel representation and execution
+- [Options](options.md)
+- [Lifetimes](lifetimes.md)
+- [Resources](resources.md)
+- [API reference](../api-reference.md)
+- [Runnable examples](../../examples/README.md)

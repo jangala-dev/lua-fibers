@@ -1,6 +1,6 @@
 # Fibers performance suite
 
-The performance programmes validate the execution-frontier kernel while measuring local throughput and search behaviour. Timed samples run without instrumentation; each case may then run once with instrumentation to explain the result.
+The performance programs validate the execution-frontier kernel while measuring local throughput and search behaviour. Timed samples run without instrumentation; each case may then run once with instrumentation to explain the result.
 
 ## Main suite
 
@@ -39,7 +39,7 @@ texlua performance/io_baselines.lua
 make profile-proof-io
 ```
 
-The frontier suite checks selective invalidation and exact Retry retention. The exchange-frontier suite records the bounded-search cliffs for participant recruitment, role imbalance, perfect matching and Hall-deficient graphs. The resumability probe compares one-shot and bounded execution of the same search. The store-view suite measures speculative state projection. I/O programmes exercise host-facing paths without changing kernel semantics.
+The frontier suite checks selective invalidation and exact Retry retention. The exchange-frontier suite records the bounded-search cliffs for participant recruitment, role imbalance, perfect matching and Hall-deficient graphs. The resumability probe compares one-shot and bounded execution of the same search. The store-view suite measures speculative state projection. I/O programs exercise host-facing paths without changing kernel semantics.
 
 ## Instrumentation
 

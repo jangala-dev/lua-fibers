@@ -1,31 +1,223 @@
-# Flows, streams and host I/O
+# Resources
 
-`Flow` is the transactional byte-building block. `Stream` is the familiar
-readable, writable or duplex facility built over one or two Flows. Host-backed
-Streams share one indexed poller and one reactor per Runtime.
+This guide introduces the host-neutral facilities used to build Fibers applications. Every facility offers options; selected facilities also provide direct methods which perform those options.
 
-The layers have separate responsibilities:
+For exact signatures, see the [API reference](../api-reference.md). For building a new transactional facility, see [Extending Fibers](../advanced/extending.md).
 
-```text
-Flow
-    byte custody, buffering, backpressure and transactional composition
+## Channels
 
-Stream
-    an application-facing reader, writer or duplex byte facility
+```lua
+local channel = require('fibers.channel')
 
-HostReactor readiness index
-    indexed readiness registration and ready-event delivery
-
-HostReactor
-    bounded irreversible host reads and writes after commitment
+local synchronous = channel.new()
+local bounded = channel.new(16)
+local unbounded = channel.new(math.huge)
 ```
 
-Every method ending in `_op` constructs an **option**. It does not act until the
-option is submitted to `perform` and selected as part of a committed world.
-Each public operation listed below also has a direct twin with `_op` removed;
-the direct method performs that option in the current fiber.
+Channels support:
 
-## Flow
+```lua
+channel:put_op(value)
+channel:get_op()
+channel:put(value)
+channel:get()
+```
+
+Capacity zero is synchronous rendezvous. Positive capacity is FIFO buffering.
+
+## Cells
+
+```lua
+local Cell = require('fibers.resource.cell')
+local state = Cell.new('idle')
+```
+
+Common operations:
+
+```lua
+state:read_op()
+state:changed_op(version)
+state:expect_op(value)
+state:write_op(value)
+state:wait_until_op(predicate)
+state:match_op(matcher)
+```
+
+`expect_op` and `write_op` compose naturally:
+
+```lua
+state:expect_op('idle')
+  :and_then(state:write_op('running'))
+```
+
+`wait_until` returns the complete satisfying value. `match` uses a truthy leading matcher result and returns the remaining projected values.
+
+## Counters and capacity
+
+```lua
+local Counter = require('fibers.resource.counter')
+
+local count = Counter.new(0)
+local slots = Counter.bounded(16)
+local percentage = Counter.range(50, 0, 100)
+```
+
+Counters support reads, changes, adjustments and predicates:
+
+```lua
+count:read_op()
+count:add_op(1)
+count:take_op(1)
+count:give_op(1)
+count:at_least_op(10)
+count:at_most_op(20)
+count:equal_op(0)
+count:zero_op()
+```
+
+A bounded counter is useful for transactional admission:
+
+```lua
+slots:take_op(1)
+  :and_then(queue:put_op(work))
+```
+
+## Semaphores
+
+`fibers.semaphore` provides a conventional capacity view over a bounded counter:
+
+```lua
+local Semaphore = require('fibers.semaphore')
+local semaphore = Semaphore.new(8)
+
+semaphore:acquire(1)
+semaphore:release(1)
+```
+
+Use the underlying Counter when its richer algebra is useful.
+
+## Pulses
+
+A Pulse represents coalescing change notification:
+
+```lua
+local Pulse = require('fibers.pulse')
+local changed = Pulse.new()
+
+local version = changed:version()
+changed:signal()
+local next_version = changed:changed(version)
+```
+
+Pulses support closure and an optional reason. They are suitable when the program needs to know that something changed, rather than receive every individual event.
+
+## Latches
+
+A Latch is set once and thereafter retains its value:
+
+```lua
+local Latch = require('fibers.latch')
+local ready = Latch.new()
+
+ready:set(configuration)
+local value = ready:get()
+```
+
+## Mailboxes
+
+A Mailbox has split sender and receiver endpoints:
+
+```lua
+local Mailbox = require('fibers.mailbox')
+local tx, rx = Mailbox.new(64)
+
+local clone = tx:clone()
+tx:send(value)
+local received = rx:recv()
+```
+
+Alternative overflow policies include rejecting the newest message or dropping the oldest.
+
+Sender closure, closure reason and dropped-message state are explicit.
+
+## Signals and event queues
+
+Lower-level facilities include:
+
+- `fibers.resource.signal` for a simple waitable signal;
+- `fibers.resource.event_queue` for transactional event admission and retrieval;
+- `fibers.resource.rendezvous` for exact synchronous exchange;
+- `fibers.resource.fifo` for a FIFO resource;
+- `fibers.resource.index` and `fibers.resource.keyed` for transactional collections.
+
+Most application code should use channels, Mailboxes or Pulses unless it needs the lower-level law directly.
+
+## Time
+
+```lua
+local Sleep = require('fibers.sleep')
+
+Sleep.sleep(0.25)
+Sleep.sleep_until(deadline)
+```
+
+Their `_op` forms compose with any option:
+
+```lua
+local result = fibers.perform(Op.choice(
+  reply_op,
+  Sleep.sleep_op(5):map(function()
+    return nil, 'deadline reached'
+  end)
+))
+```
+
+## Flows
+
+`fibers.resource.flow` is the transactional byte-flow building block.
+
+```lua
+local Flow = require('fibers.resource.flow')
+local flow = Flow.new(64 * 1024)
+local inlet = flow:inlet()
+local outlet = flow:outlet()
+```
+
+The inlet supports writes, partial writes, space reservation, flush and closure.
+
+The outlet supports partial and exact reads, delimiter scanning, line reads, complete reads, dropping, splicing and data leases.
+
+Flow operations preserve backpressure and participate in `choice`, `and_then`, `each` and `together`.
+
+The detailed Flow and Stream contracts follow below.
+
+## Streams
+
+`fibers.stream` composes one or two Flows into readable, writable or duplex Streams:
+
+```lua
+local Stream = require('fibers.stream')
+local a, b = Stream.memory_pair({ capacity = 64 * 1024 })
+```
+
+Streams support:
+
+- partial and exact reads;
+- delimiter and line reads;
+- complete reads with limits;
+- writes and flush;
+- independent read and write shutdown;
+- complete close and abort;
+- local and peer address metadata where available.
+
+Portable Streams do not import host I/O. Host-backed Streams are provided through `fibers.io.stream`, sockets, pipes and processes.
+
+
+## Detailed Flow and Stream contract
+
+The following section is the complete practical contract for portable byte flows and streams. Host reactor mechanics are documented in [I/O design](../design/io.md).
+
+### Flow
 
 ```lua
 local Flow = require('fibers.resource.flow')
@@ -45,7 +237,7 @@ endpoint, the `Outlet`:
 Inlet → retained byte custody → Outlet
 ```
 
-### Inlet
+#### Inlet
 
 The complete producer surface is:
 
@@ -80,7 +272,7 @@ the Outlet observes EOF after consuming them.
 
 `fail_op` closes production with an error which readers subsequently observe.
 
-### Outlet
+#### Outlet
 
 The complete consumer surface is:
 
@@ -158,7 +350,7 @@ transactional composition.
 `close_op` means that the consumer has abandoned the Flow. Retained bytes are
 settled and future writes fail with `Flow.Error.BROKEN_PIPE`.
 
-### Whole-Flow methods
+#### Whole-Flow methods
 
 ```lua
 flow:abort_op(reason)
@@ -187,7 +379,7 @@ Flow.Error.RETIRED
 The retained-byte state, transition vocabulary and concrete lease classes are
 implementation details and are not module exports.
 
-## Data leases
+### Data leases
 
 A data lease gives an external consumer committed custody of a retained byte
 prefix:
@@ -219,7 +411,7 @@ A partial acknowledgement consumes only the acknowledged prefix. The lease
 continues to own the suffix. `release_op` returns all unacknowledged bytes to the
 Flow unchanged.
 
-## Space leases
+### Space leases
 
 A space lease is the symmetrical producer-side boundary. It reserves capacity
 before an external source obtains bytes:
@@ -259,13 +451,13 @@ data lease
     bytes are committed before an external consumer removes them
 ```
 
-## Stream
+### Stream
 
 A Stream contains no byte state. It is a thin pairing of an optional Flow Outlet
 and an optional Flow Inlet. Facility authors may compose existing Flows directly:
 
 ```lua
-local stream = Stream.compose(read_flow, write_flow, { name = 'duplex' })
+local stream = Stream.compose(read_flow, write_flow):label('duplex')
 ```
 
 A memory pair is formed from two cross-connected Flows:
@@ -284,7 +476,6 @@ A host-backed Stream is an I/O facility layered over the portable Stream value:
 local HostStream = require('fibers.io.stream')
 local stream = perform(HostStream.open_op(handle, {
   scope = scope, -- defaults to the current Scope
-  name = 'connection',
 
   read = true,
   write = true,
@@ -294,6 +485,7 @@ local stream = perform(HostStream.open_op(handle, {
   read_chunk_size = 16 * 1024,
   write_chunk_size = 16 * 1024,
 }))
+stream:label('connection')
 ```
 
 `read` and `write` are required booleans. At least one direction must be
@@ -303,7 +495,7 @@ for each enabled direction.
 Ordinary socket, file and process users will normally receive Streams from those
 facilities rather than call `HostStream.open_op` directly. `fibers.stream.open_op` has been removed; host-backed streams use `fibers.io.stream.open_op`.
 
-### Stream capabilities
+#### Stream capabilities
 
 ```lua
 stream:is_readable()
@@ -317,7 +509,7 @@ Using a missing direction through a forwarding method is a programming error.
 Expected I/O conditions such as EOF, broken pipe and connection reset remain
 result values.
 
-### Stream byte methods
+#### Stream byte methods
 
 The familiar application-facing surface is:
 
@@ -336,7 +528,7 @@ stream:flush_op()
 The methods delegate to the configured Flow endpoints. Facility authors use
 `reader()` and `writer()` when they need peeking, splicing or leases.
 
-### Stream closure
+#### Stream closure
 
 ```lua
 stream:shutdown_read_op(reason)
@@ -369,79 +561,30 @@ Custody movement uses the general Lifetime API. Stream provides no transfer
 aliases. Facilities needing halves under independent custody construct separate
 read-only and write-only Stream roots, as pipes and process standard streams do.
 
-## Indexed poller and reactor
+## Diagnostic labels
 
-Every host-backed direction receives an indexed poller registration containing a
-stable id, generation, readiness key and direction. The poller delivers only the
-ready subset through a persistent FIFO; it does not rebuild an option tree
-containing every Stream.
-
-Linux epoll stores a fresh registration epoch in each armed event token. A stale
-kernel event must resolve through the current epoch before the reaction id and
-generation are accepted.
-
-The reactor waits on compact control and readiness options:
+All identity-bearing resources receive stable internal IDs. Add a human label only when it improves diagnostics:
 
 ```lua
-choice(control_op, poller:next_op())
+local commands = channel.new(16)
+  :label('service-commands')
 ```
 
-The reactor drains a bounded control burst before waiting. Control and host
-readiness are then temporal alternatives, so `choice` keeps both waits live. If
-readiness wins, the reactor drains newly queued control before attempting the
-host action; retirement and demand changes therefore take effect first without
-misusing certified fallback for a temporal race.
+Labels do not affect transactional semantics, capacity or matching. Most local resources need no label.
 
-Flow demand reaches the reactor through an internal typed consequence. Every
-state-changing Flow option selects a deduplicated `flow_changed` effect in the
-same candidate world. The effect is discharged only after that world commits;
-losing and rolled-back alternatives therefore produce no notification. Its
-discharge enqueues the Flow identity, and the reactor refreshes only the indexed
-registrations attached to that Flow. Flow does not patch Cell locations or
-expose a public observer API.
+## Resource selection
 
-For reads, the reactor reserves Flow capacity before performing the authoritative
-host call. For writes, it leases committed bytes before the call. `would_block`
-releases read capacity or retains write custody as appropriate.
+Prefer the smallest facility whose law matches the application:
 
-The same index services bounded host-owned offers used by accepted connections,
-connection completions, process exits and received datagrams. An offer source
-reserves capacity before its authoritative non-blocking host call and publishes a
-completed value through an external `EventQueue`. A committed `next_op()` both
-claims the value and returns capacity; its post-commit reactor-demand effect
-rearms the source. Unclaimed values remain under the source Lifetime and are
-disposed during retirement. Offer sources add registrations, not tasks. Providers
-which already have request-indexed completions, such as `io_uring`, may instead
-register one bounded non-yielding reactor callback which drains their shared
-completion queue and publishes the existing per-request Completion values.
+| Need | Facility |
+|---|---|
+| one synchronous or buffered message stream | Channel |
+| one replaceable fact | Cell |
+| transactional capacity or count | Counter |
+| coalescing change notification | Pulse |
+| one eventual value | Latch |
+| split multi-sender messaging | Mailbox |
+| byte flow with backpressure | Flow or Stream |
+| a custom state machine | `fibers.resource.machine` |
 
-The `HostHandle` contract is:
-
-```text
-handle.key or handle:readiness_key()
-handle:read(maximum)           -- required for readable Streams
-handle:write(bytes)            -- required for writable Streams
-handle:shutdown_read(reason)   -- optional
-handle:shutdown_write(reason)  -- optional
-handle:close(reason)           -- mandatory
-```
-
-`read` and `write` must be non-blocking. Facility-supplied offer pulls are
-stricter: they are bounded, non-yielding callbacks which receive the registered
-handle explicitly and may perform one authoritative host interaction. They may
-not perform Fibers operations or spawn work. Readiness is only a hint. The reactor
-accepts these read results:
-
-```text
-non-empty string, nil       bytes were read
-nil or empty string, EOF    terminal EOF
-non-empty string, EOF       final bytes followed by EOF
-nil or empty string, would_block
-                            stale readiness
-nil, another error          terminal read failure
-```
-
-Ambiguous or oversized results fail the direction with a HostHandle protocol error.
-
-Regular files may block despite appearing ready. They should use an asynchronous
-host job service while retaining Flow leases as their byte boundary.
+Build larger application operations by composing existing options before authoring a new primitive resource.
