@@ -18,6 +18,7 @@ local IOError = require('fibers.io.error')
 local Lifetime = require('fibers.lifetime')
 local Closure = require('fibers.closure')
 local IOAudit = require('fibers.internal.io_audit')
+local Label = require('fibers.internal.label')
 local Protected = require('fibers.protected')
 local Sleep = require('fibers.sleep')
 
@@ -193,7 +194,7 @@ function Entry.new(reactor, spec)
     kind = service == 'offer' and 'host_offer_reaction'
       or (service == 'callback' and 'host_callback_reaction' or 'host_reaction'),
     service = service,
-    name = spec.name or id,
+    _fibers_id = id,
     mode = spec.mode,
     stream = spec.stream,
     flow = spec.flow,
@@ -207,11 +208,12 @@ function Entry.new(reactor, spec)
     chunk_size = spec.chunk_size or 4096,
     generation = spec.generation or next_entry,
     key = key,
-    _fibers_id = id,
     id = id,
     armed = false,
   }, Entry)
-  entry.retired_signal = Signal.new():label((spec.name or id) .. ':retired')
+  Label.attach(entry, spec.label)
+  entry.retired_signal = Signal.new()
+  Label.child(entry.retired_signal, entry, 'retired')
   entry.registered = false
   entry.retired = false
   entry.closing = false
@@ -230,7 +232,7 @@ function Entry.new(reactor, spec)
       hidden_endpoint = entry.mode == 'read' and entry.flow:inlet() or entry.flow:outlet()
     end
     Lifetime.define(entry, {
-      label = entry.name,
+      label = Label.describe(entry, id),
       role = 'host_reaction',
       children = hidden_endpoint and { hidden_endpoint } or nil,
       closure = Closure.request_then_wait(
@@ -282,7 +284,6 @@ function Reactor.new(runtime, opts)
   local id = 'host-reactor-' .. tostring(next_reactor)
   local self = setmetatable({
     runtime = runtime,
-    name = opts.name or id,
     _fibers_id = id,
     entries = {},
     by_key = {},
@@ -294,6 +295,7 @@ function Reactor.new(runtime, opts)
     control_quantum = opts.control_quantum or 64,
     service_count = 0,
   }, Reactor)
+  Label.attach(self, opts.label)
   self.ready = EventQueue.new( function(_runtime, queue, feed)
     return Interest.external(queue, 'poll', {
       external_kind = 'poller',
@@ -368,7 +370,7 @@ function Reactor:_ensure_running(rt)
   self.running = true
   rt:_spawn_committed(function()
     return self:_run(rt)
-  end, self.name, nil)
+  end, Label.describe(self, self._fibers_id), nil)
 end
 
 function Reactor:_attach_handle(rt, entry)
@@ -789,7 +791,7 @@ function Reactor:_service_callback(entry)
   local ok, serviced, err = call_nonyielding_pull(self, entry.callback, entry.handle)
   if not ok then
     entry.retire_error = IOError.is(serviced) and serviced
-      or IOError.protocol('host', 'reactor_callback', tostring(serviced), { cause = serviced, name = entry.name })
+      or IOError.protocol('host', 'reactor_callback', tostring(serviced), { cause = serviced, label = Label.describe(entry, entry._fibers_id) })
     return self:_retire_entry(entry, 'reactor callback raised')
   end
   if serviced == nil or serviced == false then
@@ -981,7 +983,7 @@ end
 function Reactor:assert_quiescent(label)
   local names = {}
   for _, entry in pairs(self.entries) do
-    names[#names + 1] = entry.name .. ':' .. entry.mode
+    names[#names + 1] = Label.describe(entry, entry._fibers_id) .. ':' .. entry.mode
   end
   if #names > 0 then
     table.sort(names)

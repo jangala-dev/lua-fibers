@@ -19,7 +19,7 @@ local event_result
 
 local outer = fibers.try_run(function()
   event_result = fibers.try_scope({
-    name = 'eclipse-festival',
+    label = 'eclipse-festival',
     closure = closure.supervisor({ child_failure = 'collect' }),
   }, function(scope)
     scope:spawn(function()

@@ -180,7 +180,7 @@ local function test_capacity_release_handoff_together_but_not_each()
 end
 
 local function test_stream_memory_backpressure_with_small_capacity()
-  local a, b = Stream.memory_pair({ name = 'adv-stream-backpressure', capacity = 3 })
+  local a, b = Stream.memory_pair({ label = 'adv-stream-backpressure', capacity = 3 })
   local writer = a:writer()
   local reader = b:reader()
   local rt = Runtime.new({ quiet_deadlock = true })

@@ -257,7 +257,7 @@ end
 
 local function suspension_error(engine, fiber, contract, reason)
   local op_label = Operation.diagnostic_label(fiber.op)
-  local fiber_label = Label.describe(fiber._fibers_label_subject or fiber, fiber.name or fiber._fibers_id)
+  local fiber_label = Label.describe(fiber._fibers_label_subject or fiber, fiber._fibers_id)
   local message = 'suspension prohibited in this region'
   if op_label then
     message = message .. ': operation "' .. op_label .. '" would suspend'

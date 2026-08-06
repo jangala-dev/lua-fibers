@@ -176,12 +176,12 @@ function Roblox.bind_to_close(scope_or_opts, maybe_opts)
   local reason = opts.reason or 'Roblox server closing'
   local deadline = opts.deadline or 25
   local shutdown_events, shutdown_feed = External.events(runtime)
-  shutdown_events:label(opts.name or 'roblox-shutdown')
+  shutdown_events:label(opts.label or 'roblox-shutdown')
 
   local monitor = scope:spawn(function()
     local requested_reason = perform(shutdown_events:next_op())
     scope:perform(scope:request_cancel_op(requested_reason or reason))
-  end, { label = opts.monitor_name or 'roblox-shutdown-monitor' })
+  end):label(opts.monitor_label or 'roblox-shutdown-monitor')
 
   data_model:BindToClose(function()
     host:deliver(shutdown_feed, reason)

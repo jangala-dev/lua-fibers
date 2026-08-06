@@ -14,6 +14,7 @@ local Closure = require('fibers.closure')
 local Protected = require('fibers.protected')
 local perform = require('fibers.perform')
 local Direct = require('fibers.internal.direct')
+local Label = require('fibers.internal.label')
 
 local Module = {}
 local Dial = {}
@@ -260,20 +261,21 @@ local function new_op(endpoint, opts, strategy)
   opts = opts or {}
   local scope = IO.current_scope(opts, 'socket.dial_op')
   next_dial = next_dial + 1
-  local name = opts.name or ('dial-' .. tostring(next_dial))
-  local dial = setmetatable({
+  local id = 'dial-' .. tostring(next_dial)
+  local dial = Label.attach(setmetatable({
     kind = 'socket_dial',
-    name = name,
+    _fibers_id = id,
     endpoint = endpoint,
     strategy = strategy.name,
-    lifecycle = DialLifecycle.new(endpoint):label(name),
+    lifecycle = DialLifecycle.new(endpoint),
     _strategy = strategy,
     _options = opts,
-  }, Dial)
+  }, Dial), opts.label)
+  Label.child(dial.lifecycle, dial, 'lifecycle')
 
   return IO.admit_driven_lifetime_op(scope, dial, {
-    label = 'socket.dial_op',
-    name = name,
+    operation = 'socket.dial_op',
+    label = Label.get(dial),
     role = 'socket_dial',
     closure = dial_closure(dial),
     causal_states = { dial.lifecycle.state },

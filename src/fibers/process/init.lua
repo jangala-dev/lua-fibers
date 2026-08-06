@@ -30,6 +30,12 @@ local perform = require('fibers.perform')
 local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
 
+local next_process = 0
+
+local function process_label(proc)
+  return Label.describe(proc, proc._fibers_id or 'process')
+end
+
 local Lifecycle = {}
 Lifecycle.__index = Lifecycle
 
@@ -297,10 +303,10 @@ function Process:communicate(opts)
   local tasks = perform(Op.named_each({
     stdout = stdout_stream and scope:spawn_op(function()
       return stdout_stream:read_all({ max = stdout_limit })
-    end, { label = self.name .. ':communicate-stdout' }) or Op.always(nil),
+    end, { label = process_label(self) .. ':communicate-stdout' }) or Op.always(nil),
     stderr = stderr_stream and scope:spawn_op(function()
       return stderr_stream:read_all({ max = stderr_limit })
-    end, { label = self.name .. ':communicate-stderr' }) or Op.always(nil),
+    end, { label = process_label(self) .. ':communicate-stderr' }) or Op.always(nil),
   }))
   local stdout_task, stderr_task = tasks.stdout, tasks.stderr
 
@@ -391,7 +397,7 @@ end
 local function open_parent_stream(rt, scope, handle, which, opts)
   local read = which == 'stdout' or which == 'stderr'
   return IO.open_handle_stream(rt, scope, handle, {
-    name = opts.name .. ':' .. which,
+    label = opts.label .. ':' .. which,
     read = read,
     write = not read,
     capacity = opts.capacity,
@@ -496,7 +502,7 @@ local function supervise(proc, driver_scope, opts)
   local stderr_mode, stderr_destination, stderr_redirect = endpoint_opts(spec, 'stderr')
   spec.stdin, spec.stdout, spec.stderr = stdin_mode, stdout_mode, stderr_mode
   spec.runtime = rt
-  spec.name = proc.name
+  spec.label = process_label(proc)
 
   publish_state(rt, proc, { kind = 'launching' })
   local host = opts.host or rt.host
@@ -560,7 +566,7 @@ local function supervise(proc, driver_scope, opts)
         handle:bind_runtime(rt)
       end
       local ok, stream_or_err = Protected.pcall(open_parent_stream, rt, driver_scope, handle, which, {
-        name = proc.name,
+        label = process_label(proc),
         capacity = opts.capacity,
         read_capacity = opts.read_capacity,
         write_capacity = opts.write_capacity,
@@ -591,7 +597,7 @@ local function supervise(proc, driver_scope, opts)
         flush = stdin_redirect.flush,
         close_destination = true,
       })
-    end, { label = proc.name .. ':stdin-bridge' })
+    end, { label = process_label(proc) .. ':stdin-bridge' })
     proc.stdin_stream = nil
   else
     proc.stdin_stream = proc.stdin_pipe_stream
@@ -602,7 +608,7 @@ local function supervise(proc, driver_scope, opts)
         flush = stdout_redirect.flush,
         close_destination = stdout_redirect.close,
       })
-    end, { label = proc.name .. ':stdout-bridge' })
+    end, { label = process_label(proc) .. ':stdout-bridge' })
     proc.stdout_stream = nil
   else
     proc.stdout_stream = proc.stdout_pipe_stream
@@ -613,7 +619,7 @@ local function supervise(proc, driver_scope, opts)
         flush = stderr_redirect.flush,
         close_destination = stderr_redirect.close,
       })
-    end, { label = proc.name .. ':stderr-bridge' })
+    end, { label = process_label(proc) .. ':stderr-bridge' })
     proc.stderr_stream = nil
   elseif stderr_mode == 'stdout' then
     proc.stderr_stream = proc.stdout_stream
@@ -747,17 +753,18 @@ function Command:launch_op(opts)
   -- attempt. The guard is speculative and pure: no host action occurs until the
   -- Process root and its private custody have committed and its Task view starts.
   return Op.guard(function()
-    local name = opts.name or 'process'
-    local proc = setmetatable({
+    next_process = next_process + 1
+    local id = 'process-' .. tostring(next_process)
+    local proc = Label.attach(setmetatable({
       kind = 'process',
-      name = name,
+      _fibers_id = id,
       command = command,
-      lifecycle = Lifecycle.new():label(name),
-      launch_completion = Completion.new():label(name .. ':launch'),
-      exit_completion = Completion.new():label(name .. ':exit'),
-      closed_completion = Completion.new():label(name .. ':closed'),
+      lifecycle = Lifecycle.new(),
+      launch_completion = Completion.new(),
+      exit_completion = Completion.new(),
+      closed_completion = Completion.new(),
       _communicating = false,
-      host_hold = HostHold.new():label(name .. ':host-hold'),
+      host_hold = HostHold.new(),
       host_process = nil,
       stdin_stream = nil,
       stdout_stream = nil,
@@ -765,9 +772,14 @@ function Command:launch_op(opts)
       _pid = nil,
       _status = nil,
       _close_error = nil,
-    }, Process)
+    }, Process), opts.label)
+    Label.child(proc.lifecycle, proc, 'lifecycle')
+    Label.child(proc.launch_completion, proc, 'launch')
+    Label.child(proc.exit_completion, proc, 'exit')
+    Label.child(proc.closed_completion, proc, 'closed')
+    Label.child(proc.host_hold, proc, 'host-hold')
     Lifetime.define(proc, {
-      label = name,
+      label = opts.label,
       role = 'process',
       closure = process_closure(proc),
       children = { proc.host_hold },
@@ -780,7 +792,7 @@ function Command:launch_op(opts)
     end, parent_scope, {
       lifetime = proc._lifetime,
       closure = parent_scope.closure,
-      label = name,
+      label = opts.label,
     })
 
     return scope:admit_op(proc)

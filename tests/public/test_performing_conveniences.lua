@@ -215,18 +215,18 @@ do
     assert_truthy(inlet:close())
     assert_truthy(inlet:closed())
 
-    local reader, writer = file.pipe({ name = 'direct-pipe' })
+    local reader, writer = file.pipe({ label = 'direct-pipe' })
     writer:write('one', ' ', 'line\n')
     writer:close('done')
     assert_eq(reader:read('*l'), 'one line')
     reader:close('done')
 
-    local listener = assert(socket.listen_inet('127.0.0.1', 0, { name = 'direct-listener' }))
+    local listener = assert(socket.listen_inet('127.0.0.1', 0, { label = 'direct-listener' }))
     assert_twins(listener, { 'accept', 'close', 'closed' }, 'listener')
     local address = listener:local_address()
     local client_task = fibers.spawn(function()
       local dial = assert(socket.dial(socket.inet_address(address.host, address.port), {
-        name = 'direct-client',
+        label = 'direct-client',
       }))
       assert_twins(dial, { 'result', 'report', 'close', 'closed' }, 'dial')
       local client = assert(dial:result())

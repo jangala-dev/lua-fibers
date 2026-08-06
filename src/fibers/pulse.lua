@@ -29,7 +29,6 @@ function Pulse.new(initial)
   local id = 'pulse-' .. tostring(next_id)
   local pulse = Label.attach(setmetatable({
     _fibers_id = id,
-    name = id,
     _version = Counter.new(initial),
     _status = Cell.new(OPEN),
   }, Pulse))

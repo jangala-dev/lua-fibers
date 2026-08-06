@@ -13,6 +13,7 @@ local Protected = require('fibers.protected')
 local Closure = require('fibers.closure')
 local perform = require('fibers.perform')
 local Direct = require('fibers.internal.direct')
+local Label = require('fibers.internal.label')
 
 local Algorithms = {}
 
@@ -114,7 +115,10 @@ function Provider.for_runtime(runtime, opts)
 
   local host = runtime.host
   if not host or type(host.file_provider) ~= 'function' then
-    return nil, IOError.unsupported('file', 'provider', { host = host and host.name })
+    return nil,
+      IOError.unsupported('file', 'provider', {
+        host = host and Label.describe(host, host.kind or host.family) or nil,
+      })
   end
   local ok, provider = pcall(host.file_provider, host, runtime, opts or {})
   if
@@ -122,7 +126,10 @@ function Provider.for_runtime(runtime, opts)
     or not provider
     or (type(provider.is_supported) == 'function' and not provider:is_supported())
   then
-    return nil, IOError.unsupported('file', 'provider', { host = host.name })
+    return nil,
+      IOError.unsupported('file', 'provider', {
+        host = Label.describe(host, host.kind or host.family),
+      })
   end
 
   by_runtime[runtime] = provider
@@ -230,11 +237,14 @@ end
 
 local function new_request(kind, args)
   next_request = next_request + 1
-  local name = 'file-request-' .. tostring(next_request)
-  return setmetatable(
-    { kind = kind, args = args or {}, completion = Completion.new():label(name), name = name },
-    Request
-  )
+  local request = Label.attach(setmetatable({
+    kind = kind,
+    args = args or {},
+    _fibers_id = 'file-request-' .. tostring(next_request),
+    completion = Completion.new(),
+  }, Request))
+  Label.child(request.completion, request, 'completion')
+  return request
 end
 function Request:result_op()
   return self.completion:result_op()
@@ -584,31 +594,32 @@ local function drive_file(file, opts)
   publish(rt, file.closed_completion, ok ~= nil and ok ~= false, ok ~= nil and ok ~= false and true or err)
 end
 
-local function new_file_op(path, mode, opts, label, temporary)
+local function new_file_op(path, mode, opts, operation, temporary)
   opts = IO.copy_table(opts)
-  local scope = IO.current_scope(opts, label)
+  local scope = IO.current_scope(opts, operation)
   next_file = next_file + 1
-  local name = opts.name or ('file-' .. tostring(next_file))
   local tx, rx = Mailbox.new(opts.queue_limit or 32)
-  tx:label(name .. ':requests')
-  local file = setmetatable({
+  local file = Label.attach(setmetatable({
     kind = 'regular_file',
-    name = name,
+    _fibers_id = 'file-' .. tostring(next_file),
     path = path,
     mode = mode,
     tx = tx,
     rx = rx,
-    ready_completion = Completion.new():label(name .. ':ready'),
-    closed_completion = Completion.new():label(name .. ':closed'),
+    ready_completion = Completion.new(),
+    closed_completion = Completion.new(),
     backend = nil,
     driver = nil,
     provider_opts = opts,
     temporary = temporary == true,
     auto_unlink = false,
-  }, RegularFile)
+  }, RegularFile), opts.label)
+  Label.child(file.tx, file, 'requests')
+  Label.child(file.ready_completion, file, 'ready')
+  Label.child(file.closed_completion, file, 'closed')
   local admission = IO.admit_driven_lifetime_op(scope, file, {
-    label = label,
-    name = name,
+    operation = operation,
+    label = Label.get(file),
     role = 'regular_file',
     closure = file_closure(file),
     run = function()
@@ -675,13 +686,15 @@ end
 
 local function path_job_op(action, fn, opts)
   opts = IO.copy_table(opts)
-  local scope = IO.current_scope(opts, 'file.submit_' .. action .. '_op')
+  local operation = 'file.submit_' .. action .. '_op'
+  local scope = IO.current_scope(opts, operation)
   next_job = next_job + 1
-  local name = opts.name or ('file-' .. action .. '-' .. tostring(next_job))
-  local job = setmetatable({ name = name }, Job)
+  local job = Label.attach(setmetatable({
+    _fibers_id = 'file-' .. action .. '-' .. tostring(next_job),
+  }, Job), opts.label)
   local submission = IO.admit_driven_lifetime_op(scope, job, {
-    label = 'file.submit_' .. action .. '_op',
-    name = name,
+    operation = operation,
+    label = Label.get(job),
     role = 'file_job',
     closure = Closure.none(),
     run = function() return fn(opts) end,

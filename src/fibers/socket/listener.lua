@@ -18,6 +18,7 @@ local Lifetime = require('fibers.lifetime')
 local Scope = require('fibers.scope')
 local perform = require('fibers.perform')
 local Direct = require('fibers.internal.direct')
+local Label = require('fibers.internal.label')
 
 local ListenerLifecycle = Lifecycle.define({
   prefix = 'socket.listener',
@@ -79,7 +80,7 @@ local function accept_to_scope_op(listener, target_scope)
       offer.key,
       offer.handle,
       Connection.options(listener.options, {
-        name = listener.name .. ':connection',
+        label = Label.describe(listener, listener._fibers_id) .. ':connection',
         action = 'open_accepted_stream',
         address = listener:local_address(),
         local_address = listener:local_address(),
@@ -157,7 +158,7 @@ end
 
 local function accepted_offers(listener, opts)
   return HostOffer.new({
-    name = listener.name .. ':accepted',
+    label = Label.describe(listener, listener._fibers_id) .. ':accepted',
     domain = 'socket',
     action = 'accept',
     role = 'socket_accept_source',
@@ -199,20 +200,23 @@ function Module.listen_op(address, opts)
   opts = IO.copy_table(opts)
   local scope = IO.current_scope(opts, 'socket.listen_op')
   next_listener = next_listener + 1
-  local name = opts.name or ('listener-' .. tostring(next_listener))
-  local listener = setmetatable({
+  local id = 'listener-' .. tostring(next_listener)
+  local listener = Label.attach(setmetatable({
     kind = 'socket_listener',
-    name = name,
+    _fibers_id = id,
     address = address,
-    lifecycle = ListenerLifecycle.new(address):label(name),
-    host_hold = HostHold.new():label(name .. ':host-hold'),
-    accepted_hold = HostHold.new():label(name .. ':accepted-host-hold'),
+    lifecycle = ListenerLifecycle.new(address),
+    host_hold = HostHold.new(),
+    accepted_hold = HostHold.new(),
     accepted_seq = 0,
     options = opts,
-  }, Listener)
+  }, Listener), opts.label)
+  Label.child(listener.lifecycle, listener, 'lifecycle')
+  Label.child(listener.host_hold, listener, 'host-hold')
+  Label.child(listener.accepted_hold, listener, 'accepted-host-hold')
 
   Lifetime.define(listener, {
-    label = name,
+    label = opts.label,
     role = 'socket_listener',
     closure = listener_closure(listener),
     children = { listener.host_hold, listener.accepted_hold },

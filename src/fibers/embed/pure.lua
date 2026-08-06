@@ -6,6 +6,9 @@
 -- It does not support file descriptor polling or arbitrary host events.
 
 local WaitSet = require('fibers.embed.wait_set')
+local Label = require('fibers.internal.label')
+
+local next_pure = 0
 
 local Pure = {}
 Pure.__index = Pure
@@ -34,13 +37,14 @@ function Pure.new(opts)
   opts = opts or {}
   local now = opts.now or default_now
   local sleep = opts.sleep or default_sleep
-  local self = setmetatable({
+  next_pure = next_pure + 1
+  local self = Label.attach(setmetatable({
+    _fibers_id = 'pure-host-' .. tostring(next_pure),
     kind = 'pure',
-    name = 'pure',
     family = 'pure',
     _now = now,
     _sleep = sleep,
-  }, Pure)
+  }, Pure), opts.label)
 
   -- Runtime:now calls host.now(runtime), so expose now as a plain function using
   -- the host's private closure rather than relying on colon dispatch.

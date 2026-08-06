@@ -22,7 +22,6 @@ function Latch.new()
   local id = 'latch-' .. tostring(next_id)
   local latch = Label.attach(setmetatable({
     _fibers_id = id,
-    name = id,
     _state = Cell.new(EMPTY),
   }, Latch))
   Label.child(latch._state, latch, 'state')

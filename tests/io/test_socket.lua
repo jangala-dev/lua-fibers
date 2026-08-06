@@ -32,14 +32,14 @@ do
   local host = SimulatedHost.new({ sockets = true, auto_advance_time = false })
   fibers.run(function()
     local listener, listen_err =
-      fibers.perform(socket.listen_inet_op('127.0.0.1', 0, { name = 'echo-listener' }))
+      fibers.perform(socket.listen_inet_op('127.0.0.1', 0, { label = 'echo-listener' }))
     assert_truthy(listener, tostring(listen_err))
     local local_address = listener:local_address()
     assert_truthy(local_address.port ~= 0)
 
     local client_task = fibers.spawn(function()
       local dial =
-        fibers.perform(socket.dial_op(socket.inet_address(local_address.host, local_address.port), { name = 'echo-client' }))
+        fibers.perform(socket.dial_op(socket.inet_address(local_address.host, local_address.port), { label = 'echo-client' }))
       local client, dial_err = fibers.perform(dial:result_op(fibers.current_scope()))
       assert_truthy(client, tostring(dial_err))
       local report = fibers.perform(dial:report_op())

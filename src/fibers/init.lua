@@ -133,33 +133,10 @@ function M.now()
   return rt:now()
 end
 
-function M.spawn_raw(fn)
-  local rt = Runtime.current()
-  if not rt then
-    error('fibers.spawn_raw must be called from a running fiber', 2)
-  end
-  local scope = current_scope()
-  if scope then
-    local closure = scope.closure
-    local allowed = closure and closure.permit_unstructured == true
-    if closure and type(closure.allow_unstructured) == 'function' then
-      allowed = closure:allow_unstructured(scope, fn) ~= false
-    end
-    if not allowed then
-      error(
-        'unstructured spawn is prohibited by the current scope Closure; '
-          .. 'use fibers.spawn or Runtime:spawn_raw',
-        2
-      )
-    end
-  end
-  return rt:_spawn_raw(fn, scope)
-end
-
 function M.spawn(fn, opts)
   local scope = current_scope()
   if not scope or type(scope.spawn) ~= 'function' then
-    error('fibers.spawn requires a current scope; use Runtime:spawn_raw for unstructured fibers', 2)
+    error('fibers.spawn requires a current scope', 2)
   end
   return scope:spawn(fn, opts)
 end

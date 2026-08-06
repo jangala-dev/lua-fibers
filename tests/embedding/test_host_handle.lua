@@ -68,7 +68,7 @@ do
   local handle = Handle.new({
     host = host,
     key = 'prebind-ready-handle',
-    name = 'prebind-ready-handle',
+    label = 'prebind-ready-handle',
     write = function(_, bytes)
       written = written .. bytes
       return #bytes
@@ -80,7 +80,7 @@ do
   handle:mark_writable()
   rt:spawn_raw(function()
     local stream = rt:perform(
-      Stream.open_op(handle, { scope = owner, name = 'prebind-ready-stream', read = false, write = true })
+      Stream.open_op(handle, { scope = owner, label = 'prebind-ready-stream', read = false, write = true })
     )
     rt:perform(stream:writer():write_op('ready'))
     flushed = rt:perform(stream:writer():flush_op())
@@ -101,7 +101,7 @@ do
 
   rt:spawn_raw(function()
     stream = rt:perform(
-      Stream.open_op(handle, { scope = owner, name = 'handle-read-stream', read = true, write = false })
+      Stream.open_op(handle, { scope = owner, label = 'handle-read-stream', read = true, write = false })
     )
     got = rt:perform(stream:reader():read_exactly_op(4))
   end):label('handle-reader')
@@ -127,7 +127,7 @@ do
 
   rt:spawn_raw(function()
     stream = rt:perform(
-      Stream.open_op(handle, { scope = owner, name = 'handle-write-stream', read = false, write = true })
+      Stream.open_op(handle, { scope = owner, label = 'handle-write-stream', read = false, write = true })
     )
     rt:perform(stream:writer():write_op('hello'))
     flushed = rt:perform(stream:writer():flush_op())

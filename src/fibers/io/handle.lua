@@ -66,7 +66,7 @@ local function callback(self, name, ...)
   if type(f) == 'function' then
     return f(self, ...)
   end
-  return nil, IOError.unsupported('handle', name, { handle = self.name })
+  return nil, IOError.unsupported('handle', name, { handle = Label.describe(self, self._fibers_id) })
 end
 
 function Handle.new(opts)
@@ -98,12 +98,13 @@ function Handle.new(opts)
     ),
     readiness = capability('readiness', true),
   }
+  local id = 'host-handle-' .. tostring(next_id)
   local handle = setmetatable({
-    name = opts.name or ('host-handle-' .. tostring(next_id)),
+    _fibers_id = id,
     key = key,
     handle = opts.handle or key,
     host = opts.host,
-    readiness = opts.readiness or Readiness.new(key, nil):label((opts.name or tostring(key)) .. ':readiness'),
+    readiness = opts.readiness or Readiness.new(key, nil),
     feed = opts.feed,
     capabilities = capabilities,
     _read = opts.read,
@@ -118,9 +119,9 @@ function Handle.new(opts)
     runtime = nil,
     stream = nil,
     _fibers_host_handle = true,
-    _fibers_id = 'host-handle-' .. tostring(next_id),
   }, Handle)
-  Label.attach(handle, opts.name)
+  Label.attach(handle, opts.label)
+  if opts.readiness == nil then Label.child(handle.readiness, handle, 'readiness') end
   IOAudit.created(handle, { kind = 'host_handle' })
   return handle
 end
@@ -131,7 +132,7 @@ end
 
 local function require_capability(self, capability)
   if not self:supports(capability) then
-    return nil, IOError.unsupported('handle', capability, { handle = self.name })
+    return nil, IOError.unsupported('handle', capability, { handle = Label.describe(self, self._fibers_id) })
   end
   return true
 end
@@ -204,7 +205,7 @@ local function call_error(self, action, detail, extra)
     domain = 'handle',
     action = action,
     detail = extra,
-    handle = self.name,
+    handle = Label.describe(self, self._fibers_id),
   })
 end
 
@@ -278,7 +279,7 @@ end
 function Handle:close(reason)
   return close_once(self, reason, function()
     if not self:supports('close') then
-      return nil, IOError.unsupported('handle', 'close', { handle = self.name })
+      return nil, IOError.unsupported('handle', 'close', { handle = Label.describe(self, self._fibers_id) })
     end
     local ok, err, detail = callback(self, 'close', reason)
     if not ok then
@@ -287,7 +288,7 @@ function Handle:close(reason)
           domain = 'handle',
           action = 'close',
           detail = detail,
-          handle = self.name,
+          handle = Label.describe(self, self._fibers_id),
         })
     end
     if self._after_close then

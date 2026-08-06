@@ -18,7 +18,7 @@ end
 
 local function readiness_handle(host, name)
   return HostHandle.new({
-    name = name,
+    label = name,
     key = {},
     host = host,
     close = function() return true end,
@@ -32,7 +32,7 @@ do
   fibers.run(function(scope)
     local pulls = 0
     local source = HostOffer.new({
-      name = 'bounded-offers',
+      label = 'bounded-offers',
       capacity = 1,
       handle = readiness_handle(host, 'bounded-offers-handle'),
       mode = 'read',
@@ -58,7 +58,7 @@ do
   local host = SimulatedHost.new()
   fibers.run(function(scope)
     local source = HostOffer.new({
-      name = 'deadline-offer',
+      label = 'deadline-offer',
       one_shot = true,
       handle = readiness_handle(host, 'deadline-offer-handle'),
       mode = 'read',
@@ -82,7 +82,7 @@ do
   local host = SimulatedHost.new()
   fibers.run(function(scope)
     local yielding = HostOffer.new({
-      name = 'yielding-offer',
+      label = 'yielding-offer',
       one_shot = true,
       handle = readiness_handle(host, 'yielding-offer-handle'),
       mode = 'read',
@@ -91,7 +91,7 @@ do
       end,
     })
     local healthy = HostOffer.new({
-      name = 'healthy-offer',
+      label = 'healthy-offer',
       one_shot = true,
       handle = readiness_handle(host, 'healthy-offer-handle'),
       mode = 'read',
@@ -119,7 +119,7 @@ do
   local result = fibers.try_run(function(scope)
     local next_value = 0
     local source = HostOffer.new({
-      name = 'failing-disposal-offer',
+      label = 'failing-disposal-offer',
       capacity = 2,
       handle = readiness_handle(host, 'failing-disposal-handle'),
       mode = 'read',
@@ -161,7 +161,7 @@ do
   fibers.run(function(scope)
     local pulls = 0
     local source = HostOffer.new({
-      name = 'polling-completion',
+      label = 'polling-completion',
       one_shot = true,
       mode = 'poll',
       poll_interval = 0.01,
@@ -184,14 +184,14 @@ do
   fibers.run(function()
     local handle = FakeHandle.new({
       host = host,
-      name = 'callback-handle',
+      label = 'callback-handle',
       manual_readiness = true,
       initial_writable = false,
     })
     handle:bind_runtime(Runtime.current())
     local calls = 0
     local entry = Reactor.for_runtime():callback({
-      name = 'callback-entry',
+      label = 'callback-entry',
       mode = 'read',
       handle = handle,
       callback = function(registered_handle)

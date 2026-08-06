@@ -10,7 +10,6 @@ function Semaphore.new(capacity)
   local id = 'semaphore-' .. tostring(next_id)
   local semaphore = Label.attach(setmetatable({
     _fibers_id = id,
-    name = id,
     _counter = Counter.bounded(capacity),
   }, Semaphore))
   Label.child(semaphore._counter, semaphore, 'capacity')

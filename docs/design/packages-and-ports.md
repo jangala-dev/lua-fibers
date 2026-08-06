@@ -58,15 +58,17 @@ local result = fibers.run(main, { host = Nixio.new() })
 
 Backend packages provide coherent complete hosts, but the common I/O layer does
 not require an application to use one backend for every capability.
-`fibers.io.Platform` assembles independent providers and validates the readiness
+`fibers.io.platform` assembles independent providers and validates the readiness
 domain used by handle-producing facilities:
 
 ```lua
-local IO = require('fibers.io')
+local AutoIO = require('fibers.io.auto')
 local FFI = require('fibers.io.luajit_linux').new()
 local Posix = require('fibers.io.luaposix').new()
 
-local platform = IO.Platform.new({
+local Platform = require('fibers.io.platform')
+
+local platform = Platform.new({
   providers = {
     clock = FFI,
     wait = FFI,
@@ -88,7 +90,8 @@ A complete backend remains the ordinary case:
 
 ```lua
 local backend = require('fibers.io.nixio').new()
-local platform = IO.Platform.from(backend)
+local Platform = require('fibers.io.platform')
+local platform = Platform.from(backend)
 ```
 
 Package selection and capability composition are separate. Installing
@@ -100,13 +103,14 @@ build still includes only the modules reached from the selected entries.
 `fibers.embed.Application` owns a Runtime and root Scope and advances them without blocking the surrounding host:
 
 ```lua
-local Embed = require('fibers.embed')
+local Application = require('fibers.embed.application')
+local Queue = require('fibers.embed.queue')
 
-local host = Embed.Queue.new({
+local host = Queue.new({
   now = monotonic_now,
 })
 
-local app = Embed.Application.new(main, {
+local app = Application.new(main, {
   host = host,
   owns_host = false,
 })
@@ -118,7 +122,7 @@ local status = app:advance({
 })
 ```
 
-Host callbacks enqueue deliveries through `Embed.Queue`; they do not enter the evaluator recursively. The surrounding event loop decides when to call `advance` again from `needs_immediate_resume`, `next_deadline` and external interests.
+Host callbacks enqueue deliveries through `fibers.embed.queue`; they do not enter the evaluator recursively. The surrounding event loop decides when to call `advance` again from `needs_immediate_resume`, `next_deadline` and external interests.
 
 Roblox builds on this boundary. `fibers.roblox.app` adds `task.defer`, `task.delay` and RunService phase scheduling; `fibers.roblox.host` adds the BindableEvent completion bridge. The semantic driver is no longer Roblox-specific.
 

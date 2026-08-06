@@ -26,7 +26,7 @@ function HostHold.new()
   next_id = next_id + 1
   local id = 'host-hold-' .. tostring(next_id)
   local self = setmetatable({
-    name = id,
+    _fibers_id = id,
     values = {},
     order = {},
     taken = {},

@@ -6,6 +6,7 @@
 -- represented explicitly by the subject facility or another transactional resource.
 local Lifetime = require('fibers.lifetime')
 local Closure = require('fibers.closure')
+local Label = require('fibers.internal.label')
 local Direct = require('fibers.internal.direct')
 
 local Grant = {}
@@ -110,8 +111,8 @@ function Grant._new(grantor, holder, subject, rights, opts)
   runtime._next_grant_id = (runtime._next_grant_id or 0) + 1
   local id = 'grant-' .. tostring(runtime._next_grant_id)
   local right_list = list_rights(rights)
-  if opts.name ~= nil and type(opts.name) ~= 'string' then
-    error('Grant option name must be a string', 2)
+  if opts.label ~= nil and type(opts.label) ~= 'string' then
+    error('Grant option label must be a string', 2)
   end
   if opts.terms ~= nil and type(opts.terms) ~= 'table' then
     error('Grant terms must be a table', 2)
@@ -129,10 +130,9 @@ function Grant._new(grantor, holder, subject, rights, opts)
   local rights_map = rights_set(right_list)
   local grantor_lifetime = grantor:lifetime()
   local holder_lifetime = holder:lifetime()
-  local grant = setmetatable({
+  local grant = Label.attach(setmetatable({
     _fibers_id = id,
-    name = opts.name or id,
-  }, Grant)
+  }, Grant), opts.label)
 
   local private_state = {
     subject = subject,
@@ -149,6 +149,7 @@ function Grant._new(grantor, holder, subject, rights, opts)
   -- Metadata is diagnostic only. Authorisation and transfer checks use the
   -- private snapshot above, never this publicly inspectable table.
   Lifetime.define(grant, {
+    label = opts.label,
     role = 'grant',
     meta = {
       subject = subject,

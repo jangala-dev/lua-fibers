@@ -43,7 +43,7 @@ end
 
 function Connection.open(rt, scope, handle, opts)
   return IO.open_handle_stream(rt, scope, handle, {
-    name = opts.name,
+    label = opts.label,
     read = true,
     write = true,
     capacity = opts.capacity,

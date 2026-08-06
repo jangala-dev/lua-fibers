@@ -8,6 +8,7 @@ local Flow = require('fibers.resource.flow')
 local Reactor = require('fibers.io.reactor')
 local Runtime = require('fibers.runtime')
 local Stream = require('fibers.stream')
+local Label = require('fibers.internal.label')
 
 local HostStream = {}
 setmetatable(HostStream, { __index = Stream })
@@ -20,11 +21,11 @@ local function validate_options(opts, allowed, label)
   end
 end
 
-local function host_stream(name, opts)
-  local read_flow = opts.read and Flow.new(opts.read_capacity):label(name .. ':rx') or nil
-  local write_flow = opts.write and Flow.new(opts.write_capacity):label(name .. ':tx') or nil
+local function host_stream(label, opts)
+  local read_flow = opts.read and Flow.new(opts.read_capacity):label(label .. ':rx') or nil
+  local write_flow = opts.write and Flow.new(opts.write_capacity):label(label .. ':tx') or nil
   local stream = Stream.compose(read_flow, write_flow, {
-    name = name,
+    label = label,
     mode = opts.read and opts.write and 'duplex' or (opts.read and 'reader' or 'writer'),
     kind = 'host_stream',
   })
@@ -44,7 +45,7 @@ local function attach_direction(stream, side, reactor, handle, registrations, ch
   local ep = endpoint(stream, side)
   if not ep then return end
   local registration = reactor:direction({
-    name = stream.name .. ':' .. side,
+    label = Label.describe(stream, stream._fibers_id or 'stream') .. ':' .. side,
     mode = side,
     stream = stream,
     flow = ep.flow,
@@ -59,7 +60,7 @@ end
 local function open_in_op(scope, handle, opts)
   validate_options(opts, {
     scope = true,
-    name = true,
+    label = true,
     read = true,
     write = true,
     read_capacity = true,
@@ -88,9 +89,9 @@ local function open_in_op(scope, handle, opts)
   if not runtime then
     error('Stream.open_op requires a current runtime', 3)
   end
-  local name = opts.name or handle.name or 'host-stream'
+  local label = opts.label or Label.describe(handle, handle._fibers_id or 'host-stream')
   local reactor = Reactor.for_runtime(runtime)
-  local stream = host_stream(name, {
+  local stream = host_stream(label, {
     handle = handle,
     reactor = reactor,
     read = opts.read,

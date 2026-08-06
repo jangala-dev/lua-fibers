@@ -277,9 +277,6 @@ do
   assert_eq(pcall(function()
     owner:grant_op(h, holder, 'read', { terms = { delegable = true } })
   end), false)
-  assert_eq(pcall(function()
-    owner:grant_op(h, { 'read' }, { holder = holder })
-  end), false, 'legacy grant argument order is removed')
 end
 
 -- Grant construction remains an authority-bearing Scope operation.

@@ -114,8 +114,6 @@ function Label.describe(value, fallback)
       return described
     end
   end
-  local name = rawget(value, 'name')
-  if type(name) == 'string' and name ~= '' then return name end
   local id = rawget(value, '_fibers_id')
   if id ~= nil then return tostring(id) end
   return fallback

@@ -11,12 +11,12 @@ local fibers = require(FibersPackage)
 local Roblox = require(FibersPackage.roblox)
 
 local function servePlayer(player)
-  return fibers.scope({ name = `player:{player.UserId}` }, function(session)
+  return fibers.scope({ label = `player:{player.UserId}` }, function(session)
     local characterAdded = Roblox.events(player.CharacterAdded, {
-      name = `character-added:{player.UserId}`,
+      label = `character-added:{player.UserId}`,
     })
     local leaving = Roblox.events(player.Destroying, {
-      name = `player-leaving:{player.UserId}`,
+      label = `player-leaving:{player.UserId}`,
     })
 
     session:spawn(function()
@@ -41,7 +41,7 @@ end
 Roblox.run(function(root)
   Roblox.bind_to_close(root)
 
-  local joined = Roblox.events(Players.PlayerAdded, { name = 'players-joined' })
+  local joined = Roblox.events(Players.PlayerAdded, { label = 'players-joined' })
   for _, player in Players:GetPlayers() do
     root:spawn(function()
       servePlayer(player)
@@ -55,5 +55,5 @@ Roblox.run(function(root)
     end, `player:{player.UserId}`)
   end
 end, {
-  name = 'player-sessions',
+  label = 'player-sessions',
 })

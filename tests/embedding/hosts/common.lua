@@ -188,9 +188,9 @@ end
 function Common.handle_stream_pipe_smoke(name, host, Fd)
   local fibers = require('fibers')
 local HostHandles = require('tests.support.host_handles')
-  local r, w, perr = Fd.pipe({ host = host, name = name .. ':pipe' })
+  local r, w, perr = Fd.pipe({ host = host, label = name .. ':pipe' })
   Common.assert_truthy(r and w, name .. ' pipe failed: ' .. tostring(perr))
-  local handle = HostHandles.duplex(r, w, { host = host, name = name .. ':duplex' })
+  local handle = HostHandles.duplex(r, w, { host = host, label = name .. ':duplex' })
   local rt = FibersRuntime.new({ host = host })
   local owner = FibersScope.new():label(name .. ':owner')
   local got, flushed, stream
@@ -198,7 +198,7 @@ local HostHandles = require('tests.support.host_handles')
   rt:spawn_raw(function()
     stream = rt:perform(FibersStream.open_op(handle, {
       scope = owner,
-      name = name .. ':stream',
+      label = name .. ':stream',
       read = true,
       write = true,
       read_capacity = 64,
@@ -223,7 +223,7 @@ function Common.socket_echo_smoke(name, host, address)
   local socket = require('fibers.socket')
   local report = fibers.try_run(function(scope)
     local listener, listen_err = socket.listen(address, {
-      name = name .. ':listener',
+      label = name .. ':listener',
       unlink_existing = true,
       unlink_on_close = true,
     })
@@ -240,7 +240,7 @@ function Common.socket_echo_smoke(name, host, address)
       connection:close('server complete')
     end):label(name .. ':server')
 
-    local dial = socket.dial(actual, { name = name .. ':dial' })
+    local dial = socket.dial(actual, { label = name .. ':dial' })
     local connection, dial_err = dial:result()
     Common.assert_truthy(connection, name .. ' dial failed: ' .. tostring(dial_err))
     Common.assert_eq(connection:write('ping\n'), 5, name .. ' client write')
@@ -259,7 +259,7 @@ function Common.socket_churn_smoke(name, host, count)
   count = count or 8
   local report = fibers.try_run(function(scope)
     local listener = assert(socket.listen_ipv4('127.0.0.1', 0, {
-      name = name .. ':listener',
+      label = name .. ':listener',
       accept_capacity = 4,
     }))
     local address = listener:local_address()
@@ -276,7 +276,7 @@ function Common.socket_churn_smoke(name, host, count)
 
     for i = 1, count do
       local dial = socket.dial(socket.ipv4_address(address.host, address.port), {
-        name = name .. ':dial:' .. tostring(i),
+        label = name .. ':dial:' .. tostring(i),
       })
       local connection = assert(dial:result())
       local byte = string.char(64 + i)
@@ -298,8 +298,8 @@ function Common.native_datagram_smoke(name, host)
   end
   local socket = require('fibers.socket')
   local report = fibers.try_run(function()
-    local left = assert(socket.udp_ipv4('127.0.0.1', 0, { name = name .. ':udp-left' }))
-    local right = assert(socket.udp_ipv4('127.0.0.1', 0, { name = name .. ':udp-right' }))
+    local left = assert(socket.udp_ipv4('127.0.0.1', 0, { label = name .. ':udp-left' }))
+    local right = assert(socket.udp_ipv4('127.0.0.1', 0, { label = name .. ':udp-right' }))
     left:send_to('ping', right:local_address())
     left:flush()
     local packet = assert(right:receive_from())

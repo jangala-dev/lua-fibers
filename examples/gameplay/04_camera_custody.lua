@@ -19,7 +19,7 @@ local Scope = require('fibers.scope')
 local Stream = require('fibers.stream')
 
 local director_end, gameplay_end = Stream.memory_pair({
-  name = 'camera-control-link',
+  label = 'camera-control-link',
   capacity = 128,
 })
 local cinematic = Scope.new():label('opening-cinematic')

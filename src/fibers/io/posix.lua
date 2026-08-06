@@ -156,7 +156,7 @@ local function make_fd(binding)
     local poll_value = raw.poll_value and raw.poll_value(value) or value
     local number = raw.number and raw.number(value) or nil
     local handle = Handle.new({
-      name = opts.name or (binding.name .. '-fd-' .. tostring(number or poll_value)),
+      label = opts.label or (binding.name .. '-fd-' .. tostring(number or poll_value)),
       key = opts.key or { family = binding.family, poll = poll_value, number = number, generation = generation },
       handle = value,
       host = opts.host,
@@ -199,7 +199,7 @@ local function make_fd(binding)
     end
     local reader, read_err = Fd.new(reader_raw, {
       host = opts.host,
-      name = opts.name and (opts.name .. ':read') or nil,
+      label = opts.label and (opts.label .. ':read') or nil,
       nonblocking = opts.nonblocking,
     })
     if not reader then
@@ -208,7 +208,7 @@ local function make_fd(binding)
     end
     local writer, write_err = Fd.new(writer_raw, {
       host = opts.host,
-      name = opts.name and (opts.name .. ':write') or nil,
+      label = opts.label and (opts.label .. ':write') or nil,
       nonblocking = opts.nonblocking,
     })
     if not writer then
@@ -266,8 +266,8 @@ local function make_network(binding, Fd)
     return ok and true or nil, ok and nil or socket_error(action, errno, message, fields)
   end
 
-  local function wrap(value, host, name, family)
-    local handle, err = Fd.new(value, { host = host, name = name, nonblocking = true, cloexec = true })
+  local function wrap(value, host, label, family)
+    local handle, err = Fd.new(value, { host = host, label = label, nonblocking = true, cloexec = true })
     if not handle then
       return nil, IOError.normalise(err, { domain = 'socket', action = 'wrap' })
     end
@@ -304,7 +304,7 @@ local function make_network(binding, Fd)
       return nil, socket_error('socket', errno, message)
     end
     local handle
-    handle, err = wrap(value, host, opts.name or (binding.name .. '-listener'), endpoint.family)
+    handle, err = wrap(value, host, opts.label or (binding.name .. '-listener'), endpoint.family)
     if not handle then
       close_raw(value)
       return nil, err
@@ -349,7 +349,7 @@ local function make_network(binding, Fd)
       local child, child_err = wrap(
         child_raw,
         host,
-        (opts.name or 'listener') .. ':accepted',
+        (opts.label or 'listener') .. ':accepted',
         endpoint.family
       )
       if not child then
@@ -395,7 +395,7 @@ local function make_network(binding, Fd)
       return nil, socket_error('socket', errno, message)
     end
     local handle
-    handle, err = wrap(value, host, opts.name or (binding.name .. '-dial'), endpoint.family)
+    handle, err = wrap(value, host, opts.label or (binding.name .. '-dial'), endpoint.family)
     if not handle then
       close_raw(value)
       return nil, err
@@ -505,7 +505,7 @@ local function make_network(binding, Fd)
       local handle
       handle, err = Fd.new(value, {
         host = host,
-        name = opts.name or (binding.name .. '-datagram'),
+        label = opts.label or (binding.name .. '-datagram'),
         nonblocking = true,
         cloexec = true,
       })
@@ -717,7 +717,7 @@ function Posix.define(binding)
     function Host:create_pipe(opts)
       return Fd.pipe({
         host = self,
-        name = opts and opts.name,
+        label = opts and opts.label,
         nonblocking = opts == nil or opts.nonblocking ~= false,
       })
     end

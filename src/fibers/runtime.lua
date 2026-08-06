@@ -288,7 +288,6 @@ local function spawn_unchecked(self, fn, scope, subject)
   self._next_fiber_id = self._next_fiber_id + 1
   local id = 'fiber-' .. tostring(self._next_fiber_id)
   local fiber = Label.attach({
-    name = id,
     _fibers_id = id,
     _fibers_label_subject = subject,
     co = coroutine.create(fn),

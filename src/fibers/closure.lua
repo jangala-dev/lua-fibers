@@ -15,10 +15,6 @@ local propagation_fields = {
   'on_child_outcome',
   'on_cancel_requested',
   'on_body_result',
-  'allow_unstructured',
-  'allow_admit',
-  'allow_move',
-  'permit_unstructured',
   'permit_admission',
   'permit_outward_move',
   'child_failure',
@@ -31,10 +27,6 @@ local propagation_callbacks = {
 }
 
 local propagation_booleans = {
-  allow_unstructured = true,
-  allow_admit = true,
-  allow_move = true,
-  permit_unstructured = true,
   permit_admission = true,
   permit_outward_move = true,
 }
@@ -117,9 +109,8 @@ local function boundary(kind, opts, default_name)
   end
   local contract = Closure.running()
   contract.name = opts.name or default_name
-  contract.permit_unstructured = opts.allow_unstructured == true
-  contract.permit_outward_move = opts.allow_outward_move ~= false
-  contract.permit_admission = opts.allow_admission ~= false
+  contract.permit_outward_move = opts.permit_outward_move ~= false
+  contract.permit_admission = opts.permit_admission ~= false
   return contract, opts
 end
 

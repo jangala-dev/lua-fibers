@@ -535,14 +535,4 @@ do
   assert_truthy(report.ok, report:tostring())
 end
 
--- Removed pre-v1 resolver options are rejected rather than translated.
-do
-  local ok, err = pcall(socket.dns_resolver, { require_secure_random = false })
-  assert_eq(ok, false)
-  assert_truthy(tostring(err):find('allow_weak_random', 1, true))
-  ok, err = pcall(socket.dns_resolver, { nameserver = socket.ipv4_address('192.0.2.53', 53) })
-  assert_eq(ok, false)
-  assert_truthy(tostring(err):find('nameservers', 1, true))
-end
-
 print('tests/io/test_dns_resolver.lua: ok')

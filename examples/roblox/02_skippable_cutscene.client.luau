@@ -22,9 +22,9 @@ local function playDialogue()
 end
 
 Roblox.run(function()
-  local exit = fibers.scope({ name = 'observatory-arrival' }, function(scene)
+  local exit = fibers.scope({ label = 'observatory-arrival' }, function(scene)
     local skipped = Roblox.events(skipButton.Activated, {
-      name = 'skip-observatory-arrival',
+      label = 'skip-observatory-arrival',
     })
 
     local camera = scene:spawn(playCameraTrack):label('camera-track')
@@ -48,5 +48,5 @@ Roblox.run(function()
 
   print('Cinematic exited through', exit)
 end, {
-  name = 'cinematic-client',
+  label = 'cinematic-client',
 })

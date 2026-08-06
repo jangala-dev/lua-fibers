@@ -27,7 +27,6 @@ Scope.__index = function(self, key)
   if method ~= nil then return method end
   local life = rawget(self, '_lifetime')
   if not life then return nil end
-  if key == 'name' then return life.name end
   if key == 'runtime' then return life.runtime end
   if key == 'closure' then return life.closure end
   if key == 'offers' then return life.offers end
@@ -54,29 +53,10 @@ local function target_scope(target)
   return is_scope(target) and target or nil
 end
 
-local function closure_allows(scope, method, flag, ...)
+local function require_closure_permission(scope, field, action)
   local closure = scope.closure
-  if not closure then
-    return true
-  end
-  local f = closure[method]
-  if type(f) == 'function' then
-    local ok, reason = f(closure, scope, ...)
-    if ok == false then
-      return false, reason
-    end
-    return true
-  end
-  if flag and closure[flag] == false then
-    return false, method .. ' denied by scope Closure'
-  end
-  return true
-end
-
-local function require_closure(scope, method, flag, ...)
-  local ok, reason = closure_allows(scope, method, flag, ...)
-  if not ok then
-    error(reason or (method .. ' denied by scope Closure'), 3)
+  if closure and closure[field] == false then
+    error((action or field) .. ' denied by scope Closure', 3)
   end
 end
 
@@ -165,7 +145,7 @@ function Scope:label(...)
 end
 
 function Scope:diagnostic_label()
-  return Label.describe(self._lifetime, self.name)
+  return Label.describe(self._lifetime, self._lifetime._fibers_id or self._fibers_id)
 end
 
 
@@ -183,7 +163,7 @@ function Scope:_store()
 end
 
 function Scope:admit_op(value)
-  require_closure(self, 'allow_admit', 'permit_admission', value)
+  require_closure_permission(self, 'permit_admission', 'admission')
   local node = Lifetime.of(value)
   if not node then
     error('Scope:admit_op expects a value carrying a dormant Lifetime', 2)
@@ -271,7 +251,7 @@ function Scope:move_op(item, target)
   if not r then
     error('Scope:move_op expects a target Scope', 2)
   end
-  require_closure(self, 'allow_move', 'permit_outward_move', item, target)
+  require_closure_permission(self, 'permit_outward_move', 'outward movement')
   return self:_store():move_op(self, item, r):map(function()
     return item
   end)
@@ -283,16 +263,11 @@ function Scope:offer_op(item, target, terms)
     error('Scope:offer_op expects a target Scope', 2)
   end
   local offer = {
-    type = 'custody_transfer',
-    from = self,
     from_scope = self,
-    to = target_sc,
     to_scope = target_sc,
     item = item,
-    task = item,
     item_kind = item_kind(item),
     terms = terms,
-    name = item and Label.describe(item, item.name) or nil,
   }
   local put_offer = target_sc.offers:put_op(offer)
   return self:move_op(item, target_sc):and_then(put_offer:map(function()
@@ -530,7 +505,7 @@ function Scope:inspect_op()
         local done = type(outcome_state) == 'table' and outcome_state.status == 'done'
         local result = done and outcome_state.result or nil
         return {
-          name = Label.describe(self._lifetime, self.name),
+          label = Label.describe(self._lifetime, self._lifetime._fibers_id or self._fibers_id),
           phase = state.closure_phase,
           close_reason = state.closure_reason,
           close_error = state.closure_error,
@@ -565,6 +540,7 @@ function Scope:run(fn)
 end
 
 Scope.Report = ScopeReport
+Scope.Result = ScopeResult
 Scope.is = is_scope
 function Scope.require(value, label)
   if is_scope(value) then return value end

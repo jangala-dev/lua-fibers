@@ -17,13 +17,13 @@ local navigationInvalidated = Instance.new('BindableEvent')
 
 local app = Roblox.prepare(function()
   local actions = Roblox.events(actionSignal.Event, {
-    name = 'every-player-action',
+    label = 'every-player-action',
   })
   local health = Roblox.latest(healthSignal.Event, {
-    name = 'newest-health',
+    label = 'newest-health',
   })
   local navigation = Roblox.pulse(navigationInvalidated.Event, {
-    name = 'navigation-invalidated',
+    label = 'navigation-invalidated',
   })
 
   local firstAction = actions:next()
@@ -42,7 +42,7 @@ local app = Roblox.prepare(function()
   print('newest health', newestHealth)
   print('navigation generation', navigationGeneration)
 end, {
-  name = 'controlled-signal-modes',
+  label = 'controlled-signal-modes',
   max_steps_per_turn = 128,
   max_work_per_step = 512,
 })

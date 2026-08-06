@@ -18,7 +18,7 @@ A facility normally:
 
 ```lua
 local Counter = require('fibers.resource.counter')
-local perform = require('fibers.perform')
+local fibers = require('fibers')
 
 local Latch = {}
 Latch.__index = Latch
@@ -36,11 +36,11 @@ function Latch:wait_op()
 end
 
 function Latch:count_down(amount)
-  return perform(self:count_down_op(amount))
+  return fibers.perform(self:count_down_op(amount))
 end
 
 function Latch:wait()
-  return perform(self:wait_op())
+  return fibers.perform(self:wait_op())
 end
 ```
 

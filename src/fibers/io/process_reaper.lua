@@ -8,6 +8,7 @@ local IOAudit = require('fibers.internal.io_audit')
 local Process = require('fibers.io.process')
 local Op = require('fibers.op')
 local HostOffer = require('fibers.io.offer')
+local Label = require('fibers.internal.label')
 
 local Reaper = {}
 local ACTION =
@@ -438,7 +439,7 @@ function Reaper.new(spec)
     open_exit = function(self, scope)
       if not self.exit_source then
         self.exit_source = HostOffer.new({
-          name = self.name .. ':exit',
+          label = Label.describe(self, self._fibers_id or 'process') .. ':exit',
           domain = 'process',
           action = 'reap',
           role = 'process_exit_completion',
@@ -566,7 +567,7 @@ function Reaper.new(spec)
     end
     local status_handle, wrap_err = spec.Fd.new(
       status_read,
-      { host = host, name = (process_spec.name or ('process-' .. pid)) .. ':status', nonblocking = true }
+      { host = host, label = (process_spec.label or ('process-' .. pid)) .. ':status', nonblocking = true }
     )
     if not status_handle then
       return nil, nil, IOError.normalise(wrap_err, { domain = 'process', action = 'wrap_status' })
@@ -575,7 +576,7 @@ function Reaper.new(spec)
     status_handle.capabilities.shutdown_write = false
     local endpoints, endpoint_err = IO.wrap({
       host = host,
-      name = process_spec.name,
+      label = process_spec.label,
       pid = pid,
       parents = parents,
       wrap = spec.Fd.new,
@@ -585,8 +586,8 @@ function Reaper.new(spec)
       status_handle:close()
       return nil, nil, endpoint_err
     end
-    local process = setmetatable({
-      name = process_spec.name or ('process-' .. pid),
+    local process = Label.attach(setmetatable({
+      _fibers_id = 'host-process-' .. tostring(pid),
       _pid = pid,
       reaper_pid = reaper,
       group_id = (process_spec.new_session or process_spec.process_group == 'new') and pid or nil,
@@ -597,7 +598,7 @@ function Reaper.new(spec)
       terminal_error = nil,
       reaped = false,
       closed = false,
-    }, ProcessClass)
+    }, ProcessClass), process_spec.label)
     IOAudit.created(process, { kind = 'process_handle' })
     IOAudit.transfer(status_handle, process, { kind = 'host_handle', role = 'process_status' })
     return process, endpoints

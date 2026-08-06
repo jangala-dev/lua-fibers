@@ -50,7 +50,7 @@ do
   local scope = FibersScope.new( { runtime = rt, closure = FibersClosure.nursery() }):label('compound-failure-scope')
   rt:_spawn_raw(function()
     scope:run(function(s)
-      local h = { name = 'compound-failure-owned' }
+      local h = { label = 'compound-failure-owned' }
       Lifetime.define(h, { closure = {
         name = 'boom',
         finish_op = function() error('closure boom') end,
@@ -106,9 +106,9 @@ end
 do
   local owner_was_root = false
   fibers.run(function(root)
-    local backend = FakeHandle.new({ name = 'safe-acquire-backend' })
+    local backend = FakeHandle.new({ label = 'safe-acquire-backend' })
     local stream =
-      fibers.perform(Stream.open_op(backend, { read = true, write = true, name = 'safe-acquire-stream' }))
+      fibers.perform(Stream.open_op(backend, { read = true, write = true, label = 'safe-acquire-stream' }))
     owner_was_root = fibers.perform(root:has_custody_op(stream))
   end)
   assert_eq(owner_was_root, true, 'safe stream acquisition should use current scope')
@@ -117,9 +117,9 @@ end
 -- Safe acquisition without a current scope is rejected; owner-first low-level
 -- acquisition is explicit through the _in_op form.
 do
-  local backend = FakeHandle.new({ name = 'no-current-scope-backend' })
+  local backend = FakeHandle.new({ label = 'no-current-scope-backend' })
   local ok, err = pcall(function()
-    Stream.open_op(backend, { read = true, write = true, name = 'no-current-scope-stream' })
+    Stream.open_op(backend, { read = true, write = true, label = 'no-current-scope-stream' })
   end)
   assert_eq(ok, false, 'safe acquisition should require a current scope or opts.scope')
   assert_truthy(tostring(err):match('current Scope'), 'error should explain missing current Scope')
@@ -133,9 +133,9 @@ do
   rt:_spawn_raw(function()
     root:run(function()
       fibers.scope(function()
-        local backend = FakeHandle.new({ name = 'retired-authority-backend', input = 'x' })
+        local backend = FakeHandle.new({ label = 'retired-authority-backend', input = 'x' })
         stream = fibers.perform(
-          Stream.open_op(backend, { read = true, write = true, name = 'retired-authority-stream' })
+          Stream.open_op(backend, { read = true, write = true, label = 'retired-authority-stream' })
         )
       end)
       local bytes, err = fibers.perform(stream:reader():read_some_op(1))
@@ -157,7 +157,7 @@ do
   local settled, feed = External.signal(rt)
   settled:label('hardening-settled')
   local scope = FibersScope.new( { runtime = rt, closure = FibersClosure.nursery() }):label('hardening-settling')
-  local h = { name = 'hardening-settling-owned' }
+  local h = { label = 'hardening-settling-owned' }
   local state
   rt:_spawn_raw(function()
     scope:run(function(s)
@@ -198,9 +198,9 @@ end
 do
   local owner_was_root = false
   fibers.run(function(root)
-    local backend = FakeHandle.new({ name = 'friendly-stream-backend' })
+    local backend = FakeHandle.new({ label = 'friendly-stream-backend' })
     local stream =
-      fibers.perform(Stream.open_op(backend, { read = true, write = true, name = 'friendly-stream' }))
+      fibers.perform(Stream.open_op(backend, { read = true, write = true, label = 'friendly-stream' }))
     owner_was_root = fibers.perform(root:has_custody_op(stream))
   end)
   assert_eq(owner_was_root, true, 'Stream.open_op should bind to the current scope')

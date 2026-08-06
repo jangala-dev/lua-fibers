@@ -42,7 +42,7 @@ function Contract.exercise(name, host, address, opts)
 
     stage = 'listen'
     local listener, listen_err = socket.listen(address, {
-      name = name .. ':listener',
+      label = name .. ':listener',
       accept_capacity = 2,
       unlink_existing = true,
       unlink_on_close = true,
@@ -69,7 +69,7 @@ function Contract.exercise(name, host, address, opts)
     end):label(name .. ':server')
 
     stage = 'dial'
-    local dial_opts = { name = name .. ':dial' }
+    local dial_opts = { label = name .. ':dial' }
     if opts.local_address then
       dial_opts.local_address = opts.local_address
     end

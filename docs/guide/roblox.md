@@ -52,7 +52,7 @@ a requirement to poll Fibers every frame:
 local app = Roblox.prepare(function(root)
     -- the root Fibers program
 end, {
-    name = "game-client",
+    label = "game-client",
     max_steps_per_turn = 128,
     max_work_per_step = 512,
 })
@@ -131,7 +131,7 @@ Roblox.run(function(scope)
     Sleep.sleep(1.5)
     openMoonGate()
 end, {
-    name = "observatory-entrance",
+    label = "observatory-entrance",
 })
 ```
 
@@ -468,15 +468,15 @@ The adapter exposes three deliberate buffering policies:
 
 ```luau
 local clicks = Roblox.events(button.Activated, {
-    name = "continue-button",
+    label = "continue-button",
 })
 
 local health = Roblox.latest(humanoid.HealthChanged, {
-    name = "latest-health",
+    label = "latest-health",
 })
 
 local frames = Roblox.pulse(RunService.Heartbeat, {
-    name = "heartbeat-pulse",
+    label = "heartbeat-pulse",
 })
 ```
 
@@ -489,7 +489,7 @@ custodial Scope closes, or explicitly through `subscription:close()`.
 
 ```luau
 local pressed = Roblox.events(skipButton.Activated, {
-    name = "skip-button",
+    label = "skip-button",
 })
 
 local reason = pressed:next()
@@ -550,7 +550,7 @@ Roblox.run(function(root)
     root:spawn(runWorldSimulation):label("world-simulation")
     fibers.perform(Op.never())
 end, {
-    name = "game-server",
+    label = "game-server",
 })
 ```
 

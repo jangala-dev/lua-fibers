@@ -493,7 +493,7 @@ enabled. A `HostHandle` must provide `close`, and must provide `read` or `write`
 for each enabled direction.
 
 Ordinary socket, file and process users will normally receive Streams from those
-facilities rather than call `HostStream.open_op` directly. `fibers.stream.open_op` has been removed; host-backed streams use `fibers.io.stream.open_op`.
+facilities rather than call `HostStream.open_op` directly. Portable streams use `fibers.stream`; host-backed streams are opened through `fibers.io.stream.open_op`.
 
 #### Stream capabilities
 

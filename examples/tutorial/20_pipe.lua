@@ -15,7 +15,7 @@ local file = require('fibers.file')
 -- The example support simulator supplies a deterministic linked pipe.
 -- Native host families create non-blocking operating-system pipes instead.
 fibers.run(function()
-  local reader, writer = fibers.perform(file.pipe_op({ name = 'example-pipe' }))
+  local reader, writer = fibers.perform(file.pipe_op({ label = 'example-pipe' }))
   assert(reader)
 
   fibers.spawn(function()

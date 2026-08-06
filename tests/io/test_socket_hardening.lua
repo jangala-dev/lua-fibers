@@ -57,12 +57,12 @@ do
   local host = SimulatedHost.new({ sockets = true })
   local accepted
   fibers.run(function(root)
-    local listener = socket.listen_inet('127.0.0.1', 0, { name = 'ownership-listener' })
+    local listener = socket.listen_inet('127.0.0.1', 0, { label = 'ownership-listener' })
     local address = listener:local_address()
-    local dial = socket.dial(socket.inet_address(address.host, address.port), { name = 'ownership-client' })
+    local dial = socket.dial(socket.inet_address(address.host, address.port), { label = 'ownership-client' })
     local client = dial:result()
 
-    fibers.scope({ name = 'connection-handler' }, function(handler)
+    fibers.scope({ label = 'connection-handler' }, function(handler)
       accepted = listener:accept()
       assert_eq(Lifetime.of(accepted):current_state().custodian, handler:lifetime(), 'accepted Stream should move into handler scope')
       assert_truthy(
@@ -89,12 +89,12 @@ do
   fibers.run(function(root)
     local scope = root
     local listener = socket.listen_inet('127.0.0.1', 0, {
-      name = 'scope-custody-listener',
+      label = 'scope-custody-listener',
       scope = scope,
     })
     local address = listener:local_address()
     local dial = socket.dial(socket.inet_address(address.host, address.port), {
-      name = 'scope-custody-dial',
+      label = 'scope-custody-dial',
       scope = scope,
     })
     local client = dial:result(root)
@@ -113,8 +113,8 @@ do
   local host = SimulatedHost.new({ sockets = true })
   fibers.run(function(root)
     local listener
-    fibers.scope({ name = 'listener-origin' }, function(origin)
-      listener = socket.listen_inet('127.0.0.1', 0, { name = 'moved-listener' })
+    fibers.scope({ label = 'listener-origin' }, function(origin)
+      listener = socket.listen_inet('127.0.0.1', 0, { label = 'moved-listener' })
       assert_eq(Lifetime.of(listener), listener:lifetime())
       assert_eq(listener:lifetime().has_body, false, 'Listener Lifetime should not carry a ceremonial driver body')
       local listener_roots = fibers.perform(origin:children_op())
@@ -127,8 +127,8 @@ do
 
     local address = listener:local_address()
     local dial
-    fibers.scope({ name = 'dial-origin' }, function(origin)
-      dial = socket.dial(socket.inet_address(address.host, address.port), { name = 'moved-dial' })
+    fibers.scope({ label = 'dial-origin' }, function(origin)
+      dial = socket.dial(socket.inet_address(address.host, address.port), { label = 'moved-dial' })
       assert_eq(Lifetime.of(dial), dial:lifetime())
       assert_truthy(dial:lifetime().has_body, 'Dial Lifetime should carry its running body')
       local dial_roots = fibers.perform(origin:children_op())
@@ -153,12 +153,12 @@ do
   local host = SimulatedHost.new({ sockets = true })
   fibers.run(function()
     local listener = socket.listen_inet('127.0.0.1', 0, {
-      name = 'full-queue-listener',
+      label = 'full-queue-listener',
       accept_capacity = 1,
     })
     local address = listener:local_address()
-    local c1 = socket.dial(socket.inet_address(address.host, address.port), { name = 'full-queue-client-1' }):result()
-    local c2 = socket.dial(socket.inet_address(address.host, address.port), { name = 'full-queue-client-2' }):result()
+    local c1 = socket.dial(socket.inet_address(address.host, address.port), { label = 'full-queue-client-1' }):result()
+    local c2 = socket.dial(socket.inet_address(address.host, address.port), { label = 'full-queue-client-2' }):result()
 
     local rows = wait_for_queue(listener, 1)
     yield_turns(2) -- allow the driver to reach the second, blocked queue insertion
@@ -177,9 +177,9 @@ end
 do
   local host = SimulatedHost.new({ sockets = true })
   fibers.run(function()
-    local listener = socket.listen_inet('127.0.0.1', 0, { name = 'close-race-listener' })
+    local listener = socket.listen_inet('127.0.0.1', 0, { label = 'close-race-listener' })
     local address = listener:local_address()
-    local client = socket.dial(socket.inet_address(address.host, address.port), { name = 'close-race-client' }):result()
+    local client = socket.dial(socket.inet_address(address.host, address.port), { label = 'close-race-client' }):result()
     wait_for_queue(listener, 1)
 
     fibers.perform(listener.lifecycle:request_stop_op('simulated terminal listener'))
@@ -201,11 +201,11 @@ do
   local host = SimulatedHost.new({ sockets = true })
   local dial_ref, connection_ref
   fibers.run(function()
-    local listener = socket.listen_inet('127.0.0.1', 0, { name = 'untaken-listener' })
+    local listener = socket.listen_inet('127.0.0.1', 0, { label = 'untaken-listener' })
     local address = listener:local_address()
 
-    fibers.scope({ name = 'untaken-dial-scope' }, function()
-      dial_ref = socket.dial(socket.inet_address(address.host, address.port), { name = 'untaken-dial' })
+    fibers.scope({ label = 'untaken-dial-scope' }, function()
+      dial_ref = socket.dial(socket.inet_address(address.host, address.port), { label = 'untaken-dial' })
       fibers.perform(dial_ref:report_op())
       local connected_state = dial_ref:state_value()
       connection_ref = connected_state.connection
@@ -226,11 +226,11 @@ end
 do
   local host = SimulatedHost.new({ sockets = true })
   fibers.run(function()
-    local listener = socket.listen_inet('127.0.0.1', 0, { name = 'taken-listener' })
+    local listener = socket.listen_inet('127.0.0.1', 0, { label = 'taken-listener' })
     local address = listener:local_address()
-    local dial = socket.dial(socket.inet_address(address.host, address.port), { name = 'taken-dial' })
+    local dial = socket.dial(socket.inet_address(address.host, address.port), { label = 'taken-dial' })
 
-    fibers.scope({ name = 'dial-target' }, function(target)
+    fibers.scope({ label = 'dial-target' }, function(target)
       local connection = dial:result()
       assert_eq(Lifetime.of(connection):current_state().custodian, target:lifetime(), 'Dial result should move connection into caller scope')
       assert_eq(dial:closed(), true, 'Dial driver should finish after custody transfer')
@@ -246,9 +246,9 @@ end
 do
   local host = SimulatedHost.new({ sockets = true })
   fibers.run(function()
-    local listener = socket.listen_inet('127.0.0.1', 0, { name = 'single-take-listener' })
+    local listener = socket.listen_inet('127.0.0.1', 0, { label = 'single-take-listener' })
     local address = listener:local_address()
-    local dial = socket.dial(socket.inet_address(address.host, address.port), { name = 'single-take-dial' })
+    local dial = socket.dial(socket.inet_address(address.host, address.port), { label = 'single-take-dial' })
     local first = dial:result()
     local second, err = dial:result()
     assert_eq(second, nil)
@@ -265,9 +265,9 @@ end
 do
   local host = SimulatedHost.new({ sockets = true })
   fibers.run(function()
-    local listener = socket.listen_inet('127.0.0.1', 0, { name = 'early-close-listener' })
+    local listener = socket.listen_inet('127.0.0.1', 0, { label = 'early-close-listener' })
     local address = listener:local_address()
-    local dial = socket.dial(socket.inet_address(address.host, address.port), { name = 'early-close-dial' })
+    local dial = socket.dial(socket.inet_address(address.host, address.port), { label = 'early-close-dial' })
     assert_eq(dial:close('closed immediately'), true)
     assert_eq(dial:closed(), true)
     local connection, err = dial:result()
@@ -283,9 +283,9 @@ end
 do
   local host = SimulatedHost.new({ sockets = true })
   fibers.run(function()
-    local listener = socket.listen_inet('127.0.0.1', 0, { name = 'closed-result-listener' })
+    local listener = socket.listen_inet('127.0.0.1', 0, { label = 'closed-result-listener' })
     local address = listener:local_address()
-    local dial = socket.dial(socket.inet_address(address.host, address.port), { name = 'closed-result-dial' })
+    local dial = socket.dial(socket.inet_address(address.host, address.port), { label = 'closed-result-dial' })
     fibers.perform(dial:report_op())
 
     assert_eq(dial:close('caller abandoned dial'), true)
@@ -306,11 +306,11 @@ do
   local listener_ref, queued_ref
   fibers.run(function()
     listener_ref = socket.listen_inet('127.0.0.1', 0, {
-      name = 'owner-seal-listener',
+      label = 'owner-seal-listener',
       accept_capacity = 1,
     })
     local address = listener_ref:local_address()
-    local client = socket.dial(socket.inet_address(address.host, address.port), { name = 'owner-seal-client' }):result()
+    local client = socket.dial(socket.inet_address(address.host, address.port), { label = 'owner-seal-client' }):result()
     queued_ref = wait_for_queue(listener_ref, 1)[1].value
     client:close('owner-seal test complete')
     -- Return without closing the listener.
@@ -324,7 +324,7 @@ end
 do
   local host = SimulatedHost.new({ sockets = true })
   fibers.run(function()
-    local listener = socket.listen_inet('127.0.0.1', 0, { name = 'idempotent-listener' })
+    local listener = socket.listen_inet('127.0.0.1', 0, { label = 'idempotent-listener' })
     assert_eq(listener:close('first close'), true)
     assert_eq(listener:close('second close'), true)
     assert_eq(listener:closed(), true)
@@ -347,7 +347,7 @@ do
   end
 
   local result = fibers.try_run(function()
-    socket.listen_inet('127.0.0.1', 0, { name = 'failing-close-listener' })
+    socket.listen_inet('127.0.0.1', 0, { label = 'failing-close-listener' })
   end, { host = host })
   assert_eq(result.ok, false, 'listener closure failure should fail the scope')
   assert_truthy(tostring(result):match('injected close failure'), 'scope report should retain close failure')
@@ -363,7 +363,7 @@ do
   end
 
   local result = fibers.try_run(function()
-    local dial = socket.dial(socket.inet_address('127.0.0.1', 9), { name = 'throwing-dial-host' })
+    local dial = socket.dial(socket.inet_address('127.0.0.1', 9), { label = 'throwing-dial-host' })
     local connection, err = dial:result()
     assert_eq(connection, nil)
     assert_truthy(HostError.is(err, 'protocol'), 'adapter defect should publish a protocol result')
@@ -393,7 +393,7 @@ do
   end
 
   local result = fibers.try_run(function()
-    local listener = socket.listen_inet('127.0.0.1', 0, { name = 'throwing-close-listener' })
+    local listener = socket.listen_inet('127.0.0.1', 0, { label = 'throwing-close-listener' })
     local ok, err = listener:close('trigger throwing close')
     assert_eq(ok, nil)
     assert_truthy(HostError.is(err, 'protocol'))
@@ -412,7 +412,7 @@ do
   end
 
   local result = fibers.try_run(function()
-    socket.listen_inet('127.0.0.1', 0, { name = 'throwing-listen-host' })
+    socket.listen_inet('127.0.0.1', 0, { label = 'throwing-listen-host' })
   end, { host = host })
 
   assert_eq(result.ok, false, 'listen adapter defect should fail the scope')
@@ -425,17 +425,17 @@ do
   fibers.run(function()
     local address = socket.inet_address('127.0.0.1', 0)
     local opts = {
-      name = 'snapshotted-listener',
+      label = 'snapshotted-listener',
       accept_capacity = 1,
     }
     local listen = socket.listen_op(address, opts)
 
     address.host = '203.0.113.99'
-    opts.name = 'mutated-listener'
+    opts.label = 'mutated-listener'
     opts.accept_capacity = 99
 
     local listener = fibers.perform(listen)
-    assert_eq(listener.name, 'snapshotted-listener')
+    assert_eq(listener:label(), 'snapshotted-listener')
     assert_eq(listener.address.host, '127.0.0.1')
     assert_eq(listener.offers.capacity, 1)
     listener:close('snapshot test complete')

@@ -18,7 +18,7 @@ local continueButton = script.Parent:WaitForChild('ContinueButton')
 local app
 app = Roblox.attach(function()
   local pressed = Roblox.events(continueButton.Activated, {
-    name = 'continue-button',
+    label = 'continue-button',
   })
 
   local outcome = fibers.perform(Op.named_choice({
@@ -32,7 +32,7 @@ app = Roblox.attach(function()
     print('The prompt became idle.')
   end
 end, {
-  name = 'event-attached-button-choice',
+  label = 'event-attached-button-choice',
   scheduling = 'event',
   max_seconds_per_turn = 0.001,
   on_status = function(status)

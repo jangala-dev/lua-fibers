@@ -32,7 +32,7 @@ end
 -- Declared capabilities, including explicit false values, are authoritative.
 do
   local h = Handle.new({
-    name = 'capability-handle',
+    label = 'capability-handle',
     capabilities = { read = false, write = true, close = false, readiness = true },
     read = function()
       return 'should-not-run'
@@ -101,7 +101,7 @@ do
   fibers.run(function(scope)
     local host_hold = HostHold.new():label('settled-host-hold')
     fibers.perform(scope:admit_op(host_hold))
-    local value = { name = 'external' }
+    local value = { label = 'external' }
     assert_eq(
       host_hold:hold('value', value, function(v, reason)
         assert_eq(v, value)
@@ -140,13 +140,13 @@ do
     fibers.perform(scope:admit_op(hold))
 
     local first = Handle.new({
-      name = 'invalid-accepted-handle',
+      label = 'invalid-accepted-handle',
       capabilities = { read = false, write = true, close = true, readiness = true },
       write = function(_, bytes) return #bytes end,
       close = function() first_closed = first_closed + 1; return true end,
     })
     local second = Handle.new({
-      name = 'queued-sibling-handle',
+      label = 'queued-sibling-handle',
       capabilities = { close = true, readiness = true },
       close = function() second_closed = second_closed + 1; return true end,
     })
@@ -155,7 +155,7 @@ do
     assert_eq(hold:hold('second', second, function(value, reason) return value:close(reason) end), second)
 
     local connection, err = Connection.from_host_hold(fibers.current_runtime(), scope, hold, 'first', first, {
-      name = 'invalid-accepted-connection',
+      label = 'invalid-accepted-connection',
       action = 'open_accepted_stream',
     })
     assert_eq(connection, nil)

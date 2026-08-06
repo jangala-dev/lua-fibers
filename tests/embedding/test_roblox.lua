@@ -338,7 +338,7 @@ do
 
   run_scheduled(scheduler, function()
     selected = Roblox.run(function()
-      local skip = Roblox.events(signal, { name = 'cutscene-skip' })
+      local skip = Roblox.events(signal, { label = 'cutscene-skip' })
       signal:Fire('player pressed Skip') -- fires while Runtime phase is `fiber`
       return skip:next()
     end, { host = host, owns_host = false })
@@ -390,9 +390,9 @@ do
   local actions, newest_health, navigation_generation
 
   local app = Roblox.prepare(function()
-    local action_events = Roblox.events(actions_signal, { name = 'every-action' })
-    local health = Roblox.latest(health_signal, { name = 'newest-health' })
-    local navigation = Roblox.pulse(navigation_signal, { name = 'navigation-invalidated' })
+    local action_events = Roblox.events(actions_signal, { label = 'every-action' })
+    local health = Roblox.latest(health_signal, { label = 'newest-health' })
+    local navigation = Roblox.pulse(navigation_signal, { label = 'navigation-invalidated' })
 
     actions = {
       action_events:next(),
@@ -444,8 +444,8 @@ do
 
   run_scheduled(scheduler, function()
     Roblox.run(function()
-      local queued = Roblox.events(queued_signal, { name = 'combat-events' })
-      local latest = Roblox.latest(latest_signal, { name = 'latest-health' })
+      local queued = Roblox.events(queued_signal, { label = 'combat-events' })
+      local latest = Roblox.latest(latest_signal, { label = 'latest-health' })
 
       queued_signal:Fire('hit', 4)
       queued_signal:Fire('parry', 7)
@@ -479,7 +479,7 @@ do
 
   run_scheduled(scheduler, function()
     Roblox.run(function()
-      local latest = Roblox.latest(signal, { name = 'latest-mana' })
+      local latest = Roblox.latest(signal, { label = 'latest-mana' })
       scheduler.api.delay(1, function()
         signal:Fire(60)
       end)
@@ -507,7 +507,7 @@ do
 
   run_scheduled(scheduler, function()
     Roblox.run(function()
-      local frames = Roblox.pulse(heartbeat, { name = 'frame-pulse' })
+      local frames = Roblox.pulse(heartbeat, { label = 'frame-pulse' })
       heartbeat:Fire(1 / 60)
       heartbeat:Fire(1 / 60)
       heartbeat:Fire(1 / 60)

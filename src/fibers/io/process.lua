@@ -2,6 +2,7 @@
 
 local IOError = require('fibers.io.error')
 local IOAudit = require('fibers.internal.io_audit')
+local Label = require('fibers.internal.label')
 
 local M = {}
 
@@ -14,7 +15,7 @@ end
 
 local function invalid_contract(host, missing)
   return IOError.protocol('host', 'start_process', 'host process provider returned an invalid process handle', {
-    host = host and host.name or nil,
+    host = host and Label.describe(host, host.kind or host.family) or nil,
     missing = missing,
   })
 end
@@ -24,7 +25,7 @@ end
 -- same process-handle contract beneath the public Process Lifetime.
 function M.start(host, spec)
   if not host or type(host.start_process) ~= 'function' then
-    return nil, nil, IOError.unsupported('host', 'process', { host = host and host.name or nil })
+    return nil, nil, IOError.unsupported('host', 'process', { host = host and Label.describe(host, host.kind or host.family) or nil })
   end
   local process, endpoints, err = host:start_process(spec)
   if not process then
@@ -286,7 +287,7 @@ do
     for which, raw in pairs(parents) do
       local handle, err = opts.wrap(raw, {
         host = opts.host,
-        name = (opts.name or ('process-' .. tostring(opts.pid))) .. ':' .. which,
+        label = (opts.label or ('process-' .. tostring(opts.pid))) .. ':' .. which,
         nonblocking = opts.nonblocking ~= false,
         cloexec = opts.cloexec,
       })

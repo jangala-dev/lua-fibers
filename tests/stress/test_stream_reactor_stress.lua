@@ -26,7 +26,7 @@ local report = fibers.try_run(function(scope)
   local tasks = {}
   for i = 1, 3 do
     local reader, writer = file.pipe({
-      name = 'reactor-stress-live-' .. tostring(i),
+      label = 'reactor-stress-live-' .. tostring(i),
       capacity = 32,
       chunk_size = 7,
     })
@@ -49,7 +49,7 @@ local report = fibers.try_run(function(scope)
   -- Registration churn is tested separately from the live fan-out. This
   -- catches stale generations and incomplete retirement deterministically.
   for i = 1, 24 do
-    local reader, writer = file.pipe({ name = 'reactor-stress-churn-' .. tostring(i) })
+    local reader, writer = file.pipe({ label = 'reactor-stress-churn-' .. tostring(i) })
     writer:write('x')
     writer:close('churn writer complete')
     assert(reader:read('*a', { max = 2 }) == 'x')

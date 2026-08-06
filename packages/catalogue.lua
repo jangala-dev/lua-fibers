@@ -1,5 +1,5 @@
--- Published package ownership. Components remain finer-grained than packages;
--- this catalogue is used for release and build reporting, not runtime loading.
+-- Package ownership for release and build reporting. Ownership does not make a
+-- module public; the exact supported import surface is packages/public_modules.lua.
 
 return {
   {

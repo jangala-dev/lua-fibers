@@ -97,18 +97,6 @@ end
 
 function Application.new(fn, opts)
   opts = opts or {}
-  if opts.runtime ~= nil then
-    error('Embed.Application option runtime was removed; use runtime_options', 2)
-  end
-  for _, key in ipairs({
-    'choice_seed', 'search_limit', 'search_total_limit', 'search_trail_limit',
-    'search_depth_limit', 'cycle_work_limit', 'cycle_focus_limit',
-    'instrumentation', 'quiet_deadlock',
-  }) do
-    if opts[key] ~= nil then
-      error('Embed.Application runtime option ' .. key .. ' must be inside runtime_options', 2)
-    end
-  end
   if type(fn) ~= 'function' then
     error((opts.label or 'Embed.prepare') .. ' expects a root function', 2)
   end
@@ -117,18 +105,17 @@ function Application.new(fn, opts)
     error((opts.label or 'Embed.prepare') .. ' requires an embedding host', 2)
   end
 
-  local name = opts.name or 'root'
+  local label = opts.label or 'root'
   local runtime = Runtime.new(runtime_options(opts, host))
   local scope = Scope.new( {
     runtime = runtime,
-    closure = opts.closure or Closure.nursery({ name = name }),
-  }):label(name)
+    closure = opts.closure or Closure.nursery({ name = label }),
+  }):label(label)
 
   local self = setmetatable({
     _fibers_embed_application = true,
     _status_marker = opts.status_marker,
     _application_marker = opts.application_marker,
-    name = name,
     host = host,
     runtime = runtime,
     scope = scope,
@@ -153,7 +140,7 @@ function Application.new(fn, opts)
   runtime:_spawn_raw(function()
     self._root_result = scope:try_run(fn)
     return self._root_result
-  end,  scope):label(name)
+  end,  scope):label(label)
 
   return self
 end
@@ -243,11 +230,6 @@ end
 
 local function advance_limits(self, opts)
   opts = opts or {}
-  for _, key in ipairs({ 'max_steps_per_turn', 'max_work_per_step', 'max_external_per_turn', 'max_seconds_per_turn' }) do
-    if opts[key] ~= nil then
-      error('Application:advance option ' .. key .. ' was removed; use the short per-call name', 3)
-    end
-  end
   local max_steps =
     positive_integer(opts.max_steps, self.max_steps_per_turn, 'advance max_steps')
   local max_work =

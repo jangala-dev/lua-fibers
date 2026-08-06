@@ -173,7 +173,7 @@ end
 
 local function wrap_handle(host, h)
   return HostHandle.new({
-    name = h.key .. '-handle',
+    label = h.key .. '-handle',
     key = h.key,
     host = host,
     read = function(_handle, max)
@@ -232,7 +232,7 @@ do
     stream = rt:perform(
       Stream.open_op(
         stream_handle,
-        { scope = owner, read = true, write = true, name = 'socket-read-stream' }
+        { scope = owner, read = true, write = true, label = 'socket-read-stream' }
       )
     )
     got = rt:perform(stream:reader():read_exactly_op(3))
@@ -262,7 +262,7 @@ do
     stream = rt:perform(
       Stream.open_op(
         stream_handle,
-        { scope = owner, read = true, write = true, name = 'socket-write-stream' }
+        { scope = owner, read = true, write = true, label = 'socket-write-stream' }
       )
     )
     rt:perform(stream:writer():write_op('hello'))
@@ -303,7 +303,7 @@ do
     stream = rt:perform(
       Stream.open_op(
         stream_handle,
-        { scope = owner, read = true, write = true, name = 'socket-partial-stream' }
+        { scope = owner, read = true, write = true, label = 'socket-partial-stream' }
       )
     )
     rt:perform(stream:writer():write_op('abcdef'))
@@ -328,7 +328,7 @@ do
 
   rt:spawn_raw(function()
     stream = rt:perform(
-      Stream.open_op(stream_handle, { scope = owner, read = true, write = true, name = 'socket-eof-stream' })
+      Stream.open_op(stream_handle, { scope = owner, read = true, write = true, label = 'socket-eof-stream' })
     )
     first = rt:perform(stream:reader():read_some_op(8))
     second, err = rt:perform(stream:reader():read_some_op(8))

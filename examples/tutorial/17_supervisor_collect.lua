@@ -18,7 +18,7 @@ local workspace_report
 
 local outer = fibers.try_run(function()
   return fibers.try_scope({
-    name = 'workspace-services',
+    label = 'workspace-services',
     closure = closure.supervisor({ child_failure = 'collect' }),
   }, function()
     fibers.spawn(function()

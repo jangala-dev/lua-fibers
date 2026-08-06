@@ -6,6 +6,8 @@
 ---Readiness-producing providers are checked against the selected wait domain so
 ---an apparently valid composition cannot silently stall.
 
+local Label = require('fibers.internal.label')
+
 local Platform = {}
 Platform.__index = Platform
 
@@ -32,7 +34,7 @@ local PLATFORM_OPTIONS = {
   allow_mixed_wait_domains = true,
   compatible_wait_domains = true,
   kind = true,
-  name = true,
+  label = true,
   family = true,
   owns_providers = true,
   capabilities = true,
@@ -79,6 +81,8 @@ local EMBED_METHODS = {
   'mark_done',
   'wait_done',
 }
+
+local next_platform = 0
 
 local WAIT_BOUND_SLOTS = {
   'pipe',
@@ -187,16 +191,17 @@ function Platform.new(opts)
     end
   end
 
-  local platform = setmetatable({
+  next_platform = next_platform + 1
+  local platform = Label.attach(setmetatable({
+    _fibers_id = 'io-platform-' .. tostring(next_platform),
     kind = opts.kind or 'composed',
-    name = opts.name or 'composed',
     family = opts.family or wait_domain or 'composed',
     wait_domain = wait_domain,
     providers = providers,
     capabilities = {},
     _owns_providers = opts.owns_providers ~= false,
     _closed = false,
-  }, Platform)
+  }, Platform), opts.label)
 
   -- Runtime:now calls host.now(runtime), so retain the provider explicitly.
   platform.now = function()

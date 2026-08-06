@@ -16,6 +16,7 @@ local Protected = require('fibers.protected')
 local Closure = require('fibers.closure')
 local perform = require('fibers.perform')
 local Direct = require('fibers.internal.direct')
+local Label = require('fibers.internal.label')
 
 local Module = {}
 local Query = {}
@@ -409,7 +410,7 @@ local function drive_dns(query, backend, opts, rt)
       end
       publish_family(rt, query, family, addresses, err)
       return addresses, err
-    end):label(query.name .. ':' .. family)
+    end):label(Label.describe(query, query._fibers_id) .. ':' .. family)
   end
 
   -- The two family completions are authoritative. The driver waits on their
@@ -454,32 +455,28 @@ end
 
 function Module.resolve_op(endpoint, opts)
   opts = IO.copy_table(opts)
-  if opts.nameserver ~= nil then
-    error('socket.resolve_op option nameserver was removed; use nameservers', 2)
-  end
-  if opts.require_nonblocking ~= nil then
-    error('socket.resolve_op option require_nonblocking was removed', 2)
-  end
   endpoint = Address.validate(endpoint, 'socket.resolve_op')
   if not Address.is_name(endpoint) then
     error('socket.resolve_op expects a name endpoint', 2)
   end
   local scope = IO.current_scope(opts, 'socket.resolve_op')
   next_query = next_query + 1
-  local name = opts.name or ('resolver-query-' .. tostring(next_query))
-  local query = setmetatable({
+  local id = 'resolver-query-' .. tostring(next_query)
+  local query = Label.attach(setmetatable({
     kind = 'resolver_query',
-    name = name,
+    _fibers_id = id,
     endpoint = endpoint,
     family_completions = {
-      inet6 = Completion.new():label(name .. ':inet6'),
-      inet4 = Completion.new():label(name .. ':inet4'),
+      inet6 = Completion.new(),
+      inet4 = Completion.new(),
     },
-  }, Query)
+  }, Query), opts.label)
+  Label.child(query.family_completions.inet6, query, 'inet6')
+  Label.child(query.family_completions.inet4, query, 'inet4')
 
   return IO.admit_driven_lifetime_op(scope, query, {
-    label = 'socket.resolve_op',
-    name = name,
+    operation = 'socket.resolve_op',
+    label = Label.get(query),
     role = 'resolver_query',
     closure = query_closure(query),
     causal_states = {

@@ -346,7 +346,7 @@ end
 
 local function packet_source(socket, capacity)
   return HostOffer.new({
-    name = socket.name .. ':packets',
+    label = Label.describe(socket, socket._fibers_id) .. ':packets',
     domain = 'datagram',
     action = 'receive_from',
     role = 'datagram_packet_source',
@@ -471,21 +471,24 @@ function Module.udp_op(address, opts)
   end
   local scope = IO.current_scope(opts, 'socket.udp_op')
   next_datagram = next_datagram + 1
-  local name = opts.name or ('datagram-' .. tostring(next_datagram))
-  local socket = setmetatable({
+  local id = 'datagram-' .. tostring(next_datagram)
+  local socket = Label.attach(setmetatable({
     kind = 'datagram_socket',
-    name = name,
+    _fibers_id = id,
     address = address,
-    lifecycle = DatagramLifecycle.new(address):label(name),
-    host_hold = HostHold.new():label(name .. ':host-hold'),
-    sends = SendState.new(send_capacity):label(name .. ':sends'),
+    lifecycle = DatagramLifecycle.new(address),
+    host_hold = HostHold.new(),
+    sends = SendState.new(send_capacity),
     max_datagram_size = max_datagram_size,
-  }, Datagram)
+  }, Datagram), opts.label)
+  Label.child(socket.lifecycle, socket, 'lifecycle')
+  Label.child(socket.host_hold, socket, 'host-hold')
+  Label.child(socket.sends, socket, 'sends')
   socket.packets = packet_source(socket, receive_capacity)
 
   return IO.admit_driven_lifetime_op(scope, socket, {
-    label = 'socket.udp_op',
-    name = name,
+    operation = 'socket.udp_op',
+    label = Label.get(socket),
     role = 'datagram_socket',
     closure = datagram_closure(socket),
     children = { socket.host_hold },

@@ -236,7 +236,7 @@ local function boundary_descendants(s, boundary)
     local bs = boundary_state(s, item)
     out[#out + 1] = {
       _fibers_value = true, node = item, item = view_of(item),
-      id = item._fibers_id, name = Label.describe(item, item.name), path = path,
+      id = item._fibers_id, label = Label.describe(item, item._fibers_id), path = path,
       role = rec.role, custody_phase = rec.phase,
       closure_phase = bs.closure_phase, closure_reason = bs.closure_reason,
       closure_error = bs.closure_error or rec.closure_error,
@@ -277,7 +277,7 @@ local function containment_blockers(s, token)
         node = node,
         item = view_of(node),
         id = node._fibers_id,
-        name = Label.describe(node, node.name),
+        label = Label.describe(node, node._fibers_id),
         count = bs.count,
         phase = bs.closure_phase,
         reason = bs.closure_reason,
@@ -297,7 +297,7 @@ local function sorted_items(s, boundary, roots_only)
   end)
   table.sort(rows, function(a, b)
     if roots_only and a.admission_order ~= b.admission_order then return a.admission_order > b.admission_order end
-    return tostring(a.item._fibers_id or a.item.name or a.item) < tostring(b.item._fibers_id or b.item.name or b.item)
+    return tostring(a.item._fibers_id or a.item) < tostring(b.item._fibers_id or b.item)
   end)
   local out = {}
   for i = 1, #rows do out[i] = rows[i].item end
@@ -579,7 +579,7 @@ function Store.new(runtime)
   return store
 end
 
-function Store:attach_boundary(node, name)
+function Store:attach_boundary(node)
   if type(node) ~= 'table' or node._fibers_lifetime ~= true then
     error('LifetimeStore expects a Lifetime node', 2)
   end
@@ -590,7 +590,6 @@ function Store:attach_boundary(node, name)
     self._next_node = self._next_node + 1
     node._fibers_id = 'lifetime-' .. tostring(self._next_node)
   end
-  node.name = name or node.name or node._fibers_id
   return node
 end
 

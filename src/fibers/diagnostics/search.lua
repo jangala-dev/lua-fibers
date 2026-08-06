@@ -90,7 +90,7 @@ function Instrumentation:begin_search(search, meta)
     active_elapsed = 0,
     focus = focus,
     operation_label = focus and Operation.diagnostic_label(focus.op) or nil,
-    fiber_label = focus and Label.describe(focus._fibers_label_subject or focus, focus.name) or nil,
+    fiber_label = focus and Label.describe(focus._fibers_label_subject or focus, focus._fibers_id) or nil,
     pending = meta.pending or 0,
     total_pending = meta.total_pending or meta.pending or 0,
     component_size = meta.component_size or meta.pending or 0,

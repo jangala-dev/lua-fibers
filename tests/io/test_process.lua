@@ -198,7 +198,7 @@ do
   })
 
   fibers.run(function()
-    local destination, reader = Stream.memory_pair({ name = 'process-redirect' })
+    local destination, reader = Stream.memory_pair({ label = 'process-redirect' })
     local proc = assert(process
       .command({
         'redirect-child',

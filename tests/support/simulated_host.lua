@@ -8,6 +8,7 @@ local perform = require('fibers.perform')
 local Protected = require('fibers.protected')
 local WaitSet = require('fibers.embed.wait_set')
 local Address = require('fibers.net.address')
+local Label = require('fibers.internal.label')
 
 local Binding = {
   name = 'simulated',
@@ -488,31 +489,31 @@ local function manual_process(Fd)
     start_process = function(host, spec)
       local pid, child, endpoints = host.next_pid, {}, {}
       host.next_pid = pid + 1
-      local name = spec.name or ('simulated-process-' .. tostring(pid))
+      local label = spec.label or ('simulated-process-' .. tostring(pid))
       if spec.stdin == 'pipe' then
-        child.stdin, endpoints.stdin = Fd.pipe({ host = host, name = name .. ':stdin' })
+        child.stdin, endpoints.stdin = Fd.pipe({ host = host, label = label .. ':stdin' })
       end
       if spec.stdout == 'pipe' then
-        endpoints.stdout, child.stdout = Fd.pipe({ host = host, name = name .. ':stdout' })
+        endpoints.stdout, child.stdout = Fd.pipe({ host = host, label = label .. ':stdout' })
       end
       if spec.stderr == 'pipe' then
-        endpoints.stderr, child.stderr = Fd.pipe({ host = host, name = name .. ':stderr' })
+        endpoints.stderr, child.stderr = Fd.pipe({ host = host, label = label .. ':stderr' })
       elseif spec.stderr == 'stdout' then
         child.stderr = child.stdout
       end
-      local process = setmetatable({
-        name = name,
+      local process = Label.attach(setmetatable({
+        _fibers_id = 'simulated-process-' .. tostring(pid),
         _pid = pid,
         spec = spec,
         host = host,
-        exit_completion = Completion.new():label(name .. ':exit'),
+        exit_completion = Completion.new():label(label .. ':exit'),
         child_endpoints = child,
         signals = {},
         reaped = false,
         started = false,
         on_start = spec.on_start or host.on_process_start,
         on_signal = spec.on_signal or host.on_process_signal,
-      }, Class)
+      }, Class), spec.label)
       IOAudit.created(process, { kind = 'process_handle' })
       host.processes[pid] = process
       return process, endpoints

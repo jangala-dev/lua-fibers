@@ -6,6 +6,10 @@ For practical explanations, see [Options](guide/options.md), [Lifetimes](guide/l
 
 ## Conventions
 
+
+The exact v1 module contract is recorded in [`packages/public_modules.lua`](../packages/public_modules.lua). A source module absent from that allow-list is an implementation detail even when it is importable from a repository checkout. There are no aggregate `fibers.io`, `fibers.embed` or `fibers.dns` modules; import the required explicit module.
+
+
 ### Direct and `_op` forms
 
 Where a method `x_op(...)` returns an option, a corresponding direct method `x(...)` performs it in the current fiber:
@@ -65,10 +69,6 @@ Selects and commits one coherent result. Requires a current running fiber.
 ### `fibers.spawn(fn [, opts]) -> Task`
 
 Spawns a structured Task in the current scope.
-
-### `fibers.spawn_raw(fn)`
-
-Starts an unstructured raw fiber where the current Closure permits it. Prefer `spawn` for application work.
 
 ### `fibers.scope([opts,] fn) -> ...`
 
@@ -302,8 +302,9 @@ Creates a scope capability. Application code normally receives scopes from `run`
 ## Scope results and reports
 
 ```lua
-local Result = require('fibers.scope.result')
-local Report = require('fibers.scope.report')
+local Scope = require('fibers.scope')
+local Result = Scope.Result
+local Report = Scope.Report
 ```
 
 ### `Result.is(value) -> boolean`
@@ -763,17 +764,18 @@ local Effect = require('fibers.effect')
 
 Most applications should use higher-level facilities. See [Committed effects](advanced/extending.md#committed-effects).
 
-## `fibers.embed`
+## Embedding modules
 
 ```lua
-local Embed = require('fibers.embed')
+local Application = require('fibers.embed.application')
+local Queue = require('fibers.embed.queue')
 ```
 
-### `Embed.prepare(fn [, opts]) -> Application`
+### `Application.new(fn [, opts]) -> Application`
 
 Prepares an application for bounded host-driven execution.
 
-### `Embed.new_host([opts]) -> host`
+### `Queue.new([opts]) -> host`
 
 Creates the standard queue-backed embedding host.
 
@@ -810,6 +812,6 @@ The following modules are public but intended mainly for facility authors, embed
 - `fibers.embed.external`
 - `fibers.embed.manual`
 - `fibers.embed.queue`
-- `fibers.io.*`
+- the exact I/O and embedding modules listed in `packages/public_modules.lua`
 
 Their contracts are documented in [Extending Fibers](advanced/extending.md), [Embedding](guide/embedding.md), [Flow and Stream contract](guide/resources.md#detailed-flow-and-stream-contract) and the design documents. Modules under `fibers.internal.*` are not public API.

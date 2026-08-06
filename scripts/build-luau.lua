@@ -3,6 +3,7 @@
 package.path = table.concat({ './?.lua', './?/init.lua', './?/?.lua', package.path }, ';')
 
 local profile_data = require('tests.luau.profile')
+local public_modules = require('packages.public_modules')
 
 local function fail(message)
   error(message, 0)
@@ -226,7 +227,7 @@ end
 
 local function alias_name(name)
   local root, rest = name:match('^([^.]+)%.?(.*)$')
-  if root ~= 'fibers' and root ~= 'tests' and root ~= 'examples' then
+  if root ~= 'fibers' and root ~= 'tests' and root ~= 'examples' and root ~= 'packages' then
     return name
   end
   if rest == '' then
@@ -443,7 +444,7 @@ local profile = resolve_profile(profile_name)
 validate_profile(profile)
 
 local source = collect_modules({ 'src' }, false)
-local auxiliary = collect_modules({ 'tests', 'examples' }, true)
+local auxiliary = collect_modules({ 'tests', 'examples', 'packages' }, true)
 local test_entries, selected_aux = profile_dependencies(profile.tests, source, auxiliary)
 local entries = {}
 for j = 1, #profile_data.entries do
@@ -454,6 +455,11 @@ for entry in pairs(test_entries) do
 end
 for j = 1, #profile.module_entries do
   entries[profile.module_entries[j]] = true
+end
+-- The portable public surface is part of the generated portable target even
+-- when a test reaches modules dynamically through the allow-list.
+for j = 1, #public_modules.portable do
+  entries[public_modules.portable[j]] = true
 end
 local selected = source_closure(source, entries)
 
@@ -485,7 +491,8 @@ write_file(output .. '/.luaurc', [[{
   "aliases": {
     "fibers": "./src/fibers",
     "tests": "./src/tests",
-    "examples": "./src/examples"
+    "examples": "./src/examples",
+    "packages": "./src/packages"
   }
 }
 ]])

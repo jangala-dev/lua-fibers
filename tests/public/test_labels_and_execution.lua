@@ -73,7 +73,7 @@ local function test_identity_labels_are_fluent_and_non_semantic()
     assert(scope:label() == 'root-scope')
     assert(scope:lifetime():label() == 'root-scope')
     local report = scope:_make_report(nil, {}, {})
-    assert(report.scope_name == 'root-scope')
+    assert(report.scope_label == 'root-scope')
 
     local task = scope:spawn(function()
       return state:read()

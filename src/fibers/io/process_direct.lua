@@ -8,6 +8,7 @@ local IOAudit = require('fibers.internal.io_audit')
 local Process = require('fibers.io.process')
 local Op = require('fibers.op')
 local HostOffer = require('fibers.io.offer')
+local Label = require('fibers.internal.label')
 
 local Direct = {}
 
@@ -137,7 +138,7 @@ function Direct.new(spec)
     open_exit = function(self, scope)
       if not self.exit_source then
         self.exit_source = HostOffer.new({
-          name = self.name .. ':exit',
+          label = Label.describe(self, self._fibers_id or 'process') .. ':exit',
           domain = 'process',
           action = 'reap',
           role = 'process_exit_completion',
@@ -313,7 +314,7 @@ function Direct.new(spec)
 
     local endpoints, wrap_err = IO.wrap({
       host = host,
-      name = process_spec.name,
+      label = process_spec.label,
       pid = pid,
       parents = parents,
       wrap = spec.Fd.new,
@@ -333,7 +334,7 @@ function Direct.new(spec)
       if raw then
         pidfd = spec.Fd.new(raw, {
           host = host,
-          name = (process_spec.name or ('process-' .. pid)) .. ':pidfd',
+          label = (process_spec.label or ('process-' .. pid)) .. ':pidfd',
           nonblocking = true,
           cloexec = true,
         })
@@ -344,8 +345,8 @@ function Direct.new(spec)
       end
     end
 
-    local process = setmetatable({
-      name = process_spec.name or ('process-' .. tostring(pid)),
+    local process = Label.attach(setmetatable({
+      _fibers_id = 'host-process-' .. tostring(pid),
       _pid = pid,
       pidfd = pidfd,
       group_id = (process_spec.new_session or process_spec.process_group == 'new') and pid
@@ -354,7 +355,7 @@ function Direct.new(spec)
       status = nil,
       reaped = false,
       closed = false,
-    }, ProcessClass)
+    }, ProcessClass), process_spec.label)
     IOAudit.created(process, { kind = 'process_handle' })
     if pidfd then
       IOAudit.transfer(pidfd, process, { kind = 'host_handle', role = 'pidfd' })

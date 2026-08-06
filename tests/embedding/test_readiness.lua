@@ -133,7 +133,7 @@ do
   local rt = Runtime.new()
   local owner = FibersScope.new():label('readiness-authority-owner')
   local backend = FakeHandle.new({
-    name = 'readiness-authority-backend',
+    label = 'readiness-authority-backend',
     readiness = 'manual',
     initial_writable = false,
   })
@@ -142,7 +142,7 @@ do
     stream = rt:perform(
       Stream.open_op(
         backend,
-        { scope = owner, read = true, write = true, name = 'readiness-authority-stream' }
+        { scope = owner, read = true, write = true, label = 'readiness-authority-stream' }
       )
     )
     read_val, read_err = rt:perform(stream:reader():read_some_op(1))
@@ -188,11 +188,11 @@ do
   local rt = Runtime.new()
   local owner = FibersScope.new():label('stale-readiness-owner')
   local backend =
-    FakeHandle.new({ name = 'stale-readiness-backend', readiness = 'manual', initial_writable = false })
+    FakeHandle.new({ label = 'stale-readiness-backend', readiness = 'manual', initial_writable = false })
   local stream, got, err, snap
   rt:spawn_raw(function()
     stream = rt:perform(
-      Stream.open_op(backend, { scope = owner, read = true, write = true, name = 'stale-readiness-stream' })
+      Stream.open_op(backend, { scope = owner, read = true, write = true, label = 'stale-readiness-stream' })
     )
     got, err = rt:perform(stream:reader():read_some_op(1))
   end):label('root')
@@ -219,7 +219,7 @@ do
   local rt = Runtime.new()
   local owner = FibersScope.new():label('readiness-write-owner')
   local backend = FakeHandle.new({
-    name = 'readiness-write-backend',
+    label = 'readiness-write-backend',
     readiness = 'manual',
     initial_writable = false,
     write_blocked = true,
@@ -227,7 +227,7 @@ do
   local stream, flushed
   rt:spawn_raw(function()
     stream = rt:perform(
-      Stream.open_op(backend, { scope = owner, read = true, write = true, name = 'readiness-write-stream' })
+      Stream.open_op(backend, { scope = owner, read = true, write = true, label = 'readiness-write-stream' })
     )
     rt:perform(stream:writer():write_op('abc'))
     flushed = rt:perform(stream:writer():flush_op())
@@ -258,7 +258,7 @@ do
   local rt = Runtime.new()
   local owner = FibersScope.new():label('bounded-ready-reactor-owner')
   local backend = FakeHandle.new({
-    name = 'bounded-ready-reactor-backend',
+    label = 'bounded-ready-reactor-backend',
     readiness = 'manual',
     initial_writable = false,
     write_blocked = true,
@@ -268,7 +268,7 @@ do
     stream = rt:perform(
       Stream.open_op(
         backend,
-        { scope = owner, read = true, write = true, name = 'bounded-ready-reactor-stream' }
+        { scope = owner, read = true, write = true, label = 'bounded-ready-reactor-stream' }
       )
     )
     rt:perform(stream:writer():write_op('xy'))

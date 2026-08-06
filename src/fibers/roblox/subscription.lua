@@ -4,11 +4,13 @@ local External = require('fibers.embed.external')
 local Runtime = require('fibers.runtime')
 local Op = require('fibers.op')
 local Lifetime = require('fibers.lifetime')
+local Label = require('fibers.internal.label')
 local Closure = require('fibers.closure')
 local perform = require('fibers.perform')
 local Direct = require('fibers.internal.direct')
 
 local Subscription = {}
+local next_subscription = 0
 Subscription.__index = Subscription
 
 local unpack_ = table.unpack or unpack
@@ -136,11 +138,11 @@ function Subscription.new(signal, opts)
     error('Roblox subscription mode must be events, latest or pulse', 2)
   end
 
-  local name = opts.name or ('roblox-' .. mode)
+  next_subscription = next_subscription + 1
+  local id = 'roblox-subscription-' .. tostring(next_subscription)
   local resource, feed = External.events(runtime)
-  resource:label(name)
-  local self = setmetatable({
-    name = name,
+  local self = Label.attach(setmetatable({
+    _fibers_id = id,
     mode = mode,
     runtime = runtime,
     scope = scope,
@@ -152,13 +154,14 @@ function Subscription.new(signal, opts)
     _latest = nil,
     _delivery_pending = false,
     _pulse_version = 0,
-  }, Subscription)
+  }, Subscription), opts.label)
+  Label.child(resource, self, 'events')
 
   Lifetime.define(self, {
-    label = name,
+    label = Label.get(self),
     role = 'roblox_subscription',
     closure = closure_protocol(self),
-    meta = { mode = mode, name = name },
+    meta = { mode = mode },
   })
   scope:perform(scope:admit_op(self))
 

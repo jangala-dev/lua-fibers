@@ -29,7 +29,6 @@ function RefCount.new()
   local id = 'ref-count-' .. tostring(next_id)
   local group = Label.attach(setmetatable({
     _fibers_id = id,
-    name = id,
     _count = Counter.new(1),
     _next_id = 0,
   }, RefCount))

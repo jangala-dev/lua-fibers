@@ -18,6 +18,7 @@ local StateMachine = require('fibers.resource.machine')
 local Effect = require('fibers.effect')
 local Protected = require('fibers.protected')
 local Direct = require('fibers.internal.direct')
+local Label = require('fibers.internal.label')
 
 local Closure = {}
 local unpack_ = table.unpack or unpack
@@ -69,19 +70,19 @@ local function recovery_state(failure)
   return type(accessor) == 'function' and accessor() or nil
 end
 
-local function item_name(item)
-  return type(item) == 'table' and (item.name or item._fibers_id) or item
+local function item_label(item)
+  return type(item) == 'table' and Label.describe(item, item._fibers_id) or item
 end
 
 local function closure_failure_message(token, failures, mark_error)
   local message = 'closure failed'
-  local name = item_name(token.root)
+  local name = item_label(token.root)
   if name ~= nil then
     message = message .. ' for ' .. tostring(name)
   end
   local first = failures and failures[1]
   if first then
-    message = message .. ' during ' .. tostring(first.phase) .. ' of ' .. tostring(item_name(first.item))
+    message = message .. ' during ' .. tostring(first.phase) .. ' of ' .. tostring(item_label(first.item))
     message = message .. ': ' .. tostring(first.error)
     if #failures > 1 then
       message = message .. ' (and ' .. tostring(#failures - 1) .. ' further failure(s))'
@@ -548,7 +549,7 @@ local function containment_description(blocker)
     local shown = {}
     for i = 1, math.min(#descendants, 3) do
       local entry = descendants[i]
-      shown[#shown + 1] = tostring(entry.path or item_name(entry.item))
+      shown[#shown + 1] = tostring(entry.path or item_label(entry.item))
         .. ' [' .. tostring(entry.closure_phase or entry.custody_phase or 'unknown') .. ']'
     end
     message = message .. ': ' .. table.concat(shown, ', ')

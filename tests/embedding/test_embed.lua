@@ -3,7 +3,8 @@ package.path = table.concat({
 }, ';')
 
 local External = require('fibers.embed.external')
-local Embed = require('fibers.embed')
+local Application = require('fibers.embed.application')
+local Queue = require('fibers.embed.queue')
 local Sleep = require('fibers.sleep')
 local fibers = require('fibers')
 local Runtime = require('fibers.runtime')
@@ -23,9 +24,9 @@ end
 -- The generic boundary drives time without loading Roblox or a native I/O backend.
 do
   local now = 10
-  local host = Embed.Queue.new({ now = function() return now end })
+  local host = Queue.new({ now = function() return now end })
   local woke = false
-  local app = Embed.Application.new(function()
+  local app = Application.new(function()
     fibers.perform(Sleep.sleep_op(2))
     woke = true
   end, { host = host, owns_host = false, max_seconds_per_turn = 100 })
@@ -46,10 +47,10 @@ end
 
 -- External callbacks are queued and delivered only at the next driver boundary.
 do
-  local host = Embed.Queue.new({ now = function() return 0 end })
+  local host = Queue.new({ now = function() return 0 end })
   local received
   local feed
-  local app = Embed.Application.new(function()
+  local app = Application.new(function()
     local runtime = fibers.current_runtime()
     local events
     events, feed = External.events(runtime)
@@ -70,25 +71,5 @@ do
   host:close()
 end
 
-
-do
-  local host = require('fibers.embed.manual').new()
-  local ok, err = pcall(require('fibers.embed.application').new, function() end, {
-    host = host,
-    owns_host = false,
-    runtime = {},
-  })
-  assert(not ok and tostring(err):match('runtime_options'))
-  local app = require('fibers.embed.application').new(function()
-    require('fibers.perform')(require('fibers.op').never())
-  end, { host = host, owns_host = false })
-  ok, err = pcall(app.advance, app, { max_steps_per_turn = 1 })
-  assert(not ok and tostring(err):match('short per%-call name'))
-  local rt = Runtime.new({ host = host })
-  ok, err = pcall(External.drive, rt, { host = host, max_driver_iterations = 1 })
-  assert(not ok and tostring(err):match('does not accept'))
-  app:close()
-  host:close()
-end
 
 return true

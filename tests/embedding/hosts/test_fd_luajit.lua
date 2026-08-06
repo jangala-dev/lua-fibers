@@ -27,7 +27,7 @@ if not Fd.is_supported() then
   local _, reason = Fd.is_supported()
   return Common.skip('tests/hosts/test_fd_luajit.lua', reason or 'fd ffi backend not available')
 end
-local r, w = Fd.pipe({ host = host, name = 'fd-pipe' })
+local r, w = Fd.pipe({ host = host, label = 'fd-pipe' })
 local ok, err = pcall(function()
   Common.assert_truthy(type(r.read) == 'function', 'read handle should expose read')
   Common.assert_truthy(type(w.write) == 'function', 'write handle should expose write')

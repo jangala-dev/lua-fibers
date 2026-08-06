@@ -15,7 +15,7 @@ package.path = table.concat({
 local fibers = require('fibers')
 local Stream = require('fibers.stream')
 
-local plugin_end, host_end = Stream.memory_pair({ name = 'plugin-control-stream', capacity = 64 })
+local plugin_end, host_end = Stream.memory_pair({ label = 'plugin-control-stream', capacity = 64 })
 local line, eof, eof_err
 
 fibers.run(function(scope)

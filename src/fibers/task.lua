@@ -78,13 +78,7 @@ local function pack(...)
 end
 
 local Task = {}
-Task.__index = function(self, key)
-  local method = Task[key]
-  if method ~= nil then return method end
-  local life = rawget(self, '_lifetime')
-  if key == 'name' then return life and life.name end
-  return nil
-end
+Task.__index = Task
 
 function Task._new(fn, parent_scope, opts)
   if type(fn) ~= 'function' then error('Task creation expects a function', 2) end
@@ -129,7 +123,7 @@ function Task:label(...)
 end
 
 function Task:diagnostic_label()
-  return Label.describe(self._lifetime, self.name)
+  return Label.describe(self._lifetime, self._lifetime._fibers_id or 'task')
 end
 
 

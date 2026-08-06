@@ -30,7 +30,7 @@ local result = Roblox.try_run(function(root)
   root:spawn(runWorldSimulation):label('world-simulation')
   fibers.perform(Op.never())
 end, {
-  name = 'game-server',
+  label = 'game-server',
 })
 
 if not result.ok and result.reason ~= 'cancelled' then

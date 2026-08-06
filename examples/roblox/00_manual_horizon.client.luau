@@ -20,7 +20,7 @@ local continueButton = script.Parent:WaitForChild('ContinueButton')
 
 local app = Roblox.prepare(function()
   local pressed = Roblox.events(continueButton.Activated, {
-    name = 'observatory-continue',
+    label = 'observatory-continue',
   })
 
   local outcome = fibers.perform(Op.named_choice({
@@ -30,7 +30,7 @@ local app = Roblox.prepare(function()
 
   print('Observatory prompt exited through', outcome)
 end, {
-  name = 'manual-heartbeat-client',
+  label = 'manual-heartbeat-client',
   max_steps_per_turn = 128,
   max_work_per_step = 512,
 })

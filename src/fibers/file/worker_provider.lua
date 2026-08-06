@@ -147,7 +147,7 @@ function Provider:open(path, mode, opts)
     opts.exclusive and '1' or '0'
   )
   local command = Process.command({ argv = argv, stdin = 'pipe', stdout = 'pipe', stderr = 'pipe' })
-  local proc, err = command:start({ name = opts.name or ('file-worker:' .. path) })
+  local proc, err = command:start({ label = opts.label or ('file-worker:' .. path) })
   if not proc then
     return nil, IOError.normalise(err, { domain = 'file', action = 'open', path = path })
   end
@@ -260,7 +260,7 @@ function Provider:_path(action, args, opts)
   end
   local argv = WorkerCommand.argv(opts, 'path', action, unpack_(args))
   local command = Process.command({ argv = argv, stdin = 'null', stdout = 'pipe', stderr = 'pipe' })
-  local proc, err = command:start({ name = 'file-worker:' .. action:lower() })
+  local proc, err = command:start({ label = 'file-worker:' .. action:lower() })
   if not proc then
     return nil, IOError.normalise(err, { domain = 'file', action = action:lower() })
   end

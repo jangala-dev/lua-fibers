@@ -123,7 +123,7 @@ fibers.run(function(source)
   local worker = FibersScope.new( {
     runtime = source.runtime,
   }):label('documented-grant-worker')
-  local resource = { name = 'documented-resource' }
+  local resource = { label = 'documented-resource' }
   FibersLifetime.inert(resource, { rights = { read = true } })
 
   fibers.perform(source:admit_op(resource))

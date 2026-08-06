@@ -30,7 +30,7 @@ local function named(x)
   if type(x) ~= 'table' then
     return tostring(x)
   end
-  return x.name or x._fibers_id or tostring(x)
+  return type(x.label) == 'function' and (x:label() or x._fibers_id) or x._fibers_id or tostring(x)
 end
 
 local function append_log(log, line)
@@ -75,8 +75,8 @@ rt:spawn_raw(function()
   local rows = rt:perform(Op.together({
     request:offer_op(session, supervisor),
     supervisor:accept_op(),
-    registry:write_op({ custodian = 'supervisor', task = session.name }),
-    append_log_op(audit, 'accepted ' .. session.name .. ' from request into supervisor'),
+    registry:write_op({ custodian = 'supervisor', task = named(session) }),
+    append_log_op(audit, 'accepted ' .. named(session) .. ' from request into supervisor'),
   }))
 
   result.accepted = rows[2][1]
@@ -120,9 +120,9 @@ print(
   'custody offer accepted:    '
     .. named(result.accepted.item)
     .. ' from '
-    .. named(result.accepted.from)
+    .. named(result.accepted.from_scope)
     .. ' to '
-    .. named(result.accepted.to)
+    .. named(result.accepted.to_scope)
 )
 print('request has custody after?          ' .. yn(result.request_has_custody_after))
 print('supervisor has custody after?       ' .. yn(result.supervisor_has_custody_after))

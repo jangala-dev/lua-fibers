@@ -108,26 +108,25 @@ function Lifetime.new(opts)
   if type(opts) ~= 'table' then
     error('Lifetime.new expects an options table or nil', 2)
   end
-  local node_name = 'lifetime'
+  local node_kind = 'lifetime'
   local node = setmetatable({
     _fibers_lifetime = true,
     _construction_parent = opts.parent and node_for(opts.parent, 3) or nil,
     _construction_children = {},
     _admitted = false,
-    name = node_name,
     value = opts.value,
     standalone_boundary = opts.standalone_boundary == true,
     body = opts.body,
     has_body = opts.body ~= nil,
-    closure = normalise_closure(opts.closure, node_name .. ' closure'),
+    closure = normalise_closure(opts.closure, node_kind .. ' closure'),
     role = opts.role,
     rights = opts.rights,
     meta = opts.meta,
     cancellation = opts.cancellation
-      or StateMachine.new({ requested = false, cancelled = false }):label(node_name .. '-cancellation'),
-    interrupt = opts.interrupt or Runtime._new_interrupt(node_name .. '-interrupt'),
-    body_result = opts.body_result or Cell.new(pending()):label(node_name .. '-body-result'),
-    outcome = opts.outcome or Cell.new(pending()):label(node_name .. '-outcome'),
+      or StateMachine.new({ requested = false, cancelled = false }):label(node_kind .. '-cancellation'),
+    interrupt = opts.interrupt or Runtime._new_interrupt(node_kind .. '-interrupt'),
+    body_result = opts.body_result or Cell.new(pending()):label(node_kind .. '-body-result'),
+    outcome = opts.outcome or Cell.new(pending()):label(node_kind .. '-outcome'),
     closure_state = opts.closure_state or initial_closure_state(),
     offers = opts.offers,
   }, Node)
@@ -170,7 +169,7 @@ function Node:label(...)
 end
 
 function Node:diagnostic_label()
-  return Label.describe(self, self.name)
+  return Label.describe(self, self._fibers_id or 'lifetime')
 end
 
 function Lifetime.is(value)
@@ -312,7 +311,7 @@ function Node:_bind_runtime_committed(runtime)
     error('Lifetime already belongs to another Runtime', 2)
   end
   self.runtime = runtime
-  runtime:_lifetime_store():attach_boundary(self, self.name)
+  runtime:_lifetime_store():attach_boundary(self)
   return self
 end
 
@@ -478,7 +477,7 @@ function Node:inspect_op()
         return outcome:map(function(boundary)
           return {
             lifetime = self,
-            name = self.name,
+            label = Label.describe(self, self._fibers_id or 'lifetime'),
             phase = state.closure_phase,
             custody_phase = state.custody_phase,
             custodian = state.custodian,

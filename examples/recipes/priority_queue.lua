@@ -1,7 +1,7 @@
 local Op = require('fibers.op')
 local Index = require('fibers.resource.index')
 local Counter = require('fibers.resource.counter')
-local perform = require('fibers.perform')
+local fibers = require('fibers')
 
 local PriorityQueue = {}
 PriorityQueue.__index = PriorityQueue
@@ -61,11 +61,11 @@ function PriorityQueue:get_op()
 end
 
 function PriorityQueue:put(priority, value)
-  return perform(self:put_op(priority, value))
+  return fibers.perform(self:put_op(priority, value))
 end
 
 function PriorityQueue:get()
-  return perform(self:get_op())
+  return fibers.perform(self:get_op())
 end
 
 return PriorityQueue

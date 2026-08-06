@@ -63,7 +63,7 @@ function socket:written()
 end
 
 local handle = HostHandle.new({
-  name = 'example-socket-handle',
+  label = 'example-socket-handle',
   key = socket.key,
   host = host,
   read = function(_handle, max)
@@ -83,7 +83,7 @@ local stream, got, flushed
 
 rt:spawn_raw(function()
   stream = rt:perform(
-    Stream.open_op(handle, { scope = scope, read = true, write = true, name = 'example-socket-stream' })
+    Stream.open_op(handle, { scope = scope, read = true, write = true, label = 'example-socket-stream' })
   )
   got = rt:perform(stream:reader():read_exactly_op(4))
   rt:perform(stream:writer():write_op('pong'))

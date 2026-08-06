@@ -47,7 +47,6 @@ function M.identity(resource, kind)
   local id = (ids[prefix] or 0) + 1
   ids[prefix] = id
   resource._fibers_id = prefix .. '-' .. tostring(id)
-  resource.name = resource._fibers_id
   resource._fibers_kind = kind
   return Label.attach(resource)
 end
@@ -55,7 +54,7 @@ end
 function M.location(owner, suffix, opts)
   opts = opts or {}
   opts.owner = opts.owner or owner
-  opts.name = opts.name or ((owner and owner.name or 'resource') .. ':' .. tostring(suffix or 'state'))
+  opts.name = opts.name or (Label.describe(owner, owner and owner._fibers_id or 'resource') .. ':' .. tostring(suffix or 'state'))
   return Journal.new_location(opts)
 end
 

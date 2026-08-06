@@ -119,7 +119,6 @@ do
   local entered = false
   local closure = {
     name = 'custom-boundary',
-    permit_unstructured = false,
     permit_outward_move = true,
     permit_admission = true,
     on_body_result = function(_self, parent, _state, ok)

@@ -58,7 +58,7 @@ end
 -- Consumer shutdown discards retained queued bytes and gives waiting flush a fate.
 do
   local rt = FibersRuntime.new()
-  local a, b = Stream.memory_pair({ name = 'settle-peer-close', capacity = 10 })
+  local a, b = Stream.memory_pair({ label = 'settle-peer-close', capacity = 10 })
   local flushed, flush_err
   rt:spawn_raw(function()
     rt:perform(a:writer():write_op('abc'))
@@ -89,7 +89,7 @@ end
 -- if the peer closes afterwards.  Flush is about retained bytes, not future
 -- writability.
 do
-  local a, b = Stream.memory_pair({ name = 'flush-after-delivery', capacity = 10 })
+  local a, b = Stream.memory_pair({ label = 'flush-after-delivery', capacity = 10 })
   local flushed, flush_err, later_n, later_err
   local st = fibers.try_run(function()
     fibers.perform(a:writer():write_op('abc'))
@@ -107,7 +107,7 @@ end
 
 -- Graceful writer shutdown still drains queued bytes to EOF; it does not discard data.
 do
-  local a, b = Stream.memory_pair({ name = 'settle-graceful-eof', capacity = 10 })
+  local a, b = Stream.memory_pair({ label = 'settle-graceful-eof', capacity = 10 })
   local one, two, err
   local st = fibers.try_run(function()
     fibers.perform(a:writer():write_op('abc'))
@@ -136,7 +136,7 @@ do
     stream = rt:perform(
       Stream.open_op(
         backend,
-        { scope = owner, read = true, write = true, name = 'settle-backend-stream', write_capacity = 3 }
+        { scope = owner, read = true, write = true, label = 'settle-backend-stream', write_capacity = 3 }
       )
     )
     rt:perform(stream:writer():write_op('abc'))
@@ -172,7 +172,7 @@ end
 do
   local rt = FibersRuntime.new()
   local owner = FibersScope.new():label('settle-protocol-owner')
-  local backend = FakeHandle.new({ name = 'settle-protocol-backend' })
+  local backend = FakeHandle.new({ label = 'settle-protocol-backend' })
   function backend:write(bytes)
     return #bytes + 1
   end
@@ -181,7 +181,7 @@ do
     stream = rt:perform(
       Stream.open_op(
         backend,
-        { scope = owner, read = true, write = true, name = 'settle-protocol-stream', write_capacity = 3 }
+        { scope = owner, read = true, write = true, label = 'settle-protocol-stream', write_capacity = 3 }
       )
     )
     rt:perform(stream:writer():write_op('abc'))

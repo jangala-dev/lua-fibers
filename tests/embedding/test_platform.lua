@@ -22,10 +22,10 @@ local function provider(name, family, methods, capabilities)
   return out
 end
 
-local driver = Manual.new({ name = 'driver', family = 'numeric-fd', now = 12 })
+local driver = Manual.new({ label = 'driver', family = 'numeric-fd', now = 12 })
 local close_driver = driver.close
 function driver:close()
-  closed[#closed + 1] = self.name
+  closed[#closed + 1] = self:label() or self.kind
   return close_driver(self)
 end
 local sockets = provider('sockets', 'numeric-fd', {
@@ -46,14 +46,8 @@ local resolver = provider('resolver', 'callback', {
 }, { resolver_blocking = false })
 
 
-assert(Platform.compose == nil, 'Platform.compose should be removed')
-local legacy_ok, legacy_err = pcall(Platform.new, { driver = driver })
-assert(not legacy_ok and tostring(legacy_err):match('does not accept'), 'legacy top-level platform slots should fail')
-legacy_ok, legacy_err = pcall(Platform.new, { providers = { driver = driver } })
-assert(not legacy_ok and tostring(legacy_err):match('does not accept'), 'legacy provider aliases should fail')
-
 local platform = Platform.new({
-  name = 'mixed',
+  label = 'mixed',
   providers = {
     clock = driver,
     wait = driver,

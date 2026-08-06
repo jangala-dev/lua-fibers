@@ -17,6 +17,7 @@ local Signal = require('fibers.resource.signal')
 local UnsafeExternalMutation = require('fibers.embed.unsafe_external_mutation')
 local Lifetime = require('fibers.lifetime')
 local Protected = require('fibers.protected')
+local Label = require('fibers.internal.label')
 
 local Offer = {}
 Offer.__index = Offer
@@ -73,11 +74,11 @@ function Offer.new(spec)
   end
 
   next_id = next_id + 1
-  local name = spec.name or ('host-offer-' .. tostring(next_id))
-  local source = setmetatable({
+  local id = 'host-offer-' .. tostring(next_id)
+  local label = spec.label
+  local source = Label.attach(setmetatable({
     kind = 'host_offer_source',
-    name = name,
-    _fibers_id = 'host-offer-' .. tostring(next_id),
+    _fibers_id = id,
     domain = spec.domain or 'host',
     action = spec.action or 'offer',
     role = spec.role or 'host_offer_source',
@@ -90,13 +91,16 @@ function Offer.new(spec)
     _closed_error = spec.closed_error,
     _dispose = spec.dispose,
     _retired = spec.retired,
-    _slots = Counter.bounded(capacity):label(name .. ':slots'),
-    _queue = EventQueue.new():label(name .. ':offers'),
-    _terminal = Signal.new():label(name .. ':terminal'),
-  }, Offer)
+    _slots = Counter.bounded(capacity),
+    _queue = EventQueue.new(),
+    _terminal = Signal.new(),
+  }, Offer), label)
+  Label.child(source._slots, source, 'slots')
+  Label.child(source._queue, source, 'offers')
+  Label.child(source._terminal, source, 'terminal')
 
   Lifetime.define(source, {
-    label = name,
+    label = label,
     role = source.role,
     closure = source_closure(source),
     children = spec.children,
@@ -106,7 +110,7 @@ function Offer.new(spec)
   if not rt then error('HostOfferSource.new requires a current runtime', 2) end
   local reactor = Reactor.for_runtime(rt)
   source._entry = reactor:offer({
-    name = source.name,
+    label = Label.describe(source, source._fibers_id),
     mode = source.mode,
     source = source,
     handle = source.mode == 'poll' and nil or function() return source:_handle() end,

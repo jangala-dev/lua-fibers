@@ -39,7 +39,7 @@ function Helpers.pipe_pair(opts)
   end
 
   reader = Handle.new({
-    name = (opts.name or ('manual-pipe-' .. id)) .. ':read',
+    label = (opts.label or ('manual-pipe-' .. id)) .. ':read',
     key = opts.read_key or ('manual-pipe-' .. id .. ':read'),
     host = opts.host,
     capabilities = {
@@ -92,7 +92,7 @@ function Helpers.pipe_pair(opts)
   })
 
   writer = Handle.new({
-    name = (opts.name or ('manual-pipe-' .. id)) .. ':write',
+    label = (opts.label or ('manual-pipe-' .. id)) .. ':write',
     key = opts.write_key or ('manual-pipe-' .. id .. ':write'),
     host = opts.host,
     capabilities = {
@@ -154,7 +154,7 @@ function Helpers.duplex(read_handle, write_handle, opts)
     end
   end
   local handle = Handle.new({
-    name = opts.name,
+    label = opts.label,
     key = opts.key or {
       read = read_handle:readiness_key(),
       write = write_handle:readiness_key(),

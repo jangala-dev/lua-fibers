@@ -14,7 +14,7 @@ local Cell = require('fibers.resource.cell')
 local Scope = require('fibers.scope')
 local Stream = require('fibers.stream')
 
-local client, server = Stream.memory_pair({ name = 'negotiated-stream', capacity = 128 })
+local client, server = Stream.memory_pair({ label = 'negotiated-stream', capacity = 128 })
 local negotiator = Scope.new():label('negotiator')
 local responder = Scope.new():label('responder')
 local protocol = Cell.new('unknown'):label('protocol-state')

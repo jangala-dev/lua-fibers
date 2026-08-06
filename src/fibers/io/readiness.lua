@@ -3,6 +3,7 @@ local StateMachine = require('fibers.resource.machine')
 local External = require('fibers.embed.external')
 local Interest = External.Interest
 local ExternalFeed = External.Feed
+local Label = require('fibers.internal.label')
 
 local Readiness = {}
 Readiness.__index = function(self, key)
@@ -75,7 +76,7 @@ function Readiness:readiness_op(selected)
     return self[field]
   end
   local r, key = self, self.key
-  local transition = StateMachine.isolated_query(self.name .. ':' .. selected, function(state)
+  local transition = StateMachine.isolated_query(Label.describe(self, self._fibers_id or 'readiness') .. ':' .. selected, function(state)
     if not state[selected] then
       return StateMachine.Wait
     end

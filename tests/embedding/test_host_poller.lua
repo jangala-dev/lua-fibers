@@ -35,7 +35,7 @@ do
   local rt = Runtime.new()
   local owner = Scope.new():label('poller-generation-owner')
   local backend = FakeHandle.new({
-    name = 'poller-generation-backend',
+    label = 'poller-generation-backend',
     readiness = 'manual',
     initial_readable = false,
   })
@@ -49,7 +49,7 @@ do
   rt:spawn_raw(function()
     stream = rt:perform(Stream.open_op(backend, {
       scope = owner,
-      name = 'poller-generation-stream',
+      label = 'poller-generation-stream',
       read = true,
       write = false,
     }))

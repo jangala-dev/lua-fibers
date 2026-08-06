@@ -4,6 +4,9 @@
 -- not simulate pipes, sockets, DNS, datagrams, processes or files.
 
 local WaitSet = require('fibers.embed.wait_set')
+local Label = require('fibers.internal.label')
+
+local next_manual = 0
 
 local Manual = {}
 Manual.__index = Manual
@@ -40,9 +43,10 @@ function Manual.new(opts)
   opts = opts or {}
   local initial = opts.now
   local now_fn = type(initial) == 'function' and initial or nil
-  local host = setmetatable({
+  next_manual = next_manual + 1
+  local host = Label.attach(setmetatable({
+    _fibers_id = 'manual-host-' .. tostring(next_manual),
     kind = opts.kind or 'manual',
-    name = opts.name or opts.kind or 'manual',
     family = opts.family or opts.kind or 'manual',
     wait_domain = opts.wait_domain or opts.family or opts.kind or 'manual',
     _now = tonumber(initial) or 0,
@@ -51,7 +55,7 @@ function Manual.new(opts)
     auto_advance_time = opts.auto_advance_time ~= false,
     ready = {},
     capabilities = { time = true, readiness = true },
-  }, Manual)
+  }, Manual), opts.label)
 
   host.now = function()
     return host._now_fn and host._now_fn() or host._now

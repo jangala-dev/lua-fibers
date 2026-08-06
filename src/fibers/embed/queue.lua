@@ -4,10 +4,13 @@
 ---The queue is drained only from `Application:advance`, while the Runtime is at
 ---its external-driver boundary.
 
+local Label = require('fibers.internal.label')
+
 local Queue = {}
 Queue.__index = Queue
 
 local unpack_ = table.unpack or unpack
+local next_queue = 0
 
 local function pack(...)
   return { n = select('#', ...), ... }
@@ -20,9 +23,10 @@ end
 function Queue.new(opts)
   opts = opts or {}
   local now = opts.now or default_now
-  local self = setmetatable({
+  next_queue = next_queue + 1
+  local self = Label.attach(setmetatable({
+    _fibers_id = 'embedded-host-' .. tostring(next_queue),
     kind = opts.kind or 'embedded',
-    name = opts.name or opts.kind or 'embedded',
     family = opts.family or opts.kind or 'embedded',
     capabilities = opts.capabilities or { time = true, external = true },
     _now = now,
@@ -37,7 +41,7 @@ function Queue.new(opts)
     _closed = false,
     on_external_error = opts.on_external_error,
     on_done = opts.on_done,
-  }, Queue)
+  }, Queue), opts.label)
   self.now = function()
     return now()
   end

@@ -20,6 +20,7 @@ local File = require('fibers.file')
 local IO = require('fibers.io.facility')
 local Protected = require('fibers.protected')
 local perform = require('fibers.perform')
+local Label = require('fibers.internal.label')
 
 local Resolver = {}
 Resolver.__index = Resolver
@@ -216,9 +217,13 @@ local function initial_hosts(opts)
   return records, loaded
 end
 
+local function resolver_label(self)
+  return Label.describe(self, self._fibers_id or 'dns-resolver')
+end
+
 local function secure_random_u16(self)
   local file, open_err = File.open(self.opts.random_path or '/dev/urandom', 'rb', {
-    name = self.name .. ':entropy',
+    label = resolver_label(self) .. ':entropy',
   })
   if not file then
     return nil, open_err
@@ -305,12 +310,6 @@ end
 
 function Resolver.new(opts)
   opts = copy_table(opts)
-  if opts.require_secure_random ~= nil then
-    error('require_secure_random was removed; use allow_weak_random', 2)
-  end
-  if opts.nameserver ~= nil then
-    error('nameserver was removed; use nameservers', 2)
-  end
   local maximum_cache_entries = opts.maximum_cache_entries
   if maximum_cache_entries == nil then
     maximum_cache_entries = 1024
@@ -326,8 +325,8 @@ function Resolver.new(opts)
   opts.maximum_cache_entries = maximum_cache_entries
   next_resolver = next_resolver + 1
   local hosts, hosts_loaded = initial_hosts(opts)
-  local self = setmetatable({
-    name = opts.name or ('dns-resolver-' .. tostring(next_resolver)),
+  local self = Label.attach(setmetatable({
+    _fibers_id = 'dns-resolver-' .. tostring(next_resolver),
     opts = opts,
     host = opts.host,
     config = nil,
@@ -342,7 +341,7 @@ function Resolver.new(opts)
     config_load = StateMachine.new('idle'):label('dns:config-load'),
     random_u16 = opts.random_u16,
     secure_ids = nil,
-  }, Resolver)
+  }, Resolver), opts.label)
   if opts.nameservers or opts.resolv_conf then
     local config, err = Config.load(opts)
     self.config, self.config_error = config, err
@@ -355,7 +354,7 @@ function Resolver:_load_hosts()
   load_once(self.hosts_load, function()
     local text, err = File.read_all(self.opts.hosts_path or '/etc/hosts', {
       max = tonumber(self.opts.maximum_hosts_size) or 1024 * 1024,
-      name = self.name .. ':read-hosts',
+      label = resolver_label(self) .. ':read-hosts',
     })
     if text then
       merge_hosts(self.hosts, parse_hosts(text))
@@ -501,7 +500,7 @@ Resolver.classify_udp_packet = classify_udp_packet
 function Resolver:_udp_exchange(server, wire, id, name, qtype, timeout, opts)
   local socket, open_err = perform(Datagram.udp_op(server_local_address(server), {
     host = opts.host or self.host,
-    name = self.name .. ':udp',
+    label = resolver_label(self) .. ':udp',
     receive_capacity = opts.receive_capacity or 16,
     send_capacity = opts.send_capacity or 4,
     max_datagram_size = opts.maximum_message_size or 65535,
@@ -564,7 +563,7 @@ end
 function Resolver:_tcp_exchange(server, wire, id, name, qtype, timeout, opts)
   local dial, dial_err = perform(Dial.dial_op(server, {
     host = opts.host or self.host,
-    name = self.name .. ':tcp-dial',
+    label = resolver_label(self) .. ':tcp-dial',
     read_capacity = opts.tcp_read_capacity,
     write_capacity = opts.tcp_write_capacity,
   }))
@@ -937,7 +936,7 @@ function Resolver:_resolve_candidate(name, port, family, opts)
     families[i] = family_name
     task_entries[family_name] = scope:spawn_op(function()
       return self:resolve_type(name, qtype, opts)
-    end, { label = self.name .. ':' .. Codec.type_name(qtype) })
+    end):label(resolver_label(self) .. ':' .. Codec.type_name(qtype))
   end
   local tasks = perform(Op.named_each(task_entries))
 

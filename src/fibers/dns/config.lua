@@ -128,7 +128,7 @@ end
 local function read_file(path, opts)
   return File.read_all(path, {
     max = tonumber(opts.maximum_config_size) or 64 * 1024,
-    name = (opts.name or 'dns-config') .. ':read-resolv-conf',
+    label = (opts.label or 'dns-config') .. ':read-resolv-conf',
   })
 end
 

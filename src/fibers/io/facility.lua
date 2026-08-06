@@ -47,13 +47,13 @@ end
 -- and task start commit together.
 function IO.admit_driven_lifetime_op(scope, value, spec)
   spec = spec or {}
-  scope = IO.require_scope(scope, spec.label or 'driven Lifetime admission')
+  scope = IO.require_scope(scope, spec.operation or spec.role or 'driven Lifetime admission')
   if type(spec.run) ~= 'function' then
     error('driven Lifetime admission requires spec.run', 2)
   end
 
   Lifetime.define(value, {
-    label = assert(spec.label or spec.name, 'driven Lifetime admission requires spec.label'),
+    label = spec.label,
     role = assert(spec.role, 'driven Lifetime admission requires spec.role'),
     closure = assert(spec.closure, 'driven Lifetime admission requires spec.closure'),
     children = spec.children,
@@ -68,7 +68,7 @@ function IO.admit_driven_lifetime_op(scope, value, spec)
   end, scope, {
     lifetime = value._lifetime,
     closure = scope.closure,
-    label = spec.label or spec.name,
+    label = spec.label,
   })
   value.driver = driver
 
@@ -158,7 +158,7 @@ function IO.open_handle_stream(rt, scope, handle, opts)
     rt,
     Stream.open_op(handle, {
       scope = scope,
-      name = opts.name,
+      label = opts.label,
       read = opts.read == true,
       write = opts.write == true,
       read_capacity = opts.read_capacity or opts.capacity,

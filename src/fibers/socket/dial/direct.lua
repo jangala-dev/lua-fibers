@@ -19,6 +19,8 @@ local function finite_time(value, name, level)
   return value
 end
 
+local Label = require('fibers.internal.label')
+
 local Direct = { name = 'direct' }
 
 function Direct.normalise_options(opts)
@@ -45,7 +47,7 @@ end
 
 local function connect_completion(dial, handle, driver_scope)
   local source = HostOffer.new({
-    name = dial.name .. ':completion',
+    label = Label.describe(dial, dial._fibers_id) .. ':completion',
     domain = 'socket',
     action = 'connect_finish',
     role = 'socket_connect_completion',
@@ -105,7 +107,7 @@ function Direct.run(dial, driver_scope, opts)
   local rt = Runtime.current()
   local started_at = rt:now()
   dial.started_at = started_at
-  local host_hold = HostHold.new():label(dial.name .. ':host-hold')
+  local host_hold = HostHold.new():label(Label.describe(dial, dial._fibers_id) .. ':host-hold')
   perform(driver_scope:admit_op(host_hold))
 
   local host = opts.host or rt.host
@@ -139,7 +141,7 @@ function Direct.run(dial, driver_scope, opts)
   handle, peer = completed.handle, completed.peer
 
   local connection_opts = Connection.options(opts, {
-    name = dial.name .. ':connection',
+    label = require('fibers.internal.label').describe(dial, dial._fibers_id or 'dial') .. ':connection',
     action = 'open_connection',
     address = dial.endpoint,
     peer_address = peer,

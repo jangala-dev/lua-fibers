@@ -49,11 +49,11 @@ local function run_exchange(label, host, family)
     local left
     local right
     if family == 'inet6' then
-      left = assert(socket.udp_ipv6('::1', 0, { name = label .. ':left' }))
-      right = assert(socket.udp_ipv6('::1', 0, { name = label .. ':right' }))
+      left = assert(socket.udp_ipv6('::1', 0, { label = label .. ':left' }))
+      right = assert(socket.udp_ipv6('::1', 0, { label = label .. ':right' }))
     else
-      left = assert(socket.udp_ipv4('127.0.0.1', 0, { name = label .. ':left' }))
-      right = assert(socket.udp_ipv4('127.0.0.1', 0, { name = label .. ':right' }))
+      left = assert(socket.udp_ipv4('127.0.0.1', 0, { label = label .. ':left' }))
+      right = assert(socket.udp_ipv4('127.0.0.1', 0, { label = label .. ':right' }))
     end
 
     assert(left:send_to('', right:local_address()))

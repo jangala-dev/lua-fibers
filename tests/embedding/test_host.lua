@@ -103,7 +103,8 @@ end
 -- Host selection returns complete, indivisible families.
 do
   local manual = ManualHost.new({ now = 0 })
-  assert_eq(manual.name, 'manual')
+  assert_eq(manual.kind, 'manual')
+  assert_truthy(type(manual._fibers_id) == 'string')
   assert_eq(manual.family, 'manual')
   assert_truthy(
     manual.capabilities and manual.capabilities.readiness,
@@ -118,7 +119,8 @@ do
       return true
     end,
   })
-  assert_eq(pure.name, 'pure')
+  assert_eq(pure.kind, 'pure')
+  assert_truthy(type(pure._fibers_id) == 'string')
   assert_eq(pure.family, 'pure')
 
   local available = AutoIO.available()
@@ -128,11 +130,11 @@ do
 
   local injected = ManualHost.new({
     create_pipe = function(_self, opts)
-      return opts and opts.name
+      return opts and opts.label
     end,
   })
   assert_eq(injected.capabilities.pipe, true)
-  assert_eq(injected:create_pipe({ name = 'injected-pipe' }), 'injected-pipe')
+  assert_eq(injected:create_pipe({ label = 'injected-pipe' }), 'injected-pipe')
 end
 
 print('tests/test_host.lua: ok')

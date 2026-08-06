@@ -78,7 +78,6 @@ local function new_mailbox(capacity, accept, full)
   local id = 'mailbox-' .. tostring(next_id)
   local mailbox = Label.attach(setmetatable({
     _fibers_id = id,
-    name = id,
     capacity = capacity,
     full = full,
     _accept = accept,

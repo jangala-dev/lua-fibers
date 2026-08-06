@@ -17,11 +17,11 @@ local Runtime = require('fibers.runtime')
 local Stream = require('fibers.io.stream')
 
 local host = SimulatedHost.new({ pipes = true, auto_advance_time = false })
-local input, input_writer = assert(host:create_pipe({ name = 'example-input' }))
-local output_reader, output = assert(host:create_pipe({ name = 'example-output' }))
+local input, input_writer = assert(host:create_pipe({ label = 'example-input' }))
+local output_reader, output = assert(host:create_pipe({ label = 'example-output' }))
 local handle = Handle.new({
   host = host,
-  name = 'example-duplex',
+  label = 'example-duplex',
   key = { read = input:readiness_key(), write = output:readiness_key() },
   read = function(_, maximum) return input:read(maximum) end,
   write = function(_, bytes) return output:write(bytes) end,
@@ -47,7 +47,7 @@ local got, flushed
 runtime:spawn_raw(function()
   local stream = runtime:perform(Stream.open_op(handle, {
     scope = scope,
-    name = 'example-handle-stream',
+    label = 'example-handle-stream',
     read = true,
     write = true,
   }))

@@ -7,6 +7,7 @@
 local Runtime = require('fibers.runtime')
 local Resolver = require('fibers.socket.resolver')
 local State = require('fibers.socket.dial.named.state')
+local Label = require('fibers.internal.label')
 local IOError = require('fibers.io.error')
 local IO = require('fibers.io.facility')
 local perform = require('fibers.perform')
@@ -125,7 +126,7 @@ local function resolver_options(dial, driver_scope, opts, host)
   out.resolver = opts.resolver or out.resolver
   out.dns = opts.dns ~= nil and opts.dns or out.dns
   out.nameservers = opts.nameservers or out.nameservers
-  out.name = dial.name .. ':resolve'
+  out.label = Label.describe(dial, dial._fibers_id) .. ':resolve'
   out.family = 'unspec'
   return out
 end

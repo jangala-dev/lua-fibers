@@ -333,8 +333,8 @@ local function attempt_options(race, spec, scope)
   local out = Connection.options(opts)
   out.host = opts.host or out.host
   out.scope = scope
-  out.name = table.concat({
-    opts.name or 'dial',
+  out.label = table.concat({
+    opts.label or 'dial',
     'attempt-' .. tostring(index),
     Address.display(address),
   }, ':')
@@ -554,7 +554,7 @@ function State.new(endpoint, opts, host, started_at)
     winner = nil,
     candidates_dropped = 0,
   }
-  local name = opts.name or 'named-dial'
+  local label = opts.label or 'named-dial'
   return setmetatable({
     endpoint = endpoint,
     opts = opts,
@@ -568,8 +568,8 @@ function State.new(endpoint, opts, host, started_at)
     attempt_timeout = opts.attempt_timeout,
     destination_ordering = opts.destination_ordering,
     order_destinations = opts.order_destinations,
-    attempt_slots = Counter.bounded(opts.maximum_active_attempts):label(name .. ':attempt-slots'),
-    state = StateMachine.new(state):label(name .. ':state'),
+    attempt_slots = Counter.bounded(opts.maximum_active_attempts):label(label .. ':attempt-slots'),
+    state = StateMachine.new(state):label(label .. ':state'),
   }, State)
 end
 

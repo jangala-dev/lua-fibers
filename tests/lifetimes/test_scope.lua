@@ -83,7 +83,7 @@ repeat
   st4 = rt4:run()
 until st4.tag ~= 'found'
 assert(st4.tag == 'quiescent' or st4.tag == 'idle')
-assert(accepted.item == handed and accepted.from == from and accepted.to == to)
+assert(accepted.item == handed and accepted.from_scope == from and accepted.to_scope == to)
 assert(to_owns == true)
 
 -- matched accept rejects unrelated offers and accepts the selected one.
@@ -132,7 +132,7 @@ until st_match.tag ~= 'found'
 assert(st_match.tag == 'quiescent' or st_match.tag == 'idle')
 assert(rejected_result == 'rejected')
 assert(accepted_match.item == task_b)
-assert(accepted_match.from == match_from_b)
+assert(accepted_match.from_scope == match_from_b)
 assert(owns_a_after == true)
 assert(owns_b_after == true)
 

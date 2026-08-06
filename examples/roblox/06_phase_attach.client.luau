@@ -15,13 +15,13 @@ local dodgeButton = script.Parent:WaitForChild('DodgeButton')
 local app
 app = Roblox.attach(function()
   local dodges = Roblox.events(dodgeButton.Activated, {
-    name = 'dodge-input',
+    label = 'dodge-input',
   })
 
   dodges:next()
   print('Dodge accepted at the next bounded Heartbeat turn')
 end, {
-  name = 'phase-driven-input',
+  label = 'phase-driven-input',
   scheduling = 'phase',
   phase = RunService.Heartbeat,
   max_seconds_per_turn = 0.001,

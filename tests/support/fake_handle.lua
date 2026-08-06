@@ -51,7 +51,7 @@ function Fake.new(opts)
   serial = serial + 1
   local key = opts.key or ('fake-handle-' .. serial)
   local self = Handle.new({
-    name = opts.name or key,
+    label = opts.label or key,
     key = key,
     host = opts.host,
     readiness = type(opts.readiness) == 'table' and opts.readiness or nil,
@@ -153,7 +153,7 @@ function Fake:read(max)
   max = max or 4096
   if self.read_blocked then
     clear_manual(self, 'read')
-    return nil, HostError.would_block('handle', 'read', { handle = self.name })
+    return nil, HostError.would_block('handle', 'read', { handle = (self.label and self:label() or self._fibers_id) })
   end
   if #self.input > 0 then
     local first = self.input[1]
@@ -181,11 +181,11 @@ function Fake:read(max)
     self.eof = false
     read_ready(self)
     clear_manual(self, 'read')
-    return nil, HostError.eof('handle', 'read', { handle = self.name })
+    return nil, HostError.eof('handle', 'read', { handle = (self.label and self:label() or self._fibers_id) })
   end
   read_ready(self)
   clear_manual(self, 'read')
-  return nil, HostError.would_block('handle', 'read', { handle = self.name })
+  return nil, HostError.would_block('handle', 'read', { handle = (self.label and self:label() or self._fibers_id) })
 end
 
 function Fake:write(bytes)
@@ -194,10 +194,10 @@ function Fake:write(bytes)
   end
   if self.write_blocked then
     self:clear_writable()
-    return nil, HostError.would_block('handle', 'write', { handle = self.name })
+    return nil, HostError.would_block('handle', 'write', { handle = (self.label and self:label() or self._fibers_id) })
   end
   if self.closed then
-    return nil, HostError.closed('handle', 'write', { handle = self.name })
+    return nil, HostError.closed('handle', 'write', { handle = (self.label and self:label() or self._fibers_id) })
   end
   local count = math.min(#bytes, self.write_chunk_size or #bytes)
   if count <= 0 then

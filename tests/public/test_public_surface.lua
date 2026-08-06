@@ -19,7 +19,6 @@ local FibersPureHost = require('fibers.embed.pure')
 local FibersFlow = require('fibers.resource.flow')
 local FibersFile = require('fibers.file')
 local FibersSocket = require('fibers.socket')
-local FibersDNS = require('fibers.dns')
 local FibersProcess = require('fibers.process')
 local FibersCell = require('fibers.resource.cell')
 local FibersMachine = require('fibers.resource.machine')
@@ -74,6 +73,41 @@ local function assert_functions(label, value, names)
   end
 end
 
+
+-- The v1 public module contract is an exact allow-list, not an inventory of
+-- every source module. Portable entries must load in the default test profile.
+do
+  local PublicModules = require('packages.public_modules')
+  local seen, previous = {}, nil
+  for i = 1, #PublicModules.portable do
+    local module = PublicModules.portable[i]
+    assert(not seen[module], 'duplicate public module ' .. module)
+    assert(previous == nil or previous < module, 'public module allow-list must be sorted')
+    seen[module], previous = true, module
+    assert(require(module) ~= nil, 'public module failed to load: ' .. module)
+  end
+  for i = 1, #PublicModules.optional do
+    local module = PublicModules.optional[i]
+    assert(not seen[module], 'duplicate public module ' .. module)
+    assert(previous == nil or previous < module or i == 1, 'optional public module allow-list must be sorted')
+    seen[module], previous = true, module
+  end
+
+  local deliberately_internal = {
+    'fibers.dns',
+    'fibers.embed',
+    'fibers.io',
+    'fibers.io.native_error',
+    'fibers.perform',
+    'fibers.scope.report',
+    'fibers.scope.result',
+  }
+  for i = 1, #deliberately_internal do
+    local module = deliberately_internal[i]
+    assert(not seen[module], 'internal or removed module leaked into public allow-list: ' .. module)
+  end
+end
+
 local function wait_until(cell, pred)
   return cell:wait_until_op(pred)
 end
@@ -95,8 +129,8 @@ end
 do
   local surfaces = {
     { 'fibers', fibers, {
-      'run', 'try_run', 'perform', 'spawn', 'spawn_raw', 'scope', 'try_scope',
-      'mask', 'now', 'current_runtime', 'current_scope', 'pcall', 'xpcall',
+      'run', 'try_run', 'perform', 'spawn', 'scope', 'try_scope',
+      'mask', 'without_suspension', 'now', 'current_runtime', 'current_scope', 'pcall', 'xpcall',
     } },
     { 'Op', Op, {
       'always', 'never', 'choice', 'named_choice', 'each', 'named_each', 'together',
@@ -129,7 +163,6 @@ do
       'udp', 'udp_op', 'udp_ipv4', 'udp_ipv4_op', 'udp_ipv6', 'udp_ipv6_op',
       'resolve', 'resolve_op', 'resolve_name', 'resolve_name_op', 'dns_resolver',
     } },
-    { 'DNS', FibersDNS, { 'new' } },
     { 'Process', FibersProcess, { 'command', 'shell', 'redirect', 'succeeded', 'describe_status' } },
     { 'AutoIO', FibersAutoIO, {
       'default', 'select', 'available',
@@ -169,11 +202,6 @@ do
     assert_functions(surfaces[i][1], surfaces[i][2], surfaces[i][3])
   end
 
-  assert_eq(FibersClosure.normalize, nil, 'Closure.normalize removed')
-  assert_eq(FibersScope.is_scope, nil, 'Scope.is_scope removed')
-  assert_eq(FibersSocket.Query.family_ready_op, nil, 'Query.family_ready_op removed')
-  assert_eq(FibersSocket.Query.family_state_op, nil, 'Query.family_state_op removed')
-  assert_eq(FibersSocket.Query.family_ready, nil, 'Query.family_ready removed')
 
   assert_eq(FibersRoblox.Host, FibersRobloxHost, 'Roblox.Host')
   assert_eq(FibersRoblox.Subscription, FibersRobloxSubscription, 'Roblox.Subscription')

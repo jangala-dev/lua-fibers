@@ -10,6 +10,7 @@ local IO = require('fibers.io.facility')
 local Protected = require('fibers.protected')
 local Direct = require('fibers.internal.direct')
 local Regular = require('fibers.file.regular')
+local Label = require('fibers.internal.label')
 
 local File = {}
 local next_pipe = 0
@@ -22,12 +23,12 @@ local function acquire_handles(rt, opts)
   local host = opts.host or rt.host
   if not host or type(host.create_pipe) ~= 'function' then
     return nil, nil, IOError.unsupported('host', 'pipe', {
-      host = host and host.name or nil,
+      host = host and Label.describe(host, host.kind or host.family) or nil,
     })
   end
 
   local read_handle, write_handle, err, detail = host:create_pipe({
-    name = opts.name,
+    label = opts.label,
     nonblocking = true,
   })
   if not read_handle or not write_handle then
@@ -50,7 +51,7 @@ end
 
 local function open_endpoint(rt, scope, handle, mode, opts)
   return IO.open_handle_stream(rt, scope, handle, {
-    name = opts.name .. ':' .. mode,
+    label = opts.label and (opts.label .. ':' .. mode) or nil,
     read = mode == 'read',
     write = mode == 'write',
     capacity = opts.capacity,
@@ -129,14 +130,15 @@ end
 function File.pipe_op(opts)
   opts = opts or {}
   next_pipe = next_pipe + 1
-  local name = opts.name or ('pipe-' .. tostring(next_pipe))
+  local label = opts.label
   local scope = IO.current_scope(opts, 'file.pipe_op')
   local start = {
     scope = scope,
-    host_hold = HostHold.new():label(name .. ':host-hold'),
+    host_hold = HostHold.new(),
     read_stream = nil,
     write_stream = nil,
   }
+  if label ~= nil then start.host_hold:label(label .. ':host-hold') end
 
   return scope:admit_op(start.host_hold)
     :wrap(function()
@@ -146,7 +148,7 @@ function File.pipe_op(opts)
       end
       return start_pipe(rt, start, {
         host = opts.host,
-        name = name,
+        label = label,
         capacity = opts.capacity,
         read_capacity = opts.read_capacity,
         write_capacity = opts.write_capacity,

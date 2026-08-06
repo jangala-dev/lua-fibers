@@ -19,17 +19,15 @@ package.loaded['fibers.diagnostics.search'] = saved_search
 package.loaded['fibers.diagnostics.io'] = saved_io_diagnostics
 package.loaded['fibers.io.auto'] = saved_auto
 
-local saved_io_root = package.loaded['fibers.io']
 local saved_io_diagnostics_after_runtime = package.loaded['fibers.diagnostics.io']
-package.loaded['fibers.io'] = nil
 package.loaded['fibers.diagnostics.io'] = nil
-local IO = require('fibers.io')
-assert(IO.Handle == require('fibers.io.handle'))
-assert(IO.Error == require('fibers.io.error'))
-assert(IO.Platform == require('fibers.io.platform'))
-assert(IO.default == nil and IO.select == nil, 'fibers.io must not probe or select a backend')
-assert(package.loaded['fibers.diagnostics.io'] == nil, 'fibers.io must not eagerly load optional diagnostics')
-package.loaded['fibers.io'] = saved_io_root or IO
+local Handle = require('fibers.io.handle')
+local IOErrorModule = require('fibers.io.error')
+local Platform = require('fibers.io.platform')
+assert(type(Handle.new) == 'function')
+assert(type(IOErrorModule.protocol) == 'function')
+assert(type(Platform.new) == 'function')
+assert(package.loaded['fibers.diagnostics.io'] == nil, 'explicit I/O modules must not eagerly load optional diagnostics')
 package.loaded['fibers.diagnostics.io'] = saved_io_diagnostics_after_runtime
 
 local saved_stream = package.loaded['fibers.stream']
@@ -48,16 +46,13 @@ package.loaded['fibers.io.stream'] = saved_io_stream
 package.loaded['fibers.io.reactor'] = saved_reactor
 
 local saved_roblox = package.loaded['fibers.roblox']
-local saved_embed = package.loaded['fibers.embed']
 package.loaded['fibers.roblox'] = nil
-package.loaded['fibers.embed'] = nil
-local Embed = require('fibers.embed')
-assert(Embed.Application == require('fibers.embed.application'))
-assert(Embed.Queue == require('fibers.embed.queue'))
-assert(type(Embed.prepare) == 'function' and type(Embed.new_host) == 'function')
+local Application = require('fibers.embed.application')
+local Queue = require('fibers.embed.queue')
+assert(type(Application.new) == 'function')
+assert(type(Queue.new) == 'function')
 assert(package.loaded['fibers.roblox'] == nil, 'generic embedding must not load Roblox')
 package.loaded['fibers.roblox'] = saved_roblox
-package.loaded['fibers.embed'] = saved_embed or Embed
 
 local IOError = require('fibers.io.error')
 local sample_error = IOError.protocol('test', 'structure', 'sample')

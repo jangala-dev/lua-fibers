@@ -65,7 +65,7 @@ end
 
 -- Basic memory stream: write commits bytes to the peer's read side.
 do
-  local a, b = Stream.memory_pair({ name = 'basic' })
+  local a, b = Stream.memory_pair({ label = 'basic' })
   local got
   local st = fibers.try_run(function()
     fibers.spawn(function()
@@ -79,7 +79,7 @@ end
 
 -- Losing write branches append nothing.
 do
-  local a, b = Stream.memory_pair({ name = 'losing-write' })
+  local a, b = Stream.memory_pair({ label = 'losing-write' })
   local got
   local st = fibers.try_run(function()
     got = fibers.perform(Op.choice(
@@ -96,7 +96,7 @@ end
 
 -- Losing read branches consume nothing.
 do
-  local a, b = Stream.memory_pair({ name = 'losing-read' })
+  local a, b = Stream.memory_pair({ label = 'losing-read' })
   local got, later
   local st = fibers.try_run(function()
     fibers.perform(a:writer():write_op('abc'))
@@ -115,7 +115,7 @@ end
 
 -- Competing reads of one byte select one reader only.
 do
-  local a, b = Stream.memory_pair({ name = 'competing-reads' })
+  local a, b = Stream.memory_pair({ label = 'competing-reads' })
   local r1, r2
   local rt = FibersRuntime.new()
   rt:spawn_raw(function()
@@ -135,7 +135,7 @@ end
 
 -- Exact reads do not consume partial data while waiting.
 do
-  local a, b = Stream.memory_pair({ name = 'exact' })
+  local a, b = Stream.memory_pair({ label = 'exact' })
   local got
   local rt = FibersRuntime.new()
   rt:spawn_raw(function()
@@ -158,7 +158,7 @@ end
 
 -- EOF follows queued bytes after shutdown_write.
 do
-  local a, b = Stream.memory_pair({ name = 'eof' })
+  local a, b = Stream.memory_pair({ label = 'eof' })
   local one, two, err
   local st = fibers.try_run(function()
     fibers.perform(a:writer():write_op('abc'))
@@ -174,7 +174,7 @@ end
 
 -- Closing read side makes peer writes fail with broken_pipe.
 do
-  local a, b = Stream.memory_pair({ name = 'broken-pipe' })
+  local a, b = Stream.memory_pair({ label = 'broken-pipe' })
   local n, err
   local st = fibers.try_run(function()
     fibers.perform(b:shutdown_read_op())
@@ -187,7 +187,7 @@ end
 
 -- Capacity/backpressure is transactional.
 do
-  local a, b = Stream.memory_pair({ name = 'capacity', capacity = 3 })
+  local a, b = Stream.memory_pair({ label = 'capacity', capacity = 3 })
   local second_done, read
   local rt = FibersRuntime.new()
   rt:spawn_raw(function()
@@ -210,7 +210,7 @@ end
 
 -- Transactional request/response: consume request, update state, append response.
 do
-  local a, b = Stream.memory_pair({ name = 'request-response' })
+  local a, b = Stream.memory_pair({ label = 'request-response' })
   local state = FibersCell.new(0):label('state')
   local response
   local function handle_one_op(stream)
@@ -237,7 +237,7 @@ end
 
 -- Line and exact read edge cases are transactional and precise.
 do
-  local a, b = Stream.memory_pair({ name = 'line-cases' })
+  local a, b = Stream.memory_pair({ label = 'line-cases' })
   local line, rest, tail, eof, eof_err, limited, limit_err, after_limit, exact, exact_err, partial
 
   local st = fibers.try_run(function()
@@ -257,7 +257,7 @@ do
   assert_nil(eof)
   assert_eq(eof_err, 'eof')
 
-  local c, d = Stream.memory_pair({ name = 'line-limit' })
+  local c, d = Stream.memory_pair({ label = 'line-limit' })
   st = fibers.try_run(function()
     fibers.perform(c:writer():write_op('abcdef'))
     limited, limit_err = fibers.perform(d:reader():read_line_op({ max = 3 }))
@@ -268,7 +268,7 @@ do
   assert_eq(limit_err, 'line_too_long')
   assert_eq(after_limit, 'abcdef', 'line limit failure must not consume bytes')
 
-  local e, f = Stream.memory_pair({ name = 'exact-eof' })
+  local e, f = Stream.memory_pair({ label = 'exact-eof' })
   st = fibers.try_run(function()
     fibers.perform(e:writer():write_op('ab'))
     fibers.perform(e:shutdown_write_op())
@@ -283,7 +283,7 @@ end
 
 -- Scope movement reparents complete Stream Lifetime subtrees.
 do
-  local a, _b = Stream.memory_pair({ name = 'movement' })
+  local a, _b = Stream.memory_pair({ label = 'movement' })
   local moved, left
   local st = fibers.try_run(function(root)
     fibers.scope(function(from)
@@ -300,7 +300,7 @@ end
 
 -- Chunked storage preserves order without keeping one monolithic data string.
 do
-  local a, b = Stream.memory_pair({ name = 'chunked' })
+  local a, b = Stream.memory_pair({ label = 'chunked' })
   local big_a = string.rep('a', 9000)
   local big_b = string.rep('b', 9000)
   local first, cross, rest, chunks
@@ -323,7 +323,7 @@ end
 
 -- Sequential writes within one transaction preserve byte order.
 do
-  local a, b = Stream.memory_pair({ name = 'sequential-writes' })
+  local a, b = Stream.memory_pair({ label = 'sequential-writes' })
   local got
   local st = fibers.try_run(function()
     fibers.perform(a:writer():write_op('a'):and_then(a:writer():write_op('b')))
@@ -335,7 +335,7 @@ end
 
 -- Parallel writes to a cell-state-machine flow serialise in transition order.
 do
-  local a, b = Stream.memory_pair({ name = 'parallel-write-serial' })
+  local a, b = Stream.memory_pair({ label = 'parallel-write-serial' })
   local got
   local rt = FibersRuntime.new({ quiet_deadlock = true })
   rt:spawn_raw(function()
@@ -354,7 +354,7 @@ end
 -- Long reads are observational until commit: abandoned read_line/read_all
 -- attempts leave already queued bytes in the queue.
 do
-  local a, b = Stream.memory_pair({ name = 'long-read-abandon' })
+  local a, b = Stream.memory_pair({ label = 'long-read-abandon' })
   local line_choice, all_choice, after_line, after_all
   local st = fibers.try_run(function()
     fibers.perform(a:writer():write_op('partial'))
@@ -385,7 +385,7 @@ end
 -- read_line_op can wait while the committed flow buffer grows, then consume the
 -- whole line only when the separator arrives.
 do
-  local a, b = Stream.memory_pair({ name = 'line-grows' })
+  local a, b = Stream.memory_pair({ label = 'line-grows' })
   local line
   local rt = FibersRuntime.new()
   rt:spawn_raw(function()
@@ -409,7 +409,7 @@ end
 -- read_all_op is a single-commit option: it waits for EOF and consumes only
 -- when that EOF branch commits.
 do
-  local a, b = Stream.memory_pair({ name = 'read-all' })
+  local a, b = Stream.memory_pair({ label = 'read-all' })
   local all
   local rt = FibersRuntime.new()
   rt:spawn_raw(function()
@@ -438,7 +438,7 @@ end
 -- read_all_op enforces an explicit bound unless unlimited=true is requested;
 -- exceeding the bound reports too_large without consuming bytes.
 do
-  local a, b = Stream.memory_pair({ name = 'read-all-limit' })
+  local a, b = Stream.memory_pair({ label = 'read-all-limit' })
   local out, err, after
   local st = fibers.try_run(function()
     fibers.perform(a:writer():write_op('abcdef'))
@@ -458,7 +458,7 @@ end
 
 -- Unlimited read_all_op is explicit.
 do
-  local a, b = Stream.memory_pair({ name = 'read-all-unlimited' })
+  local a, b = Stream.memory_pair({ label = 'read-all-unlimited' })
   local out
   local st = fibers.try_run(function()
     fibers.perform(a:writer():write_op('xyz'))
@@ -471,7 +471,7 @@ end
 
 -- Zero-length options and validation are explicit.
 do
-  local a, b = Stream.memory_pair({ name = 'edge-validation' })
+  local a, b = Stream.memory_pair({ label = 'edge-validation' })
   local r0, e0, w0
   local st = fibers.try_run(function()
     r0 = fibers.perform(b:reader():read_some_op(0))
@@ -532,7 +532,7 @@ end
 do
   local read_flow = Flow.new(nil):label('composed-read')
   local write_flow = Flow.new(nil):label('composed-write')
-  local composed = Stream.compose(read_flow, write_flow, { name = 'composed-stream' })
+  local composed = Stream.compose(read_flow, write_flow, { label = 'composed-stream' })
   assert(composed:reader() == read_flow:outlet())
   assert(composed:writer() == write_flow:inlet())
 end

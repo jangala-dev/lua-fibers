@@ -39,7 +39,7 @@ do
   IOAudit.reset_for_test()
   local during
   local result = fibers.try_run(function()
-    local reader, writer = file.pipe({ name = 'audited-pipe' })
+    local reader, writer = file.pipe({ label = 'audited-pipe' })
     writer:write('x')
     writer:flush()
     assert_eq(reader:read(1), 'x')
@@ -57,7 +57,7 @@ end
 do
   IOAudit.reset_for_test()
   local result = fibers.try_run(function(scope)
-    local listener = socket.listen_ipv4('127.0.0.1', 0, { name = 'audited-listener' })
+    local listener = socket.listen_ipv4('127.0.0.1', 0, { label = 'audited-listener' })
     local address = listener:local_address()
     local server = scope:spawn(function()
       local connection = assert(listener:accept())
@@ -65,7 +65,7 @@ do
       assert_truthy(connection:peer_address())
       connection:close('server complete')
     end):label('audited-server')
-    local dial = socket.dial(address, { name = 'audited-dial' })
+    local dial = socket.dial(address, { label = 'audited-dial' })
     local client = assert(dial:result())
     assert_truthy(client:peer_address())
     client:close('client complete')
@@ -83,7 +83,7 @@ do
   IOAudit.reset_for_test()
   local err = HostError.system('handle', 'close', 'injected audit close failure', 'EIO')
   local handle = Handle.new({
-    name = 'audit-close-failure',
+    label = 'audit-close-failure',
     capabilities = { close = true },
     close = function()
       return nil, err

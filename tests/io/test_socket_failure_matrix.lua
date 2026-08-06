@@ -48,7 +48,7 @@ local function pending_dial_host()
 
       local handle
       handle = Handle.new({
-        name = (opts and opts.name or 'pending-dial') .. ':gate',
+        label = (opts and opts.label or 'pending-dial') .. ':gate',
         host = self,
         capabilities = {
           read = true,
@@ -114,8 +114,8 @@ end
 do
   local host, get_pending = pending_dial_host()
   local result = fibers.try_run(function()
-    local listener = socket.listen_ipv4('127.0.0.1', 0, { name = 'pending-timeout-listener' })
-    local dial = socket.dial(listener:local_address(), { name = 'pending-timeout-dial' })
+    local listener = socket.listen_ipv4('127.0.0.1', 0, { label = 'pending-timeout-listener' })
+    local dial = socket.dial(listener:local_address(), { label = 'pending-timeout-dial' })
     local value, err = fibers.perform(Op.choice(
       dial:result_op(fibers.current_scope()),
       Sleep.sleep_op(0.01):map(function()
@@ -142,12 +142,12 @@ end
 do
   local host, get_pending = pending_dial_host()
   local result = fibers.try_run(function(scope)
-    local listener = socket.listen_ipv4('127.0.0.1', 0, { name = 'delayed-success-listener' })
+    local listener = socket.listen_ipv4('127.0.0.1', 0, { label = 'delayed-success-listener' })
     local server = scope:spawn(function()
       local connection = assert(listener:accept())
       connection:close('server accepted delayed connection')
     end):label('delayed-success-server')
-    local dial = socket.dial(listener:local_address(), { name = 'delayed-success-dial' })
+    local dial = socket.dial(listener:local_address(), { label = 'delayed-success-dial' })
     scope:spawn(function()
       Sleep.sleep(0.01)
       local handle = assert(get_pending(), 'pending handle should exist')
@@ -177,7 +177,7 @@ end
 do
   local host = SimulatedHost.new({ sockets = true })
   local result = fibers.try_run(function(scope)
-    local listener = socket.listen_ipv4('127.0.0.1', 0, { name = 'blocked-accept-listener' })
+    local listener = socket.listen_ipv4('127.0.0.1', 0, { label = 'blocked-accept-listener' })
     local accepted, accept_err
     local waiter = scope:spawn(function()
       accepted, accept_err = listener:accept()
@@ -197,8 +197,8 @@ end
 do
   local host = SimulatedHost.new({ sockets = true })
   local result = fibers.try_run(function()
-    local first = socket.listen_ipv4('127.0.0.1', 8127, { name = 'address-owner' })
-    local second, err = socket.listen_ipv4('127.0.0.1', 8127, { name = 'address-conflict' })
+    local first = socket.listen_ipv4('127.0.0.1', 8127, { label = 'address-owner' })
+    local second, err = socket.listen_ipv4('127.0.0.1', 8127, { label = 'address-conflict' })
     assert_eq(second, nil)
     assert_truthy(HostError.is(err, 'system'))
     assert_eq(err.code, 'EADDRINUSE')
@@ -214,7 +214,7 @@ end
 do
   local host = SimulatedHost.new({ sockets = true })
   local result = fibers.try_run(function(scope)
-    local listener = socket.listen_ipv4('127.0.0.1', 0, { name = 'half-close-listener' })
+    local listener = socket.listen_ipv4('127.0.0.1', 0, { label = 'half-close-listener' })
     local server = scope:spawn(function()
       local connection = assert(listener:accept())
       connection:write('tail')

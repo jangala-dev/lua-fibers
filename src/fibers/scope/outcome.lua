@@ -28,7 +28,7 @@ function Report.new(scope, primary, secondaries, fields)
       or ((primary ~= nil or #secondary > 0 or fields.reason ~= nil) and 'scope_failure' or 'scope_report'),
     scope = scope,
     scope_id = scope and scope._fibers_id,
-    scope_name = scope and Label.describe(scope._lifetime or scope, scope.name),
+    scope_label = scope and Label.describe(scope._lifetime or scope, scope._fibers_id or 'scope'),
     primary = primary,
     secondaries = secondary,
     secondary_count = #secondary,
@@ -54,7 +54,7 @@ end
 
 function Report:tostring()
   if self.message then return self.message end
-  local parts = { 'scope ', tostring(self.scope_name or self.scope_id or '?') }
+  local parts = { 'scope ', tostring(self.scope_label or self.scope_id or '?') }
   if self.primary ~= nil or #self.secondaries > 0 or self.reason ~= nil then
     parts[#parts + 1] = ' failed'
   elseif #self.child_failures > 0 then

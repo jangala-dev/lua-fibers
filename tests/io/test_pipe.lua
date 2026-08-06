@@ -35,11 +35,11 @@ do
     auto_advance_time = false,
     pipe_factory = function(h, opts)
       acquisitions = acquisitions + 1
-      return HostHandles.pipe_pair({ host = h, name = opts.name })
+      return HostHandles.pipe_pair({ host = h, label = opts.label })
     end,
   })
   fibers.run(function()
-    local result = fibers.perform(Op.always('winner'):or_else(file.pipe_op({ name = 'loser' })))
+    local result = fibers.perform(Op.always('winner'):or_else(file.pipe_op({ label = 'loser' })))
     assert_eq(result, 'winner')
   end, { host = host })
   assert_eq(acquisitions, 0)
@@ -49,7 +49,7 @@ end
 do
   local host = SimulatedHost.new({ pipes = true, auto_advance_time = false })
   fibers.run(function()
-    local reader, writer, err = fibers.perform(file.pipe_op({ name = 'roundtrip', capacity = 32 }))
+    local reader, writer, err = fibers.perform(file.pipe_op({ label = 'roundtrip', capacity = 32 }))
     assert_truthy(reader, tostring(err))
     assert_truthy(reader:is_readable())
     assert_eq(reader:is_writable(), false)
@@ -70,12 +70,12 @@ do
   local host = SimulatedHost.new({
     auto_advance_time = false,
     pipe_factory = function(h, opts)
-      read_handle, write_handle = HostHandles.pipe_pair({ host = h, name = opts.name })
+      read_handle, write_handle = HostHandles.pipe_pair({ host = h, label = opts.label })
       return read_handle, write_handle
     end,
   })
   fibers.run(function()
-    local reader, writer = fibers.perform(file.pipe_op({ name = 'settled' }))
+    local reader, writer = fibers.perform(file.pipe_op({ label = 'settled' }))
     assert_truthy(reader)
     fibers.perform(writer:write_op('x'))
   end, { host = host })
@@ -87,7 +87,7 @@ end
 do
   local reader, writer, err
   fibers.run(function()
-    reader, writer, err = fibers.perform(file.pipe_op({ name = 'unsupported' }))
+    reader, writer, err = fibers.perform(file.pipe_op({ label = 'unsupported' }))
   end, {
     host = PureHost.new({
       now = function()
@@ -108,13 +108,13 @@ do
   local host = SimulatedHost.new({
     auto_advance_time = false,
     pipe_factory = function(h, opts)
-      read_handle = HostHandles.pipe_pair({ host = h, name = opts.name })
+      read_handle = HostHandles.pipe_pair({ host = h, label = opts.label })
       return read_handle, nil, HostError.system('pipe', 'create', 'writer creation failed')
     end,
   })
   local reader, writer, err
   fibers.run(function()
-    reader, writer, err = fibers.perform(file.pipe_op({ name = 'partial' }))
+    reader, writer, err = fibers.perform(file.pipe_op({ label = 'partial' }))
   end, { host = host })
   assert_eq(reader, nil)
   assert_truthy(HostError.is(err, 'system'))
@@ -128,8 +128,8 @@ do
     auto_advance_time = false,
     pipe_factory = function(h, opts)
       bad_reader = Handle.new({
-        name = opts.name .. ':bad-reader',
-        key = opts.name .. ':bad-reader',
+        label = opts.label .. ':bad-reader',
+        key = opts.label .. ':bad-reader',
         host = h,
         capabilities = { read = false, close = true, readiness = true },
         close = function()
@@ -137,14 +137,14 @@ do
         end,
       })
       local _reader
-      _reader, writer = HostHandles.pipe_pair({ host = h, name = opts.name .. ':writer-source' })
+      _reader, writer = HostHandles.pipe_pair({ host = h, label = opts.label .. ':writer-source' })
       _reader:close('unused')
       return bad_reader, writer
     end,
   })
   local reader, writer_out, err
   fibers.run(function()
-    reader, writer_out, err = fibers.perform(file.pipe_op({ name = 'bad-stream' }))
+    reader, writer_out, err = fibers.perform(file.pipe_op({ label = 'bad-stream' }))
   end, { host = host })
   assert_eq(reader, nil)
   assert_truthy(err ~= nil)
@@ -156,7 +156,7 @@ end
 do
   local host = SimulatedHost.new({ pipes = true, auto_advance_time = false })
   fibers.run(function()
-    local reader, writer = fibers.perform(file.pipe_op({ name = 'directional-close' }))
+    local reader, writer = fibers.perform(file.pipe_op({ label = 'directional-close' }))
     assert_eq(fibers.perform(writer:write_op('retained')), 8)
     assert_eq(fibers.perform(writer:close_op('writer complete')), true)
     assert_eq(fibers.perform(reader:read_all_op({ max = 32 })), 'retained')
@@ -171,7 +171,7 @@ do
   local host = SimulatedHost.new({
     auto_advance_time = false,
     pipe_factory = function(h, opts)
-      reader_handle, writer_handle = HostHandles.pipe_pair({ host = h, name = opts.name })
+      reader_handle, writer_handle = HostHandles.pipe_pair({ host = h, label = opts.label })
       reader_handle._close = function()
         return nil, close_err
       end
@@ -180,7 +180,7 @@ do
   })
   local observed
   local result = fibers.try_run(function()
-    local reader, writer = fibers.perform(file.pipe_op({ name = 'close-error' }))
+    local reader, writer = fibers.perform(file.pipe_op({ label = 'close-error' }))
     fibers.perform(writer:close_op('done'))
     local ok, err = fibers.perform(reader:close_op('test close error'))
     assert_eq(ok, nil)
@@ -196,7 +196,7 @@ do
   if ok_linux and LinuxHost.is_supported() then
     local host = LinuxHost.new()
     local result = fibers.try_run(function()
-      local reader, writer, err = fibers.perform(file.pipe_op({ name = 'native-pipe' }))
+      local reader, writer, err = fibers.perform(file.pipe_op({ label = 'native-pipe' }))
       assert_truthy(reader, tostring(err))
       local writer_task = fibers.spawn(function()
         assert_eq(fibers.perform(writer:write_op('native')), 6)

@@ -4,7 +4,7 @@ Transactional structured concurrency for Lua and Luau.
 
 Fibers lets a program compose a complete concurrent action before any part of it commits.
 
-An Option may coordinate several participants, communicate values, change managed state, admit new tasks and move responsibility. When selected, the complete action commits as one; otherwise none of its provisional changes commit.
+An Option may coordinate several participants, communicate values, change managed state, admit new tasks and move responsibility. When selected, it commits as one complete action; otherwise none of its provisional changes commit.
 
 Every continuing consequence of the committed action belongs to a Lifetime until it closes.
 
@@ -161,39 +161,6 @@ A channel receive, state transition, timer, task admission, process result or cu
 
 A new facility does not introduce another concurrency model. It adds another kind of action to every existing form of composition.
 
-## Options and Lifetimes
-
-Two concepts organise Fibers:
-
-1. **Options** describe possible actions and the coherent worlds they may form.
-2. **Lifetimes** account for what committed worlds leave alive.
-
-An Option may describe anything from an immediate value to a complete multi-party action:
-
-```lua
-local command = fibers.perform(commands:get_op())
-```
-
-`perform` selects and commits one coherent result.
-
-It is a possible suspension point, not an instruction to suspend. If the Option can commit immediately, the fiber continues immediately.
-
-A Lifetime records continuing consequences and who remains responsible for them:
-
-```lua
-fibers.run(function(scope)
-  local task = scope:spawn(function()
-    return load_map('Moon Garden')
-  end)
-
-  return task:await()
-end)
-```
-
-Child work remains accountable to a parent boundary.
-
-Fibers applies the same principle to tasks, scopes, streams, processes and retained host resources rather than giving each a separate cleanup convention.
-
 ## The Option algebra
 
 | Expression          | Read it as                                        |
@@ -222,9 +189,7 @@ local outcome = fibers.perform(Op.choice(
 
 Source order does not express priority.
 
-Several possible actions are offered together. Each branch may be a complete transactional protocol rather than one primitive event.
-
-Losing alternatives make no committed changes.
+Each branch may be a complete transactional protocol rather than one primitive event. Losing alternatives make no committed changes.
 
 ### `and_then`: one transactional sequence
 
@@ -234,8 +199,6 @@ local admit_party = arena_places:take_op(#party.players)
 ```
 
 Capacity is consumed only if the party can also be admitted. Earlier actions remain provisional until the complete sequence succeeds.
-
-The first action does not commit independently and then require compensation if the second cannot proceed. Both belong to one possible world.
 
 When the next Option depends on provisional values, use `Op.guard`:
 
@@ -284,7 +247,11 @@ local result = fibers.perform(Op.choice(
 
 `or_else` concerns present possibility. A timer concerns the passage of time.
 
-### `each`: every requirement stands on its own
+### `each` and `together`
+
+Both operators require every lane to succeed.
+
+With `each`, every lane must be supportable without positive supply from its siblings:
 
 ```lua
 local reservations = Op.each({
@@ -293,13 +260,7 @@ local reservations = Op.each({
 })
 ```
 
-Every lane must succeed.
-
-The lanes belong to one transaction and may constrain one another through shared managed resources, but one lane cannot positively supply readiness missing from another.
-
-Use `each` when every requirement must be independently supportable.
-
-### `together`: requirements may support one another
+With `together`, compatible siblings may deliberately make one another possible:
 
 ```lua
 local handoff = Op.together({
@@ -308,22 +269,12 @@ local handoff = Op.together({
 })
 ```
 
-Every lane must succeed, but compatible siblings may make one another possible.
-
 Here the write is intended to supply the read. Both commit as one coherent result.
 
-Use `together` for:
-
-* internal hand-offs;
-* movement of capacity between lanes;
-* coordinated ownership transfer;
-* cyclic exchanges;
-* multi-party interactions.
-
-| Question                                                                | Use        |
-| ----------------------------------------------------------------------- | ---------- |
-| Must every lane be supportable without positive help from its siblings? | `each`     |
-| May compatible lanes deliberately make one another possible?            | `together` |
+| Question                                  | Use        |
+| ----------------------------------------- | ---------- |
+| Must every lane stand on its own?         | `each`     |
+| May compatible lanes support one another? | `together` |
 
 The complete practical account is in [Options](docs/guide/options.md).
 
@@ -339,13 +290,60 @@ Callbacks used by `map` and `guard` may be revisited while alternatives are cons
 
 A `wrap` callback may update ordinary application objects, log, spawn work or perform further Options. It cannot alter the transaction which has already committed.
 
-The practical rule is:
-
 > Use `map` and `guard` to describe possible results. Use `wrap` for ordinary application work after selection.
 
 Only state represented through Fibers facilities participates in rollback and commitment. Ordinary Lua tables and globals are not made transactional.
 
-## Structured means more than tasks
+## Options and Lifetimes
+
+Two concepts organise Fibers:
+
+1. **Options** describe possible actions and the coherent worlds they may form.
+2. **Lifetimes** account for what committed worlds leave alive.
+
+An Option may describe anything from an immediate value to a complete multi-party action:
+
+```lua
+local command = fibers.perform(commands:get_op())
+```
+
+`perform` is a possible suspension point, not an instruction to suspend. If the Option can commit immediately, the fiber continues immediately.
+
+A Lifetime records continuing consequences and who remains responsible for them:
+
+```lua
+fibers.run(function(scope)
+  local task = scope:spawn(function()
+    return load_map('Moon Garden')
+  end)
+
+  return task:await()
+end)
+```
+
+Child work remains accountable to a parent boundary.
+
+Lifetime operations are Options too. Task admission, responsibility transfer,
+authority, cancellation and completion may share a commit boundary with
+communication and managed state:
+
+```lua
+local accepted = requests:get_op():and_then(
+  Op.guard(function(request)
+    return scope:spawn_op(function()
+      return handle_request(request)
+    end)
+  end)
+)
+```
+
+Here the request is consumed only if the handler Task can also be admitted under
+responsibility. A similar transaction may move custody, issue a Grant or request
+cancellation as part of the complete action.
+
+Fibers applies the same principle to tasks, scopes, streams, processes and retained host resources rather than giving each a separate cleanup convention.
+
+## Accountable lifetimes
 
 The root scope follows nursery semantics:
 
@@ -353,9 +351,21 @@ The root scope follows nursery semantics:
 * remaining siblings are asked to close;
 * the boundary does not return while retained responsibility remains unresolved.
 
-Supervisor scopes can apply a different explicit child-failure policy.
+Supervisor scopes can apply another explicit child-failure policy.
 
-Fibers extends structured concurrency beyond joining child tasks.
+The public views answer different questions over one Lifetime:
+
+| View | Principal question |
+|---|---|
+| `Scope` | what may be admitted, owned, moved or closed here? |
+| `Task` | how did the body finish, and has the complete consequence resolved? |
+| `Grant` | who may perform which operation without becoming the custodian? |
+| `Closure.Failure` | what remains unresolved, and who may retry or force it? |
+
+`body_result_op()` observes the executing function. `outcome_op()` observes the
+complete Lifetime after descendants and Closure. This distinction lets a
+supervisor react promptly to failure while still deciding whether replacement
+must wait for complete retirement.
 
 ### Custody
 
@@ -365,15 +375,21 @@ Custody answers:
 
 Every live Lifetime has one custodial parent. Responsibility is unique.
 
-Retaining a Lua reference does not create custody.
+Retaining a Lua reference does not create custody. Custody may move as part of a committed action without becoming absent or ambiguous.
 
-Custody can move as part of a committed action. Responsibility may change hands without becoming absent or ambiguous.
+Movement may be coupled transactionally to the state change, message or
+acknowledgement which justifies the hand-off. Negotiated `offer_op` and
+`accept_op` let the receiver participate in the same committed transfer.
 
 ### Grants
 
 Authority is represented separately through Grants.
 
-Permission to use, cancel or inspect something does not create a second owner. Rights, transferability and authority to regrant are explicit.
+Permission to use, cancel or inspect something does not create a second owner. Rights and transferability are explicit; authority is not copied onwards through implicit sub-Grants.
+
+Grant issuance and delivery may be one transaction, and `can_op` can be composed
+with the protected action so authority cannot change between a separate check
+and use.
 
 This separates:
 
@@ -384,9 +400,11 @@ This separates:
 
 Closure accounts for a Lifetime and everything beneath it.
 
-A parent does not report successful Closure while descendants remain unresolved.
+A parent does not report successful Closure while descendants remain unresolved. Successful partial progress is retained. If Closure cannot finish, the unresolved responsibility remains explicit and may be retried or forced through one retained recovery capability.
 
-Successful partial progress is retained. If Closure cannot finish, the unresolved responsibility remains explicit and may be retried or forced.
+Admission, movement and Grant issuance are provisional managed changes. Closure
+is intentionally different: selection of which Closure begins is transactional,
+but external shutdown after commitment cannot generally be rolled back.
 
 Tasks, streams, processes and retained host resources therefore share one rule:
 
@@ -423,7 +441,7 @@ local coordinator = fibers.spawn(function()
 end)
 ```
 
-`without_suspension` asserts that the reduction completes before another fiber or the embedding host may run.
+`without_suspension` asserts that the function begins and finishes without the current fiber relinquishing execution.
 
 It permits performed Options which commit without actual suspension.
 
@@ -488,7 +506,7 @@ Fibers includes host-neutral and host-backed facilities built on the same Option
 
 Their direct methods perform the corresponding Options. The Option form exposes an action for composition; the direct form performs it immediately.
 
-Host readiness remains below the application model. I/O progress, process completion and resource ownership appear as possible actions and accountable consequences rather than unrelated callbacks and cleanup conventions.
+Host readiness remains beneath the application model. I/O progress, process completion and resource ownership appear as possible actions and accountable consequences rather than unrelated callbacks and cleanup conventions.
 
 Fibers can support:
 
@@ -549,7 +567,7 @@ Its distinction is the integration of those ideas:
 
 > Communication, managed state, participant actions, task admission and responsibility movement may share one commit boundary. Every continuing consequence enters one Lifetime system.
 
-At the execution level, Fibers uses cooperative Lua fibers and event-driven host integration. These are the means by which programs run, not a separate application model.
+At the execution level, Fibers uses cooperative Lua fibers and event-driven host integration. These are how programs run, not a separate application model.
 
 Fibers is process-local and in memory. It does not provide durable workflows, distributed transactions or CPU parallelism.
 

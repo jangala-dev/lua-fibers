@@ -5,7 +5,7 @@ local Listener = require('fibers.socket.listener')
 local Dial = require('fibers.socket.dial')
 local Datagram = require('fibers.socket.datagram')
 local Resolver = require('fibers.socket.resolver')
-local DNS = require('fibers.dns')
+local DNSResolver = require('fibers.dns.resolver')
 local IOError = require('fibers.io.error')
 local perform = require('fibers.perform')
 local Direct = require('fibers.internal.direct')
@@ -16,7 +16,7 @@ local Socket = {
   Query = Resolver.Query,
   DatagramSocket = Datagram.DatagramSocket,
   Error = IOError,
-  DNSResolver = DNS.Resolver,
+  DNSResolver = DNSResolver,
 
   ipv4_address = Address.ipv4,
   ipv6_address = Address.ipv6,
@@ -31,7 +31,7 @@ local Socket = {
 }
 
 function Socket.dns_resolver(opts)
-  return DNS.new(opts)
+  return DNSResolver.new(opts)
 end
 
 

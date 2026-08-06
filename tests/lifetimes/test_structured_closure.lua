@@ -111,24 +111,6 @@ do
   )
 end
 
--- The high-level raw spawn escape is denied by default but can be enabled by Closure.
-do
-  local denied, allowed = false, false
-  fibers.run(function()
-    local ok, err = pcall(function()
-      fibers.spawn_raw(function() end)
-    end)
-    denied = not ok and tostring(err):match('prohibited') ~= nil
-  end)
-  fibers.run(function()
-    fibers.spawn_raw(function()
-      allowed = true
-    end)
-  end, { closure = FibersClosure.nursery({ allow_unstructured = true }) })
-  assert_truthy(denied, 'nursery should reject high-level unstructured spawn')
-  assert_truthy(allowed, 'Closure should be able to permit unstructured spawn explicitly')
-end
-
 -- Cancellation of a child scope propagates through its Closure propagation to grandchildren.
 do
   local child, grandchild
@@ -162,7 +144,7 @@ do
   fibers.run(function(root)
     local h = { name = 'strict-move' }
     Lifetime.inert(h)
-    fibers.scope({ closure = FibersClosure.nursery({ allow_outward_move = false }) }, function(inner)
+    fibers.scope({ closure = FibersClosure.nursery({ permit_outward_move = false }) }, function(inner)
       fibers.perform(inner:admit_op(h))
       local ok, err = pcall(function() fibers.perform(inner:move_op(h, root)) end)
       denied = not ok and tostring(err):match('denied') ~= nil

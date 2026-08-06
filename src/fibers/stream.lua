@@ -10,6 +10,7 @@ local Lifetime = require('fibers.lifetime')
 local Closure = require('fibers.closure')
 local Runtime = require('fibers.runtime')
 local Direct = require('fibers.internal.direct')
+local Label = require('fibers.internal.label')
 
 local Stream, Duplex = {}, {}
 Duplex.__index = Duplex
@@ -27,9 +28,9 @@ end
 local function compose(opts)
   opts = opts or {}
   next_id = next_id + 1
-  local name = opts.name or ('stream-' .. tostring(next_id))
-  local stream = setmetatable({
-    name = name,
+  local id = 'stream-' .. tostring(next_id)
+  local stream = Label.attach(setmetatable({
+    _fibers_id = id,
     kind = opts.kind or 'stream',
     mode = opts.mode or 'composed',
     _reader = opts.reader,
@@ -40,11 +41,12 @@ local function compose(opts)
     write_registration = nil,
     _reactor_live = 0,
     _handle_closed = false,
-  }, Duplex)
+  }, Duplex), opts.label)
   local children = {}
   if opts.reader then children[#children + 1] = opts.reader end
   if opts.writer then children[#children + 1] = opts.writer end
   Lifetime.define(stream, {
+    label = opts.label,
     role = opts.kind or 'stream',
     closure = opts.closure or Closure.protocol({
       name = 'stream',
@@ -68,7 +70,7 @@ function Stream.compose(read_flow, write_flow, opts)
     error('Stream.compose requires a readable or writable Flow', 2)
   end
   return compose({
-    name = opts.name,
+    label = opts.label,
     mode = opts.mode,
     kind = opts.kind,
     reader = read_flow and read_flow:outlet(),
@@ -296,12 +298,12 @@ end
 
 function Stream.memory_pair(opts)
   opts = opts or {}
-  validate_options(opts, { name = true, capacity = true }, 'Stream.memory_pair options')
-  local name = opts.name or 'memory-flow'
-  local ab = Flow.new(opts.capacity):label(name .. ':a->b')
-  local ba = Flow.new(opts.capacity):label(name .. ':b->a')
-  return Stream.compose(ba, ab, { name = name .. ':a', mode = 'memory' }),
-    Stream.compose(ab, ba, { name = name .. ':b', mode = 'memory' })
+  validate_options(opts, { label = true, capacity = true }, 'Stream.memory_pair options')
+  local label = opts.label or 'memory-flow'
+  local ab = Flow.new(opts.capacity):label(label .. ':a->b')
+  local ba = Flow.new(opts.capacity):label(label .. ':b->a')
+  return Stream.compose(ba, ab, { label = label .. ':a', mode = 'memory' }),
+    Stream.compose(ab, ba, { label = label .. ':b', mode = 'memory' })
 end
 
 
