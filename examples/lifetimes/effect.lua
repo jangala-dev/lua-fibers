@@ -20,6 +20,7 @@ local Cell = require('fibers.resource.cell')
 local Effect = require('fibers.effect')
 local log = {}
 local counter = Cell.new(0):label('counter')
+local committed_counter
 
 local LogKind
 LogKind = Effect.kind({
@@ -51,7 +52,8 @@ fibers.run(function()
     counter:write_op(1),
     Op.emit(log_effect('counter-updated', 'counter was committed')),
   }))
+  committed_counter = counter:read()
 end)
 
-print('counter:', counter.value)
+print('counter:', committed_counter)
 print('effect log:', log[1])

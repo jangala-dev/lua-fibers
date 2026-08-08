@@ -143,7 +143,7 @@ do
     closed_ok, closed_err = fibers.perform(source:closed_op())
     assert_eq(closed_ok, nil)
     assert_eq(source._queue:length(), 0)
-    assert_eq(source._slots.value, source.capacity)
+    assert_eq(source._slots._location.value, source.capacity)
   end, { host = host })
 
   assert_eq(disposed, 2, 'every queued offer should be disposed')

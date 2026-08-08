@@ -87,7 +87,7 @@ add('memory-stream-throughput', 'bytes', function()
 
   fibers.run(function(scope)
     local writer, reader = Stream.memory_pair({
-      name = 'io-baseline-memory',
+      label = 'io-baseline-memory',
       capacity = 65536,
     })
     local producer = scope:spawn(function()
@@ -186,7 +186,7 @@ add('idle-reactor-registration', 'registrations', function()
   fibers.run(function()
     local endpoints = {}
     for i = 1, count do
-      local reader, writer = assert(File.pipe({ name = 'io-baseline-pipe-' .. tostring(i) }))
+      local reader, writer = assert(File.pipe({ label = 'io-baseline-pipe-' .. tostring(i) }))
       endpoints[#endpoints + 1] = reader
       endpoints[#endpoints + 1] = writer
     end

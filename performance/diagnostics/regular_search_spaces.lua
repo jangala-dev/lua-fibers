@@ -85,7 +85,6 @@ local function new_runtime(options)
     instrumentation = options.instrumentation and {
       clock = Clock.now,
       slow_search_limit = 4,
-      trace = false,
     } or nil,
   })
 end

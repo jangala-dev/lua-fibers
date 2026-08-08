@@ -19,7 +19,7 @@ local Counter = require('fibers.resource.counter')
 
 local stamina = Counter.new(1):label('captain-stamina')
 local squad_orders = channel.new()
-local first_order, second_order, delivered_order
+local first_order, second_order, delivered_order, remaining_stamina
 
 local function flank_op()
   return stamina
@@ -32,18 +32,19 @@ end
 
 fibers.run(function(scope)
   first_order = fibers.perform(flank_op():or_else(Op.always('hold position')))
-  assert(stamina.value == 1)
+  assert(stamina:read() == 1)
 
   scope:spawn(function()
     delivered_order = squad_orders:get()
   end):label('squad-radio')
 
   second_order = fibers.perform(flank_op():or_else(Op.always('hold position')))
+  remaining_stamina = stamina:read()
 end)
 
 assert(first_order == 'hold position')
 assert(second_order == 'flanking')
 assert(delivered_order == 'flank the eastern stair')
-assert(stamina.value == 0)
+assert(remaining_stamina == 0)
 print('without radio:', first_order)
 print('with radio:', second_order, '-', delivered_order)

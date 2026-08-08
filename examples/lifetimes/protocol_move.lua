@@ -18,7 +18,7 @@ local client, server = Stream.memory_pair({ label = 'negotiated-stream', capacit
 local negotiator = Scope.new():label('negotiator')
 local responder = Scope.new():label('responder')
 local protocol = Cell.new('unknown'):label('protocol-state')
-local reply, responder_has_custody
+local reply, responder_has_custody, final_protocol
 
 local function negotiate_op(stream)
   return stream:reader():read_line_op():and_then(Op.guard(function(line)
@@ -47,10 +47,11 @@ local st = fibers.try_run(function()
   fibers.perform(negotiate_op(server))
   reply = fibers.perform(client:reader():read_line_op())
   responder_has_custody = fibers.perform(responder:has_custody_op(server))
+  final_protocol = protocol:read()
 end).runtime_status
 
 assert(st.tag == 'found')
-assert(protocol.value == 'ping')
+assert(final_protocol == 'ping')
 assert(reply == 'PONG')
 assert(responder_has_custody)
 print('examples/lifetimes/protocol_move.lua: ok')

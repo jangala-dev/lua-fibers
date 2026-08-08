@@ -57,7 +57,7 @@ end
 while rt2:_start_one() do end -- expose all attempts without solving
 local st = rt2:step({ max_work = 1 })
 assert_eq(st.tag, 'pending', 'budget status')
-assert_eq(cell.value, 0, 'pending budget does not mutate')
+assert_eq(cell._location.value, 0, 'pending budget does not mutate')
 local committed = false
 for i = 1, 20 do
   local s = rt2:step({ max_work = 1000 })
@@ -69,7 +69,7 @@ for i = 1, 20 do
   end
 end
 assert_eq(committed, true, 'eventual bounded commit')
-assert_eq(cell.value, 4)
+assert_eq(cell._location.value, 4)
 print('tests/test_runtime.lua: step ok')
 
 package.path = table.concat({
@@ -138,7 +138,7 @@ for i = 1, 4 do
 end
 local st = rt2:step({ max_work = 1 })
 assert_eq(st.tag, 'pending')
-assert_eq(cell.value, 0, 'pending cursor step does not commit')
+assert_eq(cell._location.value, 0, 'pending cursor step does not commit')
 local commits = 0
 for i = 1, 200 do
   st = rt2:step({ max_work = 3 })
@@ -150,7 +150,7 @@ for i = 1, 200 do
   end
 end
 assert_eq(commits, 4)
-assert_eq(cell.value, 4)
+assert_eq(cell._location.value, 4)
 print('tests/test_runtime.lua: cursor ok')
 
 package.path = table.concat({

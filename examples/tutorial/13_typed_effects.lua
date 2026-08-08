@@ -106,7 +106,7 @@ local function configure_radio_op(channel, power)
 end
 
 local fallback
-local committed
+local committed, final_desired
 fibers.run(function()
   -- The complete left branch is defeated.  Neither its Cell write nor either
   -- driver obligation survives into the fallback world.
@@ -116,7 +116,8 @@ fibers.run(function()
       :or_else(Op.always('kept existing configuration'))
   )
 
-  assert(desired.value.channel == 1 and desired.value.power == 1)
+  local unchanged = desired:read()
+  assert(unchanged.channel == 1 and unchanged.power == 1)
   assert(#driver_calls == 0)
 
   -- Channel 99 is rejected by pure effect preparation.  Search considers the
@@ -126,11 +127,12 @@ fibers.run(function()
     configure_radio_op(99, 2),
     configure_radio_op(11, 3)
   ))
+  final_desired = desired:read()
 end)
 
 assert(fallback == 'kept existing configuration')
 assert(committed.channel == 11 and committed.power == 3)
-assert(desired.value.channel == 11 and desired.value.power == 3)
+assert(final_desired.channel == 11 and final_desired.power == 3)
 assert(#driver_calls == 1)
 assert(driver_calls[1].radio == 'uplink')
 assert(driver_calls[1].config.channel == 11)

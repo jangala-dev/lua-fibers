@@ -138,7 +138,7 @@ do
     assert_eq(#second.unattempted, 2)
     assert_eq(second.unattempted[1].kind, 'inet6')
     assert_eq(second.unattempted[2].kind, 'inet4')
-    assert_eq(race.attempt_slots.value, 2)
+    assert_eq(race.attempt_slots._location.value, 2)
   end, { host = host })
   assert_truthy(result.ok, result:tostring())
 end

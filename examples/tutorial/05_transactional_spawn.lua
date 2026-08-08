@@ -33,7 +33,7 @@ fibers.run(function(scope)
       :spawn_op(function()
         jobs_started = jobs_started + 1
         return 'full rescan completed'
-      end, { name = 'losing-full-rescan' })
+      end, { label = 'losing-full-rescan' })
       :map(function()
         return 'replace the cache'
       end)

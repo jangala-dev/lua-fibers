@@ -3,11 +3,7 @@ local Op = require('fibers.op')
 local Direct = require('fibers.internal.direct')
 
 local Counter = {}
-Counter.__index = function(self, key)
-  if key == 'value' then return self._location.value end
-  if key == 'version' then return self._location.version end
-  return Counter[key]
-end
+Counter.__index = Counter
 
 local Kind = Facility.kind('counter')
 
@@ -36,7 +32,6 @@ local function create(initial, minimum, maximum)
     value = initial,
   })
   counter._read_op = Facility.op(Facility.read(counter._location, Facility.result.value, counter))
-  counter._changed_spec = Facility.version_wait(counter._location, counter)
   return counter
 end
 
@@ -59,14 +54,10 @@ function Counter:read_op()
 end
 
 
-function Counter:changed_op(version)
-  return Facility.bind(self._changed_spec, version)
-end
-
 
 function Counter:adjust_op(amount)
   integer(amount, 'counter adjustment', 2)
-  if amount == 0 then return Op.always(self.value) end
+  if amount == 0 then return Op.always(true) end
   return Facility.op(Facility.write(self._location, Facility.patch.add(amount), Facility.result.boolean, self))
 end
 
@@ -92,7 +83,7 @@ function Counter:take_op(amount)
   amount = amount or 1
   integer(amount, 'counter take', 2)
   if amount < 0 then error('counter take must be non-negative', 2) end
-  if amount == 0 then return Op.always(self.value) end
+  if amount == 0 then return Op.always(true) end
   return Facility.op(Facility.rule.change({
     location = self._location,
     resource = self,
@@ -146,6 +137,6 @@ end
 
 Counter.Kind = Kind
 
-Direct.install(Counter, { 'read', 'changed', 'adjust', 'add', 'bump', 'give', 'take', 'at_least', 'at_most', 'equal', 'zero' })
+Direct.install(Counter, { 'read', 'adjust', 'add', 'bump', 'give', 'take', 'at_least', 'at_most', 'equal', 'zero' })
 
 return Counter

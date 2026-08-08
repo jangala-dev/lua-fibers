@@ -20,6 +20,7 @@ local Flow = require('fibers.resource.flow')
 local motor_channels = Counter.new(1):label('motor-channels')
 local vision_channels = Counter.new(1):label('vision-channels')
 local control_bus = Flow.new(16):label('robot-control-bus')
+local motor_remaining, vision_remaining
 
 fibers.run(function()
   fibers.perform(Op.each({
@@ -34,7 +35,9 @@ fibers.run(function()
 
   assert(rows[1][1] == 2)
   assert(rows[2][1] == 'GO')
+  motor_remaining = motor_channels:read()
+  vision_remaining = vision_channels:read()
 end)
 
-assert(motor_channels.value == 0 and vision_channels.value == 0)
+assert(motor_remaining == 0 and vision_remaining == 0)
 print('each reserved motor and vision; together handed off GO')

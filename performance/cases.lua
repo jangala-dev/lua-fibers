@@ -69,15 +69,17 @@ end)
 add('simple', 'cell', 'serial read write', 1200, function(ctx, n)
   local rt = ctx:runtime()
   local cell = Cell.new(0):label('perf-cell')
+  local final
   rt:spawn_raw(function()
     for _ = 1, n do
       rt:perform(cell:read_op():and_then(Op.guard(function(value)
         return cell:write_op(value + 1)
       end)))
     end
+    final = rt:perform(cell:read_op())
   end):label('perf-cell-fiber')
   drain(rt)
-  assert_eq(cell.value, n)
+  assert_eq(final, n)
   return n
 end)
 
@@ -153,7 +155,7 @@ end)
 add('moderate', 'product', 'choice conflict backtracking', 320, function(ctx, n)
   local rt = ctx:runtime()
   local cell = Cell.new(0):label('perf-choice-conflict')
-  local fallbacks = 0
+  local fallbacks, final = 0, nil
   rt:spawn_raw(function()
     for _ = 1, n do
       local rows = rt:perform(Op.together({
@@ -169,10 +171,11 @@ add('moderate', 'product', 'choice conflict backtracking', 320, function(ctx, n)
         fallbacks = fallbacks + 1
       end
     end
+    final = rt:perform(cell:read_op())
   end):label('perf-choice-conflict-fiber')
   drain(rt)
   assert_eq(fallbacks, n)
-  assert_eq(cell.value, 2)
+  assert_eq(final, 2)
   return n
 end)
 
@@ -201,7 +204,7 @@ add('moderate', 'scope', 'spawn await closure', 36, function(ctx, n)
       end, { label = 'perf-task-' .. tostring(i) })
       total = total + fibers.perform(task:await_op())
     end
-  end, ctx:run_options({ name = 'perf-scope' }))
+  end, ctx:run_options({ label = 'perf-scope' }))
   ctx:add_runtime(result.runtime)
   assert_ok(result.ok, tostring(result.report or result.reason))
   assert_eq(total, n * (n + 1) / 2)
@@ -291,7 +294,7 @@ add('complex', 'search', 'nursery rendezvous fanout seven', 1, function(ctx, rou
         end
       end,
       ctx:run_options({
-        name = 'perf-nursery-fanout',
+        label = 'perf-nursery-fanout',
         closure = Closure.nursery({ name = 'perf-nursery-closure' }),
       })
     )

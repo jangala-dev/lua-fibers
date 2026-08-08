@@ -41,7 +41,7 @@ do
     return Op.each({ counter:take_op(2), counter:read_op() }):and_then(counter:read_op())
   end)
   eq(result, 3)
-  eq(counter.value, 3)
+  eq(counter._location.value, 3)
 end
 
 local function observed_with(mode, lane_order, sibling_kind)
@@ -61,7 +61,7 @@ local function observed_with(mode, lane_order, sibling_kind)
   local rows = perform(function() return (mode == 'together' and Op.together or Op.each)({ inner, sibling }) end)
   local inner_rows = rows[1][1]
   local observed_row = inner_rows[lane_order == 'take-observe' and 2 or 1]
-  return observed_row[1], counter.value
+  return observed_row[1], counter._location.value
 end
 
 for _, mode in ipairs({ 'each', 'together' }) do

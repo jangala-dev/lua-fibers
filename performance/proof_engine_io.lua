@@ -51,7 +51,6 @@ local scale = env_number('FIBERS_PROOF_SCALE', 1)
 local filter = os.getenv('FIBERS_PROOF_CASE') or ''
 local format = os.getenv('FIBERS_PROOF_FORMAT') or 'text'
 local show_slow = os.getenv('FIBERS_PROOF_SLOW') == '1'
-local trace = os.getenv('FIBERS_PROOF_TRACE') == '1'
 
 local cases = {}
 local function add(name, units, host, body)
@@ -70,7 +69,7 @@ end, function(scope)
   local chunk = string.rep('x', 4096)
   local expected = chunks * #chunk
   local writer, reader = Stream.memory_pair({
-    name = 'proof-memory-stream',
+    label = 'proof-memory-stream',
     capacity = 32768,
   })
   local producer = scope:spawn(function()
@@ -145,7 +144,7 @@ end, function()
   local count = math.max(1, math.floor(4 * scale))
   local endpoints = {}
   for i = 1, count do
-    local reader, writer = assert(File.pipe({ name = 'proof-pipe-' .. tostring(i) }))
+    local reader, writer = assert(File.pipe({ label = 'proof-pipe-' .. tostring(i) }))
     endpoints[#endpoints + 1] = reader
     endpoints[#endpoints + 1] = writer
   end
@@ -202,8 +201,6 @@ for _, case in ipairs(cases) do
       host = case.host(),
       instrumentation = {
         slow_search_limit = show_slow and 8 or 0,
-        trace = trace,
-        trace_limit = trace and 2048 or 0,
       },
     })
     assert(result.ok, tostring(result.primary))

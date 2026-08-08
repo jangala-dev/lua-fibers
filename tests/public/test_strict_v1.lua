@@ -14,6 +14,8 @@ local socket = require('fibers.socket')
 local Address = require('fibers.net.address')
 local Process = require('fibers.process')
 local DNSResolver = require('fibers.dns.resolver')
+local Cell = require('fibers.resource.cell')
+local Counter = require('fibers.resource.counter')
 
 local function rejects(label, fn)
   local ok = pcall(fn)
@@ -53,6 +55,20 @@ end)
 -- Resolver policy is numeric policy, not stringly configuration.
 rejects('DNS attempts numeric string', function() DNSResolver.new({ attempts = '2' }) end)
 rejects('DNS cache numeric string', function() DNSResolver.new({ maximum_cache_entries = '100' }) end)
+
+
+-- Mutable algebraic resources do not expose side-channel snapshots or epochs.
+do
+  local cell = Cell.new('sealed')
+  if cell.value ~= nil or cell.version ~= nil or cell.changed_op ~= nil or cell.changed ~= nil then
+    error('v1 Cell must expose state only through algebraic operations', 2)
+  end
+
+  local counter = Counter.new(1)
+  if counter.value ~= nil or counter.version ~= nil or counter.changed_op ~= nil or counter.changed ~= nil then
+    error('v1 Counter must expose state only through algebraic operations', 2)
+  end
+end
 
 -- Lua-file compatibility reads are deliberately absent from the v1 Stream surface.
 local left = Stream.memory_pair()

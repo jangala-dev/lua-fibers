@@ -22,7 +22,6 @@ FIBERS_PERF_FORMAT         text, csv, or json
 FIBERS_PERF_OUTPUT         optional output file
 FIBERS_PERF_SEED           deterministic choice seed
 FIBERS_PERF_DIAGNOSTICS    0 disables the separate diagnostic pass
-FIBERS_PERF_TRACE          1 retains capped search events
 FIBERS_PERF_SLOW_SEARCHES     number of slow-search summaries retained
 ```
 
@@ -51,7 +50,6 @@ local Runtime = require('fibers.runtime')
 local runtime = Runtime.new({
   instrumentation = {
     slow_search_limit = 16,
-    trace = false,
   },
 })
 
@@ -59,6 +57,6 @@ local report = runtime.instrumentation:report()
 runtime.instrumentation:reset()
 ```
 
-Reports contain cumulative counters, maxima, histograms, slow-search summaries and optional capped trace events. Important measures include search calls, branches, rollbacks, trail entries, frontier invalidations, retained-search resumes, candidate validation and commit activity.
+Reports contain cumulative counters, maxima, histograms and slow-search summaries. Important measures include search calls, branches, rollbacks, trail entries, frontier invalidations, retained-search resumes, candidate validation and commit activity.
 
 Use the same interpreter, host, CPU policy and environment when comparing runs.

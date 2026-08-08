@@ -36,7 +36,6 @@ Common operations:
 
 ```lua
 state:read_op()
-state:changed_op(version)
 state:expect_op(value)
 state:write_op(value)
 state:wait_until_op(predicate)
@@ -50,7 +49,7 @@ state:expect_op('idle')
   :and_then(state:write_op('running'))
 ```
 
-`wait_until` returns the complete satisfying value. `match` uses a truthy leading matcher result and returns the remaining projected values.
+`wait_until` returns the complete satisfying value. `match` uses a truthy leading matcher result and returns the remaining projected values. Cell contents are available only by performing or composing these operations. Public value/version fields are deliberately absent; version epochs are an implementation detail of transactional search.
 
 ## Counters and capacity
 
@@ -62,7 +61,7 @@ local slots = Counter.bounded(16)
 local percentage = Counter.range(50, 0, 100)
 ```
 
-Counters support reads, changes, adjustments and predicates:
+Counters support reads, adjustments and predicates:
 
 ```lua
 count:read_op()
@@ -81,6 +80,8 @@ A bounded counter is useful for transactional admission:
 slots:take_op(1)
   :and_then(queue:put_op(work))
 ```
+
+Counter contents are likewise available only through operations. Reads therefore remain in the same algebra as updates, admission and fallback.
 
 ## Semaphores
 

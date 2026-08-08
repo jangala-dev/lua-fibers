@@ -68,7 +68,7 @@ end):label('claim-closure-backtrack')
 eq(backtrack_rt:run().tag, 'found')
 eq(backtrack_rows[1][1], true)
 eq(backtrack_rows[2][1], true)
-eq(counter.value, 0)
+eq(counter._location.value, 0)
 
 
 return true

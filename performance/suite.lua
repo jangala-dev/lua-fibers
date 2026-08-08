@@ -53,7 +53,6 @@ local format = env('FIBERS_PERF_FORMAT', 'text')
 local output_path = env('FIBERS_PERF_OUTPUT', '')
 local choice_seed = math.floor(env_number('FIBERS_PERF_SEED', 1))
 local diagnostics = env_number('FIBERS_PERF_DIAGNOSTICS', 1) ~= 0
-local trace = env_number('FIBERS_PERF_TRACE', 0) ~= 0
 local slow_search_limit = math.max(1, math.floor(env_number('FIBERS_PERF_SLOW_SEARCHES', 8)))
 
 
@@ -153,8 +152,6 @@ function Context:instrumentation_options()
     return nil
   end
   return {
-    trace = trace,
-    trace_limit = 512,
     slow_search_limit = slow_search_limit,
     clock = Clock.now,
   }

@@ -146,7 +146,7 @@ do
       'query', 'query_when', 'transition_op',
     } },
     { 'Cell', FibersCell, {
-      'new', 'read_op', 'changed_op', 'expect_op', 'write_op', 'select_op',
+      'new', 'read_op', 'expect_op', 'write_op', 'select_op',
       'wait_until_op', 'match_op',
     } },
     { 'Flow', FibersFlow, { 'new' } },
@@ -273,7 +273,7 @@ do
   assert_status(st, 'found')
   assert_eq(old, 1)
   assert_eq(new, 0)
-  assert_eq(c.value, 0)
+  assert_eq(c._location.value, 0)
 end
 
 -- A Signal is a public waitable external resource.

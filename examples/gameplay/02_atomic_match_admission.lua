@@ -18,7 +18,7 @@ local Counter = require('fibers.resource.counter')
 
 local arena_places = Counter.new(4):label('moon-arena-places')
 local started = 0
-local first_match, second_attempt
+local first_match, second_attempt, remaining_places
 
 local function start_match_op(scope, party_name, party_size)
   return arena_places:take_op(party_size):and_then(scope:spawn_op(function()
@@ -42,11 +42,12 @@ fibers.run(function(scope)
   else
     second_attempt = second_value
   end
+  remaining_places = arena_places:read()
 end)
 
 assert(first_match == 'Comet Crew entered the Moon Arena')
 assert(second_attempt == 'Lantern Guild joined the waiting room')
-assert(arena_places.value == 0)
+assert(remaining_places == 0)
 assert(started == 1)
 print(first_match)
 print(second_attempt)

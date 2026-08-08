@@ -241,7 +241,9 @@ local machine = 'kernel'
     local cell = Cell.new(0):label('guard-fallback-version')
     local gate = Rendezvous.new():label('guard-fallback-gate')
     local calls, result = 0, nil
-    local preferred = cell:changed_op(0):and_then(Op.never())
+    local preferred = cell:wait_until_op(function(value)
+      return value ~= 0
+    end):and_then(Op.never())
     local fallback = Op.guard(function()
       calls = calls + 1
       local activation_number = calls

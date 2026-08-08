@@ -93,7 +93,7 @@ do
 
   assert_eq(first_result, 1)
   assert_eq(second_result, 'primary:2')
-  assert_eq(cell.value, 2)
+  assert_eq(cell._location.value, 2)
   assert_eq(guard_calls, 1, 'guard memo survives stale refresh')
 end
 

@@ -15,7 +15,7 @@ local Op = require('fibers.op')
 local Cell = require('fibers.resource.cell')
 
 local incident_level = Cell.new(0):label('incident-level')
-local escalated_level
+local escalated_level, final_level
 
 fibers.run(function()
   assert(incident_level:read() == 0)
@@ -26,8 +26,9 @@ fibers.run(function()
       return current_level + 1
     end)
   end)))
+  final_level = incident_level:read()
 end)
 
 assert(escalated_level == 2)
-assert(incident_level.value == 2)
+assert(final_level == 2)
 print('incident level:', escalated_level)

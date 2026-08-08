@@ -45,7 +45,7 @@ local function test_resource_observation_retries_independent_cell_updates()
   end):label('observation-updater-b')
 
   H.assert_status(rt:run(), 'found', 'both contending cell updates eventually commit')
-  H.assert_eq(cell.value, 2, 'stale resource attempt is retried against the fresh cell state')
+  H.assert_eq(cell._location.value, 2, 'stale resource attempt is retried against the fresh cell state')
   H.assert_eq(a, 1)
   H.assert_eq(b, 2)
 end
@@ -74,7 +74,7 @@ local function test_resource_observation_retries_primary_before_or_else_fallback
   end):label('observation-or-else-second')
 
   H.assert_status(rt:run(), 'found', 'stale primary is retried, not treated as absent')
-  H.assert_eq(cell.value, 2)
+  H.assert_eq(cell._location.value, 2)
   H.assert_eq(first, 1)
   H.assert_eq(second, 'primary:2')
   H.assert_eq(H.transaction_tags(rt), '', 'fallback effect is not discharged when primary is fresh-possible')
@@ -108,36 +108,40 @@ local function test_wait_until_and_match_contracts()
 end
 
 
-local function test_shared_version_leaf_keeps_occurrence_state_separate()
+local function test_shared_change_leaf_keeps_occurrence_state_separate()
   local Rendezvous = require('fibers.resource.rendezvous')
   local rt = Runtime.new()
-  local cell = Cell.new(0):label('shared-version-leaf-cell')
-  local first_done = Rendezvous.new():label('shared-version-leaf-first-done')
-  local first_value, first_version, second_value, second_version
+  local cell = Cell.new(0):label('shared-change-leaf-cell')
+  local first_done = Rendezvous.new():label('shared-change-leaf-first-done')
+  local first_value, second_value
 
   rt:spawn_raw(function()
-    first_value, first_version = rt:perform(cell:changed_op(0))
+    first_value = rt:perform(cell:wait_until_op(function(value)
+      return value >= 1
+    end))
     rt:perform(first_done:put_op(true))
-  end):label('shared-version-leaf-first')
+  end):label('shared-change-leaf-first')
 
   rt:spawn_raw(function()
-    second_value, second_version = rt:perform(cell:changed_op(1))
-  end):label('shared-version-leaf-second')
+    second_value = rt:perform(cell:wait_until_op(function(value)
+      return value >= 2
+    end))
+  end):label('shared-change-leaf-second')
 
   rt:spawn_raw(function()
     rt:perform(cell:write_op(1))
     rt:perform(first_done:get_op())
-  end):label('shared-version-leaf-writer')
+    rt:perform(cell:write_op(2))
+  end):label('shared-change-leaf-writer')
 
   H.assert_status(rt:run(), 'found')
   H.assert_eq(first_value, 1)
-  H.assert_eq(first_version, 1)
-  H.assert_eq(second_value, 0)
-  H.assert_eq(second_version, 0)
+  H.assert_eq(second_value, 2)
 end
 
+
 local tests = {
-  test_shared_version_leaf_keeps_occurrence_state_separate,
+  test_shared_change_leaf_keeps_occurrence_state_separate,
   test_wait_until_and_match_contracts,
   test_resource_observation_retries_independent_cell_updates,
   test_resource_observation_retries_primary_before_or_else_fallback,

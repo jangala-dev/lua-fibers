@@ -231,7 +231,7 @@ do
     response = fibers.perform(b:reader():read_line_op())
   end).runtime_status
   assert_status(st, 'found')
-  assert_eq(state.value, 1)
+  assert_eq(state._location.value, 1)
   assert_eq(response, 'reply:ping')
 end
 

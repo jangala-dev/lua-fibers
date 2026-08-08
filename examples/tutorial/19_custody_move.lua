@@ -24,7 +24,7 @@ local director_end, gameplay_end = Stream.memory_pair({
 local cinematic = Scope.new():label('opening-cinematic')
 local gameplay = Scope.new():label('player-gameplay')
 local camera_mode = Cell.new('cinematic'):label('camera-mode')
-local acknowledgement, gameplay_has_custody
+local acknowledgement, gameplay_has_custody, final_camera_mode
 
 local result = fibers.try_run(function()
   fibers.perform(cinematic:admit_op(gameplay_end))
@@ -42,10 +42,11 @@ local result = fibers.try_run(function()
 
   acknowledgement = fibers.perform(director_end:reader():read_line_op())
   gameplay_has_custody = fibers.perform(gameplay:has_custody_op(gameplay_end))
+  final_camera_mode = camera_mode:read()
 end)
 
 assert(result.ok)
-assert(camera_mode.value == 'player')
+assert(final_camera_mode == 'player')
 assert(acknowledgement == 'CAMERA_READY')
 assert(gameplay_has_custody)
-print('camera:', camera_mode.value, 'custodian:', gameplay.name)
+print('camera:', final_camera_mode, 'custodian:', gameplay.name)

@@ -19,7 +19,7 @@ local Cell = require('fibers.resource.cell')
 
 local silver_keys = Counter.new(1):label('silver-keys')
 local moon_gate = Cell.new('locked'):label('moon-gate')
-local first, second
+local first, second, remaining_keys, final_gate
 
 local function unlock_op()
   return Op.each({
@@ -35,11 +35,13 @@ end
 fibers.run(function()
   first = fibers.perform(unlock_op())
   second = fibers.perform(unlock_op())
+  remaining_keys = silver_keys:read()
+  final_gate = moon_gate:read()
 end)
 
 assert(first == 'the Moon Gate opened')
 assert(second == 'the gate remains as it is')
-assert(silver_keys.value == 0)
-assert(moon_gate.value == 'open')
+assert(remaining_keys == 0)
+assert(final_gate == 'open')
 print(first)
 print(second)

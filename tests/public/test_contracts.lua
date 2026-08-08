@@ -243,7 +243,7 @@ do
     rt:run()
   end)
   assert_eq(ok, false, 'wrap error should escape the driver by default')
-  assert_eq(cell.value, 1, 'wrap error does not roll back commit')
+  assert_eq(cell._location.value, 1, 'wrap error does not roll back commit')
 end
 
 -- A raw error inside guard should not leave the runtime believing that an
@@ -297,7 +297,7 @@ do
   assert_error_kind(ok, err, 'effect_error', 'raw effect error is fatal')
   assert_eq(err.committed, true, 'raw effect error is after commit')
   assert_eq(err.fatal, true, 'raw effect error marks runtime fatal')
-  assert_eq(cell.value, 1, 'raw effect error does not roll back committed resource')
+  assert_eq(cell._location.value, 1, 'raw effect error does not roll back committed resource')
   local ok_run, run_err = pcall(function()
     rt:run()
   end)

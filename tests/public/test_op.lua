@@ -178,7 +178,7 @@ local function test_map_and_and_then_are_transactional()
 
   assert_status(rt:run(), 'found')
   assert_eq(got, 5, 'and_then sees tentative state established earlier in the transaction')
-  assert_eq(cell.value, 5, 'transaction commits final cell state')
+  assert_eq(cell._location.value, 5, 'transaction commits final cell state')
 end
 
 local function test_and_then_is_all_or_nothing()
@@ -193,7 +193,7 @@ local function test_and_then_is_all_or_nothing()
 
   local status = rt:run()
   assert_uncommitted_status(status, 'blocked second step prevents entire sequence from committing')
-  assert_eq(cell.value, 0, 'first step of blocked and_then sequence is not committed')
+  assert_eq(cell._location.value, 0, 'first step of blocked and_then sequence is not committed')
   assert_eq(got, nil, 'participant is not resumed')
 end
 
@@ -383,7 +383,7 @@ local function test_or_else_retries_stale_primary_instead_of_committing_fallback
   end):label('stale-primary-preferred-updater')
 
   assert_status(rt:run(), 'found')
-  assert_eq(cell.value, 2, 'primary update is retried against fresh state')
+  assert_eq(cell._location.value, 2, 'primary update is retried against fresh state')
   assert_eq(a, 1)
   assert_eq(b, 'primary', 'fallback is not used merely because the parked primary became stale')
 end
@@ -417,7 +417,7 @@ local function test_wrap_is_post_commit_and_not_transactional_sequence()
       test_tag = function(tag)
         if #discharged == 0 then
           timeline[#timeline + 1] = 'discharge'
-          assert_eq(cell.value, 9, 'resource state is committed before effects are observed')
+          assert_eq(cell._location.value, 9, 'resource state is committed before effects are observed')
         end
         discharged[#discharged + 1] = tag
       end,
@@ -429,7 +429,7 @@ local function test_wrap_is_post_commit_and_not_transactional_sequence()
       Op.emit(TC.tag('wrap.after')):and_then(
         Op.always('value'):wrap(function(v)
           timeline[#timeline + 1] = 'wrap'
-          assert_eq(cell.value, 9, 'wrap runs after commit')
+          assert_eq(cell._location.value, 9, 'wrap runs after commit')
           return v .. ':wrapped'
         end)
       )
@@ -533,7 +533,7 @@ local function test_contending_cell_updates_retry()
   end):label('cell-update-b')
 
   assert_status(rt:run(), 'found')
-  assert_eq(cell.value, 2, 'both contending updates eventually commit')
+  assert_eq(cell._location.value, 2, 'both contending updates eventually commit')
   assert_eq(a, 1)
   assert_eq(b, 2)
 end
@@ -549,7 +549,7 @@ local function test_conflicting_parallel_cell_writes_do_not_commit_partially()
 
   local status = rt:run()
   assert_uncommitted_status(status, 'conflicting parallel writes cannot commit')
-  assert_eq(cell.value, 0, 'conflicting write transaction leaves cell unchanged')
+  assert_eq(cell._location.value, 0, 'conflicting write transaction leaves cell unchanged')
   assert_eq(got, nil, 'participant is not resumed')
 end
 
@@ -655,7 +655,7 @@ local function test_deferred_map_and_and_then_after_rendezvous()
       rt:perform(ch:put_op('message'))
     end):label('deferred-and_then-sender')
     assert_status(rt:run(), 'found')
-    assert_eq(cell.value, 'message')
+    assert_eq(cell._location.value, 'message')
     assert_eq(got, 'message:done', 'and_then after rendezvous participates in the same transaction')
   end
 end
@@ -675,7 +675,7 @@ local function test_choice_discards_loser_resource_state_even_when_loser_is_loca
   end):label('choice-loser-resource')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'winner', 'the replay seed selects the non-mutating occurrence')
-  assert_eq(cell.value, 0, 'unselected choice branch does not commit its resource effects')
+  assert_eq(cell._location.value, 0, 'unselected choice branch does not commit its resource effects')
 end
 
 local function test_choice_blocked_branch_does_not_partially_commit_before_right_branch_wins()
@@ -694,7 +694,7 @@ local function test_choice_blocked_branch_does_not_partially_commit_before_right
   end):label('choice-blocked-left')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'right')
-  assert_eq(cell.value, 2, 'blocked losing branch does not leak earlier transactional writes')
+  assert_eq(cell._location.value, 2, 'blocked losing branch does not leak earlier transactional writes')
 end
 
 local function test_together_is_parallel_not_sequential_for_cell_views()
@@ -710,7 +710,7 @@ local function test_together_is_parallel_not_sequential_for_cell_views()
   end):label('together-cell-views')
 
   assert_status(rt:run(), 'found')
-  assert_eq(cell.value, 1, 'together commits the selected write')
+  assert_eq(cell._location.value, 1, 'together commits the selected write')
   assert_eq(rows[1][1], true)
   assert_eq(rows[2][1], 0, 'sibling lane in together sees the shared pre-transaction view, not a sequential write')
 end
@@ -749,7 +749,7 @@ local function test_or_else_primary_rendezvous_beats_fallback_when_partner_exist
 
   assert_status(rt:run(), 'found')
   assert_eq(got, 'from-sender')
-  assert_eq(cell.value, 0, 'fallback branch is not committed when primary rendezvous can commit')
+  assert_eq(cell._location.value, 0, 'fallback branch is not committed when primary rendezvous can commit')
 end
 
 local function test_or_else_blocked_primary_discards_partial_state_before_fallback()
@@ -768,7 +768,7 @@ local function test_or_else_blocked_primary_discards_partial_state_before_fallba
   end):label('or-else-blocked-primary')
   assert_status(rt:run(), 'found')
   assert_eq(got, 'fallback')
-  assert_eq(cell.value, 2, 'fallback commits without leaking the blocked primary write')
+  assert_eq(cell._location.value, 2, 'fallback commits without leaking the blocked primary write')
 end
 
 local function test_choice_backtracks_around_product_conflict()
@@ -789,7 +789,7 @@ local function test_choice_backtracks_around_product_conflict()
   end):label('choice-product-conflict')
 
   assert_status(rt:run(), 'found')
-  assert_eq(cell.value, 2, 'search backtracks from a locally possible branch that conflicts in the product')
+  assert_eq(cell._location.value, 2, 'search backtracks from a locally possible branch that conflicts in the product')
   assert_eq(rows[1][1], 'no-write')
   assert_eq(rows[2][1], true)
 end
@@ -816,7 +816,7 @@ local function test_guard_memo_survives_refresh_of_stale_frontier()
   end):label('guard-refresh-guarded-updater')
 
   assert_status(rt:run(), 'found')
-  assert_eq(cell.value, 2)
+  assert_eq(cell._location.value, 2)
   assert_eq(a, 1)
   assert_eq(b, 2)
   assert_eq(
@@ -874,7 +874,7 @@ local function test_wrap_may_perform_new_transaction_after_commit()
 
   local outer = Op.emit(TC.tag('outer')):and_then(cell:write_op(1):and_then(Op.always('a'):wrap(function(v)
         timeline[#timeline + 1] = 'wrap-start'
-        assert_eq(cell.value, 1, 'wrap runs after the outer resource commit')
+        assert_eq(cell._location.value, 1, 'wrap runs after the outer resource commit')
         local y = rt:perform(Op.emit(TC.tag('inner')):and_then(Op.always('b')))
         timeline[#timeline + 1] = 'wrap-end'
         return v .. y
@@ -887,7 +887,7 @@ local function test_wrap_may_perform_new_transaction_after_commit()
 
   assert_status(rt:run(), 'found')
   assert_eq(got, 'ab')
-  assert_eq(cell.value, 1)
+  assert_eq(cell._location.value, 1)
   assert_eq(
     table.concat(timeline, ','),
     'discharge:outer,wrap-start,discharge:inner,wrap-end,resume',
@@ -910,7 +910,7 @@ local function test_wrap_failure_does_not_rollback_committed_resources()
   end)
   assert_eq(ok, false, 'wrap failure is reported to the caller')
   assert_truthy(tostring(err):match('wrap boom'), 'wrap failure reports the original error')
-  assert_eq(cell.value, 5, 'committed resource state is not rolled back by wrap failure')
+  assert_eq(cell._location.value, 5, 'committed resource state is not rolled back by wrap failure')
 end
 
 local function test_product_lane_wraps_apply_inside_out_after_commit()
@@ -1396,7 +1396,7 @@ local function test_or_else_primary_second_candidate_beats_fallback()
   assert_eq(got, 'good:payload', 'second primary candidate commits before fallback')
   assert_eq(good_sender, true)
   assert_falsy(bad_sender, 'conflicting primary partner does not commit')
-  assert_eq(cell.value, 'good')
+  assert_eq(cell._location.value, 'good')
   assert_eq(transaction_tags(rt), '', 'fallback effect is not discharged')
 end
 
@@ -1454,7 +1454,7 @@ local function test_or_else_primary_resource_conflict_backtracks_partner_branch(
   assert_status(rt:run(), 'found')
   assert_eq(receiver, 'primary:good', 'runtime backtracks through a conflicting partner branch')
   assert_truthy(partner ~= nil, 'compatible partner branch commits')
-  assert_eq(cell.value, 1)
+  assert_eq(cell._location.value, 1)
   assert_eq(transaction_tags(rt), '', 'fallback effect is not discharged')
 end
 
@@ -1473,7 +1473,7 @@ local function test_or_else_absent_primary_discards_tentative_writes()
 
   assert_status(rt:run(), 'found')
   assert_eq(got, 'fallback')
-  assert_eq(cell.value, 'fallback', 'tentative write in absent primary is discarded')
+  assert_eq(cell._location.value, 'fallback', 'tentative write in absent primary is discarded')
 end
 
 local function test_nested_or_else_uses_nearest_available_world()
@@ -1793,7 +1793,7 @@ local function test_dependent_cell_updates_are_serialisable_under_observation()
   end
 
   assert_status(rt:run(), 'found')
-  assert_eq(cell.value, 3, 'all dependent increments commit')
+  assert_eq(cell._location.value, 3, 'all dependent increments commit')
   assert_set_eq(returns, { 0, 1, 2 }, 'each dependent transaction observed a serial old value')
 end
 

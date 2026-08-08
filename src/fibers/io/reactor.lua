@@ -471,7 +471,7 @@ function Reactor:_refresh(entry)
   if entry.service == 'offer' then
     if entry.closing then
       self:_retire_entry(entry, entry.close_reason or 'closing')
-    elseif entry.source._slots.value > 0 then
+    elseif entry.source._slots._location.value > 0 then
       self:_arm(entry)
     else
       self:_disarm(entry)
@@ -615,7 +615,7 @@ function Reactor:_service_offer(entry)
     entry.armed = false
     entry.next_poll = nil
   end
-  if source._slots.value <= 0 then
+  if source._slots._location.value <= 0 then
     self:_refresh(entry)
     return true
   end

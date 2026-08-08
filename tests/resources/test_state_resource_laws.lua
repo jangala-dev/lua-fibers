@@ -60,7 +60,7 @@ local function test_counter_each_allocates_existing_stock()
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
   assert_eq(rows[2][1], true)
-  assert_eq(c.value, 0)
+  assert_eq(c._location.value, 0)
 end
 
 local function test_counter_each_give_does_not_supply_take()
@@ -70,7 +70,7 @@ local function test_counter_each_give_does_not_supply_take()
   end)
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'none')
-  assert_eq(c.value, 1)
+  assert_eq(c._location.value, 1)
 end
 
 local function test_counter_together_give_supplies_take()
@@ -80,7 +80,7 @@ local function test_counter_together_give_supplies_take()
   end)
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], true)
-  assert_eq(c.value, 0)
+  assert_eq(c._location.value, 0)
 end
 
 local function test_counter_overdraw_rejected()
@@ -92,7 +92,7 @@ local function test_counter_overdraw_rejected()
   if st.tag == 'found' then
     fail('overdraw committed')
   end
-  assert_eq(c.value, 1)
+  assert_eq(c._location.value, 1)
 end
 
 local function test_counter_adjust_is_additive()
@@ -101,7 +101,7 @@ local function test_counter_adjust_is_additive()
     rt:perform(Op.each({ c:adjust_op(-1), c:adjust_op(2) }))
   end)
   assert_status(rt:run(), 'found')
-  assert_eq(c.value, 3)
+  assert_eq(c._location.value, 3)
 end
 
 local function test_keyed_together_put_supplies_get()

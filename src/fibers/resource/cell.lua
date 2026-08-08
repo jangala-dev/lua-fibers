@@ -3,11 +3,7 @@ local Op = require('fibers.op')
 local Direct = require('fibers.internal.direct')
 
 local Cell = {}
-Cell.__index = function(self, key)
-  if key == 'value' then return self._location.value end
-  if key == 'version' then return self._location.version end
-  return Cell[key]
-end
+Cell.__index = Cell
 
 local Kind = Facility.kind('cell')
 
@@ -57,10 +53,6 @@ function Cell:read_op()
   return self._read_op
 end
 
-function Cell:changed_op(version)
-  return Facility.bind(self._changed_spec, version)
-end
-
 function Cell:expect_op(value)
   return Facility.bind(self._expect_spec, value)
 end
@@ -86,7 +78,7 @@ function Cell:match_op(matcher)
   end)
 end
 
-Direct.install(Cell, { 'read', 'changed', 'expect', 'write', 'wait_until', 'match' })
+Direct.install(Cell, { 'read', 'expect', 'write', 'wait_until', 'match' })
 
 Cell.Kind = Kind
 

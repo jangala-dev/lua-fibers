@@ -188,7 +188,6 @@ end
 local BenchEffectKind
 BenchEffectKind = Effect.kind({
   name = 'bench-merge',
-  order = 75,
   key = function(payload)
     return payload.key
   end,
@@ -269,33 +268,37 @@ end)
 add('cell', 'serial read write', 1200, function(n)
   local rt = Runtime.new()
   local cell = Cell.new(0):label('bench-cell-serial')
+  local final
   rt:spawn_raw(function()
     for _ = 1, n do
       rt:perform(cell:read_op():and_then(Op.guard(function(v)
         return cell:write_op(v + 1)
       end)))
     end
+    final = rt:perform(cell:read_op())
   end):label('bench-cell-serial')
   run_rt(rt)
-  assert_eq(cell.value, n)
+  assert_eq(final, n)
   return n
 end)
 
-add('cell', 'changed wait wake', 400, function(n)
+add('cell', 'wait until progression', 400, function(n)
   local rt = Runtime.new()
-  local cell = Cell.new(0):label('bench-cell-changed')
+  local cell = Cell.new(0):label('bench-cell-wait')
+  local ack = Rendezvous.new():label('bench-cell-wait-ack')
   local observed = 0
   rt:spawn_raw(function()
-    local version = cell.version
-    for _ = 1, n do
-      local value, next_version = rt:perform(cell:changed_op(version))
-      observed = value
-      version = next_version
+    for expected = 1, n do
+      observed = rt:perform(cell:wait_until_op(function(value)
+        return value >= expected
+      end))
+      rt:perform(ack:put_op(true))
     end
   end):label('bench-cell-waiter')
   rt:spawn_raw(function()
     for i = 1, n do
       rt:perform(cell:write_op(i))
+      rt:perform(ack:get_op())
     end
   end):label('bench-cell-writer')
   run_rt(rt)
@@ -349,7 +352,7 @@ add('product', 'each independent cells', 900, function(n)
   local a = Cell.new(0):label('bench-each-a')
   local b = Cell.new(0):label('bench-each-b')
   local c = Cell.new(0):label('bench-each-c')
-  local seen = 0
+  local seen, final_a, final_c = 0, nil, nil
   rt:spawn_raw(function()
     for i = 1, n do
       local rows = rt:perform(Op.each({
@@ -361,10 +364,12 @@ add('product', 'each independent cells', 900, function(n)
         seen = seen + rows[2][1]
       end
     end
+    final_a = rt:perform(a:read_op())
+    final_c = rt:perform(c:read_op())
   end):label('bench-each-independent')
   run_rt(rt)
-  assert_eq(a.value, n)
-  assert_eq(c.value, n * 2)
+  assert_eq(final_a, n)
+  assert_eq(final_c, n * 2)
   assert_eq(seen, 0)
   return n
 end)
@@ -400,7 +405,7 @@ end)
 add('product', 'choice conflict backtrack', 450, function(n)
   local rt = Runtime.new()
   local cell = Cell.new(0):label('bench-choice-conflict')
-  local wins = 0
+  local wins, final = 0, nil
   rt:spawn_raw(function()
     for _ = 1, n do
       local rows = rt:perform(Op.together({
@@ -416,10 +421,11 @@ add('product', 'choice conflict backtrack', 450, function(n)
         wins = wins + 1
       end
     end
+    final = rt:perform(cell:read_op())
   end):label('bench-choice-conflict')
   run_rt(rt)
   assert_eq(wins, n)
-  assert_eq(cell.value, 2)
+  assert_eq(final, 2)
   return n
 end)
 
@@ -470,7 +476,6 @@ add('product', 'dependent cell updaters', 180, function(n)
     end):label('bench-dependent-' .. tostring(i))
   end
   run_rt(rt)
-  assert_eq(cell.value, total_commits)
   assert_eq(#returns, total_commits)
   return total_commits
 end)

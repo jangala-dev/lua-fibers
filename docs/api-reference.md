@@ -411,14 +411,15 @@ local Cell = require('fibers.resource.cell')
 
 ### `Cell.new(value) -> Cell`
 ### `cell:read_op() -> Op`
-### `cell:changed_op(version) -> Op`
 ### `cell:expect_op(value) -> Op`
 ### `cell:write_op(value) -> Op`
 ### `cell:select_op(select) -> Op`
 ### `cell:wait_until_op(predicate) -> Op`
 ### `cell:match_op(matcher) -> Op`
 
-Direct twins exist for `read`, `changed`, `expect`, `write`, `wait_until` and `match`.
+Direct twins exist for `read`, `expect`, `write`, `wait_until` and `match`.
+
+Cell contents are available only through these operations. `.value` and `.version` are not part of the public semantics.
 
 ## `fibers.resource.counter`
 
@@ -430,7 +431,6 @@ local Counter = require('fibers.resource.counter')
 ### `Counter.bounded(capacity) -> Counter`
 ### `Counter.range(initial, minimum, maximum) -> Counter`
 ### `counter:read_op() -> Op`
-### `counter:changed_op(version) -> Op`
 ### `counter:adjust_op(amount) -> Op`
 ### `counter:add_op(amount) -> Op`
 ### `counter:bump_op() -> Op`
@@ -441,7 +441,7 @@ local Counter = require('fibers.resource.counter')
 ### `counter:equal_op(value) -> Op`
 ### `counter:zero_op() -> Op`
 
-Direct twins exist for all listed operations.
+Direct twins exist for all listed operations. Counter contents are available only through these operations; `.value` and `.version` are not part of the public semantics.
 
 ## `fibers.semaphore`
 

@@ -72,7 +72,7 @@ do
   assert_twins(queue, { 'get', 'put' }, 'buffered channel')
   assert_twins(unbounded, { 'get', 'put' }, 'unbounded channel')
   assert(unbounded.capacity == math.huge, 'math.huge should select an unbounded FIFO')
-  assert_twins(cell, { 'read', 'changed', 'expect', 'write', 'wait_until', 'match' }, 'cell')
+  assert_twins(cell, { 'read', 'expect', 'write', 'wait_until', 'match' }, 'cell')
   assert_twins(pulse, {
     'version', 'why', 'is_closed', 'signal', 'close', 'changed', 'next',
   }, 'pulse')
@@ -108,7 +108,7 @@ do
 
 
   assert_twins(Counter.new(), {
-    'read', 'changed', 'adjust', 'add', 'bump', 'give', 'take',
+    'read', 'adjust', 'add', 'bump', 'give', 'take',
     'at_least', 'at_most', 'equal', 'zero',
   }, 'counter')
   assert_twins(Index.new(), {

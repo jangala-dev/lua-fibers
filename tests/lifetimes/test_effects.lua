@@ -352,7 +352,7 @@ local function test_discharge_failure_is_fatal_after_resource_commit()
   assert_error_kind(ok, err, 'effect_error', 'raw discharge failure is fatal effect error')
   assert_eq(err.fatal, true)
   assert_eq(err.committed, true, 'discharge failure is after resource commit')
-  assert_eq(cell.value, 1, 'resource commit is not rolled back by discharge failure')
+  assert_eq(cell._location.value, 1, 'resource commit is not rolled back by discharge failure')
   assert_eq(rt:failed(), err, 'runtime stores fatal discharge failure')
 end
 

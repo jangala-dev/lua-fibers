@@ -51,7 +51,7 @@ local function test_counter_directional_waits()
 
   eq(rows[1][1], true)
   eq(rows[2][1], 0)
-  eq(counter.value, 0)
+  eq(counter._location.value, 0)
 end
 
 local function test_latch_is_set_once()

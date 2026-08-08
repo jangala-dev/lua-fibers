@@ -17,7 +17,7 @@ local Counter = require('fibers.resource.counter')
 
 local uplink_slots = Counter.new(1):label('satellite-uplink-slots')
 local telemetry_sessions = channel.new()
-local admitted_clinic, outcome
+local admitted_clinic, outcome, remaining_slots
 
 fibers.run(function(scope)
   scope:spawn(function()
@@ -30,9 +30,10 @@ fibers.run(function(scope)
     :map(function()
       return 'telemetry admitted'
     end))
+  remaining_slots = uplink_slots:read()
 end)
 
 assert(outcome == 'telemetry admitted')
 assert(admitted_clinic == 'clinic-7')
-assert(uplink_slots.value == 0)
+assert(remaining_slots == 0)
 print('field network:', outcome, '-', admitted_clinic)

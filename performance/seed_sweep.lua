@@ -52,7 +52,7 @@ for fanout = min_size, max_size do
         total = total + fibers.perform(ch:get_op())
       end
     end, {
-      name = 'seed-sweep',
+      label = 'seed-sweep',
       choice_seed = seed,
       search_limit = search_limit,
       instrumentation = { slow_search_limit = 1, clock = Clock.now },
