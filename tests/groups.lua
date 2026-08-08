@@ -3,6 +3,7 @@
 return {
   public = {
     'tests/public/test_contracts.lua',
+    'tests/public/test_strict_v1.lua',
     'examples/test_documented_examples.lua',
     'tests/public/test_flow.lua',
     'tests/public/test_op.lua',

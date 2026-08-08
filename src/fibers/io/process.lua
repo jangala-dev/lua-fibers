@@ -3,21 +3,38 @@
 local IOError = require('fibers.io.error')
 local IOAudit = require('fibers.internal.io_audit')
 local Label = require('fibers.internal.label')
+local Contract = require('fibers.internal.contract')
 
 local M = {}
 
 
-local function close_returned(value, reason)
-  if value and type(value.close) == 'function' then
-    pcall(value.close, value, reason)
+local function close_returned(value, reason, errors, role)
+  if value == nil then return end
+  if type(value.close) ~= 'function' then
+    errors[#errors + 1] = IOError.protocol('host', 'start_process_cleanup',
+      'returned host value has no close method', { value_role = role })
+    return
   end
+  IOError.capture_cleanup(errors, 'host', 'start_process_cleanup', { value_role = role },
+    value.close, value, reason)
 end
 
-local function invalid_contract(host, missing)
-  return IOError.protocol('host', 'start_process', 'host process provider returned an invalid process handle', {
+local function invalid_contract(host, missing, cleanup_errors)
+  local fields = {
     host = host and Label.describe(host, host.kind or host.family) or nil,
     missing = missing,
-  })
+  }
+  if cleanup_errors and #cleanup_errors > 0 then fields.cleanup_errors = cleanup_errors end
+  return IOError.protocol('host', 'start_process', 'host process provider returned an invalid process handle', fields)
+end
+
+local function dispose_invalid_return(process, endpoints, host, missing)
+  local errors = {}
+  for key, endpoint in pairs(type(endpoints) == 'table' and endpoints or {}) do
+    close_returned(endpoint, 'invalid host process contract', errors, 'endpoint:' .. tostring(key))
+  end
+  close_returned(process, 'invalid host process contract', errors, 'process')
+  return invalid_contract(host, missing, errors)
 end
 
 -- One host-independent launch boundary. Direct waitpid providers, reaper-process
@@ -32,28 +49,19 @@ function M.start(host, spec)
     return nil, nil, err or endpoints
   end
   if endpoints ~= nil and type(endpoints) ~= 'table' then
-    close_returned(process, 'invalid host process contract')
-    return nil, nil, invalid_contract(host, 'endpoints')
+    return nil, nil, dispose_invalid_return(process, nil, host, 'endpoints')
   end
 
   local required = { 'open_exit_op', 'exit_op', 'signal', 'close' }
   for i = 1, #required do
     local name = required[i]
     if type(process[name]) ~= 'function' then
-      close_returned(process, 'invalid host process contract')
-      for _, endpoint in pairs(endpoints or {}) do
-        close_returned(endpoint, 'invalid host process contract')
-      end
-      return nil, nil, invalid_contract(host, name)
+      return nil, nil, dispose_invalid_return(process, endpoints, host, name)
     end
   end
   local pid = type(process.pid) == 'function' and process:pid() or process.pid or process._pid
   if pid == nil then
-    close_returned(process, 'invalid host process contract')
-    for _, endpoint in pairs(endpoints or {}) do
-      close_returned(endpoint, 'invalid host process contract')
-    end
-    return nil, nil, invalid_contract(host, 'pid')
+    return nil, nil, dispose_invalid_return(process, endpoints, host, 'pid')
   end
   return process, endpoints or {}
 end
@@ -108,12 +116,13 @@ do
   end
 
   function M.exited(code)
-    code = tonumber(code) or 0
+    code = Contract.non_negative_integer(code, 'process exit code', 3)
     return { kind = 'exited', code = code, success = code == 0 }
   end
 
   function M.signalled(signals, number, core_dumped)
-    number = tonumber(number) or 0
+    number = Contract.positive_integer(number, 'process signal number', 3)
+    Contract.optional_boolean(core_dumped, 'process core_dumped', 3)
     return {
       kind = 'signalled',
       signal = number,
@@ -271,25 +280,27 @@ do
     return true
   end
 
-  local function restrict(handle, which)
-    if which == 'stdin' then
-      handle.capabilities.read = false
-      handle.capabilities.shutdown_read = false
-    else
-      handle.capabilities.write = false
-      handle.capabilities.shutdown_write = false
-    end
-  end
+  local WRAP_OPTIONS = {
+    host = true, label = Contract.non_empty_string, pid = true, parents = Contract.table,
+    wrap = Contract.func, close_raw = Contract.func, nonblocking = Contract.boolean,
+    cloexec = Contract.boolean, abort = Contract.func,
+  }
 
   function M.wrap(opts)
+    opts = Contract.record(opts, WRAP_OPTIONS, 'process host wrap options', 2)
+    if opts.parents == nil or opts.wrap == nil or opts.close_raw == nil then
+      error('process host wrap requires parents, wrap and close_raw', 2)
+    end
     local endpoints = {}
-    local parents = opts.parents or {}
+    local parents = opts.parents
     for which, raw in pairs(parents) do
       local handle, err = opts.wrap(raw, {
         host = opts.host,
         label = (opts.label or ('process-' .. tostring(opts.pid))) .. ':' .. which,
         nonblocking = opts.nonblocking ~= false,
         cloexec = opts.cloexec,
+        readable = which ~= 'stdin',
+        writable = which == 'stdin',
       })
       if not handle then
         for _, endpoint in pairs(endpoints) do
@@ -305,7 +316,6 @@ do
         end
         return nil, IOError.normalise(err, { domain = 'process', action = 'wrap_' .. which })
       end
-      restrict(handle, which)
       endpoints[which] = handle
     end
     return endpoints

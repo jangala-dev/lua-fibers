@@ -35,15 +35,15 @@ local sockets = provider('sockets', 'numeric-fd', {
   start_dial = function(self, address)
     return self.name .. ':' .. address
   end,
-}, { socket_ipv4 = true, socket_unix = true })
+}, { socket = true, socket_ipv4 = true, socket_unix = true })
 local files_and_processes = provider('system', 'numeric-fd', {
   create_pipe = function(self) return self.name .. ':reader', self.name .. ':writer' end,
   file_provider = function(self) return self.name .. ':files' end,
   start_process = function(self, spec) return self.name .. ':' .. spec.command end,
-}, { file_backend = 'worker', process_groups = 'session' })
+}, { pipe = true, file = true, process = true, file_backend = 'worker', process_groups = 'session' })
 local resolver = provider('resolver', 'callback', {
   resolve = function(self, endpoint) return { self.name .. ':' .. endpoint.host } end,
-}, { resolver_blocking = false })
+}, { resolver = true, resolver_blocking = false })
 
 
 local platform = Platform.new({
@@ -78,7 +78,8 @@ local complete = provider('complete', 'numeric-fd', {
   now = function() return 4 end,
   block = function() return nil, 'not-ready' end,
   create_listener = function() return 'complete-listener' end,
-})
+  start_dial = function() return 'complete-dial' end,
+}, { socket = true })
 local from_complete = Platform.from(complete, { owns_providers = false })
 assert(from_complete:now() == 4)
 assert(from_complete:create_listener() == 'complete-listener')
@@ -86,7 +87,8 @@ assert(from_complete:close())
 
 local incompatible = provider('incompatible', 'opaque-handle', {
   create_listener = function() return true end,
-})
+  start_dial = function() return true end,
+}, { socket = true })
 local ok, err = pcall(Platform.new, {
   providers = { clock = driver, wait = driver, socket = incompatible },
 })
@@ -99,5 +101,21 @@ local allowed = Platform.new({
 })
 assert(allowed.capabilities.socket)
 assert(allowed:close())
+
+local method_defined = provider('method-defined', 'numeric-fd', {
+  create_pipe = function() return true end,
+})
+local method_platform = Platform.new({
+  providers = { clock = driver, wait = driver, pipe = method_defined },
+  owns_providers = false,
+})
+assert(method_platform.capabilities.pipe == true)
+
+local incomplete = provider('incomplete', 'numeric-fd', {})
+local ok_missing, err_missing = pcall(Platform.new, {
+  providers = { clock = driver, wait = driver, pipe = incomplete },
+  owns_providers = false,
+})
+assert(not ok_missing and tostring(err_missing):match('does not implement its complete method contract'))
 
 return true

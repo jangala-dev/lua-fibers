@@ -21,6 +21,7 @@ local IOAudit = require('fibers.internal.io_audit')
 local Label = require('fibers.internal.label')
 local Protected = require('fibers.protected')
 local Sleep = require('fibers.sleep')
+local Contract = require('fibers.internal.contract')
 
 local unpack_ = table.unpack or unpack
 local function pack_(...) return { n = select('#', ...), ... } end
@@ -32,6 +33,17 @@ Entry.__index = Entry
 
 local next_reactor = 0
 local next_entry = 0
+
+local REACTOR_OPTIONS = {
+  label = Contract.non_empty_string, read_quantum = Contract.positive_integer,
+  write_quantum = Contract.positive_integer, control_quantum = Contract.positive_integer,
+}
+local ENTRY_SPEC = {
+  service = true, label = Contract.non_empty_string, mode = true, stream = true,
+  flow = true, source = true, callback = true, handle = true,
+  poll_interval = Contract.non_negative_number, chunk_size = Contract.positive_integer,
+  generation = Contract.positive_integer,
+}
 
 local function optional_shutdown(handle, name, reason)
   local ok, err = handle[name](handle, reason)
@@ -174,7 +186,7 @@ local function control_effect(reactor, entry, action, reason, mode)
 end
 
 function Entry.new(reactor, spec)
-  spec = spec or {}
+  spec = Contract.record(spec, ENTRY_SPEC, 'Reactor entry spec', 3)
   next_entry = next_entry + 1
   local id = 'reaction-' .. tostring(next_entry)
   local service = spec.service or 'flow'
@@ -279,7 +291,7 @@ function Entry:retired_op()
 end
 
 function Reactor.new(runtime, opts)
-  opts = opts or {}
+  opts = Contract.record(opts, REACTOR_OPTIONS, 'Reactor.new options', 2)
   next_reactor = next_reactor + 1
   local id = 'host-reactor-' .. tostring(next_reactor)
   local self = setmetatable({
@@ -312,6 +324,9 @@ function Reactor.for_runtime(runtime, opts)
     error('HostReactor.for_runtime requires a runtime', 2)
   end
   local reactor = runtime.host_reactor
+  if reactor and opts ~= nil then
+    error('Reactor.for_runtime options are only valid when creating the runtime reactor', 2)
+  end
   if not reactor then
     reactor = Reactor.new(runtime, opts)
     runtime.host_reactor = reactor
@@ -320,19 +335,19 @@ function Reactor.for_runtime(runtime, opts)
 end
 
 function Reactor:direction(spec)
-  spec = spec or {}
+  spec = Contract.options(spec, { label = true, mode = true, stream = true, flow = true, handle = true, chunk_size = true }, 'Reactor:direction spec', 2)
   spec.chunk_size = spec.chunk_size or (spec.mode == 'read' and self.read_quantum or self.write_quantum)
   return Entry.new(self, spec)
 end
 
 function Reactor:offer(spec)
-  spec = spec or {}
+  spec = Contract.options(spec, { label = true, mode = true, source = true, handle = true, poll_interval = true }, 'Reactor:offer spec', 2)
   spec.service = 'offer'
   return Entry.new(self, spec)
 end
 
 function Reactor:callback(spec)
-  spec = spec or {}
+  spec = Contract.options(spec, { label = true, mode = true, handle = true, callback = true, poll_interval = true }, 'Reactor:callback spec', 2)
   if type(spec.callback) ~= 'function' then
     error('reactor callback requires spec.callback', 2)
   end

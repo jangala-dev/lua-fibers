@@ -4,6 +4,8 @@
 -- translate selected host conditions (notably EOF) into their own public error
 -- vocabulary, but platform details remain available on the original value.
 
+local Protected = require('fibers.protected')
+
 local Error = {}
 local ErrorMT = {}
 ErrorMT.__index = ErrorMT
@@ -163,6 +165,28 @@ function Error.normalise(err, fields)
     fields and fields.number,
     fields
   )
+end
+
+function Error.capture_cleanup(errors, domain, action, fields, fn, ...)
+  local called, ok, err = Protected.pcall(fn, ...)
+  fields = copy_fields({ domain = domain, action = action }, fields)
+  if not called then
+    fields.cause = ok
+    errors[#errors + 1] = Error.protocol(domain, action, 'cleanup raised', fields)
+  elseif not ok then
+    errors[#errors + 1] = Error.normalise(err or 'cleanup failed', fields)
+  end
+end
+
+function Error.with_cleanup(primary, domain, action, message, cleanup_errors, fields)
+  if #cleanup_errors == 0 then return primary end
+  if primary == nil and #cleanup_errors == 1 then return cleanup_errors[1] end
+  local errors = {}
+  if primary ~= nil then errors[#errors + 1] = primary end
+  for i = 1, #cleanup_errors do errors[#errors + 1] = cleanup_errors[i] end
+  fields = fields or {}
+  fields.cause, fields.errors = primary, errors
+  return Error.protocol(domain, action, message, fields)
 end
 
 function Error.is_would_block(err)

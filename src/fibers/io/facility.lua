@@ -13,12 +13,14 @@ local Scope = require('fibers.scope')
 local Lifetime = require('fibers.lifetime')
 local IOError = require('fibers.io.error')
 local Protected = require('fibers.protected')
+local Contract = require('fibers.internal.contract')
 
 local IO = {}
 
 function IO.copy_table(value)
+  value = value == nil and {} or Contract.table(value, 'options', 2)
   local out = {}
-  for key, item in pairs(value or {}) do
+  for key, item in pairs(value) do
     out[key] = item
   end
   return out
@@ -29,7 +31,7 @@ function IO.scope_of(value)
 end
 
 function IO.current_scope(opts, label)
-  opts = opts or {}
+  opts = opts == nil and {} or Contract.table(opts, (label or 'operation') .. ' options', 3)
   local scope = opts.scope or Context.current_scope()
   if not Scope.is(scope) then
     error(label .. ' requires opts.scope or a current Scope', 3)
@@ -46,7 +48,7 @@ end
 -- the public value and its driver are two views of one Lifetime, and admission
 -- and task start commit together.
 function IO.admit_driven_lifetime_op(scope, value, spec)
-  spec = spec or {}
+  spec = Contract.table(spec, 'driven Lifetime admission spec', 2)
   scope = IO.require_scope(scope, spec.operation or spec.role or 'driven Lifetime admission')
   if type(spec.run) ~= 'function' then
     error('driven Lifetime admission requires spec.run', 2)
@@ -101,13 +103,8 @@ end
 -- join. opts.require_returned preserves facilities whose driver body failure is
 -- not already represented by the terminal operation.
 function IO.closed_after_driver_op(task, terminal_op, opts)
-  if opts ~= nil and type(opts) ~= 'table' then
-    error('closed_after_driver_op options must be a table', 2)
-  end
-  opts = opts or {}
-  if opts.require_returned ~= nil and type(opts.require_returned) ~= 'boolean' then
-    error('closed_after_driver_op require_returned must be boolean', 2)
-  end
+  opts = Contract.options(opts, { require_returned = true }, 'closed_after_driver_op options', 2)
+  Contract.optional_boolean(opts.require_returned, 'closed_after_driver_op require_returned', 2)
   if task ~= nil and type(task.body_result_op) ~= 'function' then
     error('closed_after_driver_op expects a Task-like driver', 2)
   end

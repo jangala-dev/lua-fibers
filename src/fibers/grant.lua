@@ -8,6 +8,7 @@ local Lifetime = require('fibers.lifetime')
 local Closure = require('fibers.closure')
 local Label = require('fibers.internal.label')
 local Direct = require('fibers.internal.direct')
+local Contract = require('fibers.internal.contract')
 
 local Grant = {}
 Grant.__index = Grant
@@ -92,10 +93,7 @@ local function rights_set(list)
 end
 
 function Grant._new(grantor, holder, subject, rights, opts)
-  if opts ~= nil and type(opts) ~= 'table' then
-    error('Grant options must be a table', 2)
-  end
-  opts = opts or {}
+  opts = Contract.options(opts, { label = true, terms = true, meta = true }, 'Grant options', 2)
   if subject == nil then error('Grant creation expects a subject', 2) end
   if type(grantor) ~= 'table' or grantor._fibers_scope ~= true then
     error('Grant creation expects a grantor Scope', 2)
@@ -111,12 +109,9 @@ function Grant._new(grantor, holder, subject, rights, opts)
   runtime._next_grant_id = (runtime._next_grant_id or 0) + 1
   local id = 'grant-' .. tostring(runtime._next_grant_id)
   local right_list = list_rights(rights)
-  if opts.label ~= nil and type(opts.label) ~= 'string' then
-    error('Grant option label must be a string', 2)
-  end
-  if opts.terms ~= nil and type(opts.terms) ~= 'table' then
-    error('Grant terms must be a table', 2)
-  end
+  if opts.label ~= nil then Contract.non_empty_string(opts.label, 'Grant option label', 2) end
+  if opts.terms ~= nil then Contract.table(opts.terms, 'Grant terms', 2) end
+  if opts.meta ~= nil then Contract.table(opts.meta, 'Grant meta', 2) end
   local terms = copy_table(opts.terms)
   for key in pairs(terms) do
     if key ~= 'transferable' then

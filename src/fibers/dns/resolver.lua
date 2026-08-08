@@ -21,6 +21,7 @@ local IO = require('fibers.io.facility')
 local Protected = require('fibers.protected')
 local perform = require('fibers.perform')
 local Label = require('fibers.internal.label')
+local Contract = require('fibers.internal.contract')
 
 local Resolver = {}
 Resolver.__index = Resolver
@@ -69,20 +70,116 @@ local function load_once(gate, loader)
   return true, a, b
 end
 
-local function copy_table(value)
+local integer_0_65535 = Contract.range(Contract.integer, 0, 65535)
+local integer_1_16 = Contract.range(Contract.integer, 1, 16)
+local integer_0_15 = Contract.range(Contract.integer, 0, 15)
+local integer_512_65535 = Contract.range(Contract.integer, 512, 65535)
+local integer_12_65535 = Contract.range(Contract.integer, 12, 65535)
+local integer_0_64 = Contract.range(Contract.integer, 0, 64)
+local number_001_30 = Contract.range(Contract.finite_number, 0.01, 30.0)
+
+local function dense(values, label, level)
+  return Contract.dense(values, label, level)
+end
+
+local function search_list(values, label, level)
+  Contract.dense(values, label, (level or 2) + 1, Contract.non_empty_string)
+  return values
+end
+
+local function string_value(value, label, level)
+  if type(value) ~= 'string' then error(label .. ' must be a string', level or 3) end
+  return value
+end
+
+local function family(value, label, level)
+  if value ~= 'unspec' and value ~= 'inet4' and value ~= 'inet6' then
+    error(label .. ' must be unspec, inet4 or inet6', level or 3)
+  end
+  return value
+end
+
+local COMMON_OPTIONS = {
+  host = true, search = search_list, timeout = number_001_30, attempts = integer_1_16,
+  ndots = integer_0_15, edns = Contract.boolean, dnssec_ok = Contract.boolean,
+  udp_payload_size = integer_512_65535, maximum_message_size = integer_12_65535,
+  maximum_records = Contract.positive_integer, tcp_timeout = Contract.non_negative_number,
+  maximum_tcp_message_size = integer_12_65535,
+  receive_capacity = Contract.positive_integer, send_capacity = Contract.positive_integer,
+  tcp_read_capacity = Contract.positive_integer, tcp_write_capacity = Contract.positive_integer,
+  maximum_timeout = Contract.non_negative_number, maximum_cnames = integer_0_64,
+}
+
+local QUERY_OPTIONS = {}
+for key, rule in pairs(COMMON_OPTIONS) do QUERY_OPTIONS[key] = rule end
+
+local ENDPOINT_OPTIONS = {}
+for key, rule in pairs(QUERY_OPTIONS) do ENDPOINT_OPTIONS[key] = rule end
+ENDPOINT_OPTIONS.family = family
+
+local CONSTRUCTOR_OPTIONS = {}
+for key, rule in pairs(COMMON_OPTIONS) do CONSTRUCTOR_OPTIONS[key] = rule end
+for key, rule in pairs({
+  label = Contract.non_empty_string, nameservers = dense, port = integer_0_65535,
+  resolv_conf = string_value, resolv_conf_path = Contract.non_empty_string,
+  maximum_config_size = Contract.positive_integer, hosts = Contract.table,
+  hosts_file = string_value, hosts_path = Contract.non_empty_string,
+  maximum_hosts_size = Contract.positive_integer, read_hosts = Contract.boolean,
+  maximum_cache_entries = Contract.non_negative_integer,
+  maximum_ttl = Contract.non_negative_number, random_path = Contract.non_empty_string,
+  random_u16 = Contract.func, allow_weak_random = Contract.boolean,
+}) do CONSTRUCTOR_OPTIONS[key] = rule end
+
+local function copy_table(value, label)
+  value = value == nil and {} or Contract.table(value, label or 'table', 3)
   local out = {}
-  for key, item in pairs(value or {}) do
-    out[key] = item
+  for key, item in pairs(value) do out[key] = item end
+  return out
+end
+
+local function project(value, allowed)
+  local out = {}
+  if value == nil then return out end
+  Contract.table(value, 'DNS option source', 3)
+  for key in pairs(allowed) do
+    if value[key] ~= nil then out[key] = value[key] end
   end
   return out
 end
 
 local function copy_list(values)
   local out = {}
-  for i = 1, #(values or {}) do
-    out[i] = values[i]
-  end
+  if values == nil then return out end
+  dense(values, 'DNS list', 3)
+  for i = 1, #values do out[i] = values[i] end
   return out
+end
+
+local function validate_constructor_options(value)
+  return Contract.record(value, CONSTRUCTOR_OPTIONS, 'DNS Resolver options', 3)
+end
+
+local function validate_query_options(value, endpoint)
+  return Contract.record(
+    value,
+    endpoint and ENDPOINT_OPTIONS or QUERY_OPTIONS,
+    endpoint and 'DNS resolve options' or 'DNS resolve_type options',
+    3
+  )
+end
+
+local ALL_OPTIONS = {}
+for key, rule in pairs(CONSTRUCTOR_OPTIONS) do ALL_OPTIONS[key] = rule end
+for key, rule in pairs(ENDPOINT_OPTIONS) do ALL_OPTIONS[key] = rule end
+
+local function validate_options(value, extras, label)
+  value = value == nil and {} or Contract.table(value, label, 3)
+  for key, item in pairs(value) do
+    local rule = extras and extras[key] or ALL_OPTIONS[key]
+    if rule == nil then error(label .. ' does not accept ' .. tostring(key), 3) end
+    if rule ~= true then rule(item, label .. '.' .. tostring(key), 4) end
+  end
+  return value
 end
 
 local function copy_error(err)
@@ -128,8 +225,8 @@ local function normalise_name(name)
 end
 
 local function numeric_service(service)
-  local port = tonumber(service)
-  if not port or port < 0 or port > 65535 or port ~= math.floor(port) then
+  local port = service
+  if type(port) ~= 'number' or port < 0 or port > 65535 or port ~= math.floor(port) then
     return nil,
       invalid_argument('Fibers DNS resolution requires a numeric service or port', {
         service = service,
@@ -250,9 +347,9 @@ end
 
 local function next_id(self)
   if type(self.random_u16) == 'function' then
-    local value = tonumber(self.random_u16(self))
-    if value and value >= 0 and value <= 65535 then
-      return math.floor(value)
+    local value = self.random_u16(self)
+    if type(value) == 'number' and value == math.floor(value) and value >= 0 and value <= 65535 then
+      return value
     end
     error('DNS random_u16 callback returned an invalid value', 2)
   end
@@ -302,25 +399,30 @@ local function perform_before(op, deadline)
   end)))
 end
 
-local function close_quietly(value, reason)
-  if value and type(value.close) == 'function' then
-    Protected.pcall(value.close, value, reason)
+local function cleanup_error(reason, primary, entries)
+  local errors = {}
+  for i = 1, #entries do
+    local value, role = entries[i][1], entries[i][2]
+    if value ~= nil then
+      if type(value.close) ~= 'function' then
+        errors[#errors + 1] = IOError.protocol('dns', 'cleanup', 'DNS transport value has no close method', {
+          role = role, reason = reason,
+        })
+      else
+        IOError.capture_cleanup(errors, 'dns', 'cleanup', { role = role, reason = reason },
+          value.close, value, reason)
+      end
+    end
   end
+  return IOError.with_cleanup(primary, 'dns', 'cleanup',
+    'DNS operation and transport cleanup both failed', errors, { reason = reason })
 end
 
 function Resolver.new(opts)
-  opts = copy_table(opts)
+  opts = validate_constructor_options(opts)
   local maximum_cache_entries = opts.maximum_cache_entries
   if maximum_cache_entries == nil then
     maximum_cache_entries = 1024
-  end
-  maximum_cache_entries = tonumber(maximum_cache_entries)
-  if
-    not maximum_cache_entries
-    or maximum_cache_entries ~= math.floor(maximum_cache_entries)
-    or maximum_cache_entries < 0
-  then
-    error('maximum_cache_entries must be a non-negative integer', 2)
   end
   opts.maximum_cache_entries = maximum_cache_entries
   next_resolver = next_resolver + 1
@@ -353,7 +455,7 @@ end
 function Resolver:_load_hosts()
   load_once(self.hosts_load, function()
     local text, err = File.read_all(self.opts.hosts_path or '/etc/hosts', {
-      max = tonumber(self.opts.maximum_hosts_size) or 1024 * 1024,
+      max = self.opts.maximum_hosts_size or 1024 * 1024,
       label = resolver_label(self) .. ':read-hosts',
     })
     if text then
@@ -444,8 +546,8 @@ function Resolver:_compact_cache()
 end
 
 function Resolver:_cache_put(name, qtype, item, ttl)
-  ttl = tonumber(ttl) or 0
-  local cap = tonumber(self.opts.maximum_ttl or 86400)
+  if type(ttl) ~= 'number' then error('DNS cache TTL must be numeric', 2) end
+  local cap = self.opts.maximum_ttl or 86400
   ttl = math.min(math.max(0, ttl), cap)
   local maximum = self.opts.maximum_cache_entries
   if ttl <= 0 or maximum <= 0 then
@@ -511,13 +613,13 @@ function Resolver:_udp_exchange(server, wire, id, name, qtype, timeout, opts)
 
   local sent, send_err = socket:send_to(wire, server)
   if not sent then
-    close_quietly(socket, 'DNS UDP send failed')
-    return nil, IOError.normalise(send_err, { domain = 'dns', action = 'udp_send', server = server })
+    local primary = IOError.normalise(send_err, { domain = 'dns', action = 'udp_send', server = server })
+    return nil, cleanup_error('DNS UDP send failed', primary, { { socket, 'udp_socket' } })
   end
   local flushed, flush_err = socket:flush()
   if not flushed then
-    close_quietly(socket, 'DNS UDP flush failed')
-    return nil, IOError.normalise(flush_err, { domain = 'dns', action = 'udp_send', server = server })
+    local primary = IOError.normalise(flush_err, { domain = 'dns', action = 'udp_send', server = server })
+    return nil, cleanup_error('DNS UDP flush failed', primary, { { socket, 'udp_socket' } })
   end
 
   local rt = Runtime.current()
@@ -533,26 +635,26 @@ function Resolver:_udp_exchange(server, wire, id, name, qtype, timeout, opts)
     )
 
     if kind == 'timeout' then
-      close_quietly(socket, 'DNS UDP timeout')
-      return nil,
-        error_value('timeout', 'ETIMEDOUT', 'DNS query timed out', {
-          server = server,
-          name = name,
-          qtype = qtype,
-          cause = last_protocol,
-        })
+      local primary = error_value('timeout', 'ETIMEDOUT', 'DNS query timed out', {
+        server = server,
+        name = name,
+        qtype = qtype,
+        cause = last_protocol,
+      })
+      return nil, cleanup_error('DNS UDP timeout', primary, { { socket, 'udp_socket' } })
     end
     if not packet then
-      close_quietly(socket, 'DNS UDP receive failed')
-      return nil,
-        IOError.normalise(receive_err, { domain = 'dns', action = 'udp_receive', server = server })
+      local primary = IOError.normalise(receive_err, { domain = 'dns', action = 'udp_receive', server = server })
+      return nil, cleanup_error('DNS UDP receive failed', primary, { { socket, 'udp_socket' } })
     end
     local decision = classify_udp_packet(packet, server, id, name, qtype, opts)
     if decision.kind == 'answer' then
-      close_quietly(socket, 'DNS UDP complete')
+      local cleanup = cleanup_error('DNS UDP complete', nil, { { socket, 'udp_socket' } })
+      if cleanup then return nil, cleanup end
       return decision.message
     elseif decision.kind == 'tcp' then
-      close_quietly(socket, 'DNS UDP truncated')
+      local cleanup = cleanup_error('DNS UDP truncated', nil, { { socket, 'udp_socket' } })
+      if cleanup then return nil, cleanup end
       return { truncated = true }
     elseif decision.kind == 'invalid' then
       last_protocol = decision.error
@@ -570,45 +672,39 @@ function Resolver:_tcp_exchange(server, wire, id, name, qtype, timeout, opts)
   if not dial then
     return nil, IOError.normalise(dial_err, { domain = 'dns', action = 'tcp_dial', server = server })
   end
-  local deadline = Runtime.current():now() + (tonumber(opts.tcp_timeout) or timeout or 5.0)
+  local deadline = Runtime.current():now() + (opts.tcp_timeout or timeout or 5.0)
   local connection, connect_err = perform_before(dial:result_op(Context.current_scope()), deadline)
   if not connection then
-    close_quietly(dial, 'DNS TCP dial failed')
-    return nil, IOError.normalise(connect_err, { domain = 'dns', action = 'tcp_dial', server = server })
+    local primary = IOError.normalise(connect_err, { domain = 'dns', action = 'tcp_dial', server = server })
+    return nil, cleanup_error('DNS TCP dial failed', primary, { { dial, 'dial' } })
   end
 
   local written, write_err = perform_before(connection:write_op(Codec.frame_tcp(wire)), deadline)
   if not written then
-    close_quietly(connection, 'DNS TCP write failed')
-    close_quietly(dial, 'DNS TCP write failed')
-    return nil, IOError.normalise(write_err, { domain = 'dns', action = 'tcp_write', server = server })
+    local primary = IOError.normalise(write_err, { domain = 'dns', action = 'tcp_write', server = server })
+    return nil, cleanup_error('DNS TCP write failed', primary, { { connection, 'connection' }, { dial, 'dial' } })
   end
   local flushed, flush_err = perform_before(connection:flush_op(), deadline)
   if not flushed then
-    close_quietly(connection, 'DNS TCP flush failed')
-    close_quietly(dial, 'DNS TCP flush failed')
-    return nil, IOError.normalise(flush_err, { domain = 'dns', action = 'tcp_write', server = server })
+    local primary = IOError.normalise(flush_err, { domain = 'dns', action = 'tcp_write', server = server })
+    return nil, cleanup_error('DNS TCP flush failed', primary, { { connection, 'connection' }, { dial, 'dial' } })
   end
 
   local prefix, prefix_err = perform_before(connection:read_exactly_op(2), deadline)
   if not prefix then
-    close_quietly(connection, 'DNS TCP prefix failed')
-    close_quietly(dial, 'DNS TCP prefix failed')
-    return nil, IOError.normalise(prefix_err, { domain = 'dns', action = 'tcp_read', server = server })
+    local primary = IOError.normalise(prefix_err, { domain = 'dns', action = 'tcp_read', server = server })
+    return nil, cleanup_error('DNS TCP prefix failed', primary, { { connection, 'connection' }, { dial, 'dial' } })
   end
   local length = Codec.read_u16(prefix, 1)
-  local maximum = tonumber(opts.maximum_tcp_message_size or 65535)
+  local maximum = opts.maximum_tcp_message_size or 65535
   if not length or length < 12 or length > maximum then
-    close_quietly(connection, 'invalid DNS TCP length')
-    close_quietly(dial, 'invalid DNS TCP length')
-    return nil, protocol_error('invalid DNS TCP message length', { server = server, length = length })
+    local primary = protocol_error('invalid DNS TCP message length', { server = server, length = length })
+    return nil, cleanup_error('invalid DNS TCP length', primary, { { connection, 'connection' }, { dial, 'dial' } })
   end
   local data, read_err = perform_before(connection:read_exactly_op(length), deadline)
-  close_quietly(connection, 'DNS TCP complete')
-  close_quietly(dial, 'DNS TCP complete')
-  if not data then
-    return nil, IOError.normalise(read_err, { domain = 'dns', action = 'tcp_read', server = server })
-  end
+  local primary = not data and IOError.normalise(read_err, { domain = 'dns', action = 'tcp_read', server = server }) or nil
+  local cleanup = cleanup_error('DNS TCP complete', primary, { { connection, 'connection' }, { dial, 'dial' } })
+  if cleanup then return nil, cleanup end
   local message, decode_err = Codec.decode_message(data, {
     max_message_size = maximum,
     max_records = opts.maximum_records or 512,
@@ -628,12 +724,12 @@ function Resolver:_exchange(name, qtype, opts)
   if not config then
     return nil, config_err
   end
-  local attempts = tonumber(opts.attempts or config.attempts) or 2
-  local base_timeout = tonumber(opts.timeout or config.timeout) or 1.0
+  local attempts = opts.attempts or config.attempts
+  local base_timeout = opts.timeout or config.timeout
   local last_err
 
-  for attempt = 1, math.max(1, math.floor(attempts)) do
-    local timeout = math.min(base_timeout * (2 ^ (attempt - 1)), tonumber(opts.maximum_timeout or 5.0))
+  for attempt = 1, attempts do
+    local timeout = math.min(base_timeout * (2 ^ (attempt - 1)), opts.maximum_timeout or 5.0)
     for i = 1, #config.nameservers do
       local server = config.nameservers[i]
       local server_key = Address.key(server)
@@ -742,7 +838,7 @@ local function matching_records(message, owner, rtype)
 end
 
 function Resolver:resolve_type(name, qtype, opts)
-  opts = copy_table(opts)
+  opts = validate_query_options(opts, false)
   local normalised, name_err = normalise_name(name)
   if not normalised then
     return nil, name_err
@@ -759,15 +855,7 @@ function Resolver:resolve_type(name, qtype, opts)
 
   local original, current = normalised, normalised
   local visited, chain_ttl = {}, nil
-  local maximum_cnames = tonumber(opts.maximum_cnames or self.opts.maximum_cnames or 16)
-  if
-    not maximum_cnames
-    or maximum_cnames ~= math.floor(maximum_cnames)
-    or maximum_cnames < 0
-    or maximum_cnames > 64
-  then
-    return nil, invalid_argument('maximum_cnames must be an integer from 0 to 64', { value = maximum_cnames })
-  end
+  local maximum_cnames = opts.maximum_cnames or self.opts.maximum_cnames or 16
   local cname_hops = 0
 
   while true do
@@ -875,7 +963,7 @@ function Resolver:_candidate_names(host, opts)
     dots = dots + 1
   end
   local search = opts.search or self.opts.search or config.search or {}
-  local ndots = tonumber(opts.ndots or self.opts.ndots or config.ndots or 1)
+  local ndots = opts.ndots or self.opts.ndots or config.ndots or 1
   local names, seen = {}, {}
   local function add(value)
     if value ~= '' and not seen[value] then
@@ -935,7 +1023,7 @@ function Resolver:_resolve_candidate(name, port, family, opts)
     local family_name = qtype == Codec.TYPE_AAAA and 'inet6' or 'inet4'
     families[i] = family_name
     task_entries[family_name] = scope:spawn_op(function()
-      return self:resolve_type(name, qtype, opts)
+      return self:resolve_type(name, qtype, project(opts, QUERY_OPTIONS))
     end):label(resolver_label(self) .. ':' .. Codec.type_name(qtype))
   end
   local tasks = perform(Op.named_each(task_entries))
@@ -972,7 +1060,7 @@ function Resolver:_resolve_candidate(name, port, family, opts)
 end
 
 function Resolver:_resolve_endpoint(endpoint, opts)
-  opts = copy_table(opts)
+  opts = validate_query_options(opts, true)
   endpoint = Address.validate(endpoint, 'DNS resolver endpoint')
   if endpoint.kind ~= 'name' then
     return nil, invalid_argument('DNS resolver expects a name endpoint', { endpoint = endpoint })
@@ -1039,13 +1127,39 @@ function Resolver:_resolve_endpoint(endpoint, opts)
 end
 
 function Resolver:resolve_family(endpoint, family, opts)
-  opts = copy_table(opts)
-  opts.family = family
-  return self:_resolve_endpoint(endpoint, opts)
+  local checked = validate_query_options(opts, false)
+  checked.family = family
+  return self:_resolve_endpoint(endpoint, checked)
 end
 
 function Resolver:resolve(endpoint, opts)
   return self:_resolve_endpoint(endpoint, opts)
+end
+
+function Resolver.is(value)
+  return type(value) == 'table' and getmetatable(value) == Resolver
+end
+
+function Resolver.project_constructor_options(value)
+  return project(value, CONSTRUCTOR_OPTIONS)
+end
+
+function Resolver.project_query_options(value)
+  return project(value, QUERY_OPTIONS)
+end
+
+function Resolver.validate_constructor_options(value)
+  validate_constructor_options(value)
+  return true
+end
+
+function Resolver.validate_query_options(value)
+  validate_query_options(value, false)
+  return true
+end
+
+function Resolver.validate_options(value, extras, label)
+  return validate_options(value, extras, label or 'DNS options')
 end
 
 Resolver.parse_hosts = parse_hosts

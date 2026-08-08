@@ -11,18 +11,11 @@ local Closure = require('fibers.closure')
 local Runtime = require('fibers.runtime')
 local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
+local Contract = require('fibers.internal.contract')
 
 local Stream, Duplex = {}, {}
 Duplex.__index = Duplex
 local next_id = 0
-
-local function validate_options(opts, allowed, label)
-  for key in pairs(opts or {}) do
-    if not allowed[key] then
-      error((label or 'options') .. ' does not accept ' .. tostring(key), 3)
-    end
-  end
-end
 
 
 local function compose(opts)
@@ -59,7 +52,10 @@ local function compose(opts)
 end
 
 function Stream.compose(read_flow, write_flow, opts)
-  opts = opts or {}
+  opts = Contract.options(opts, { label = true, mode = true, kind = true }, 'Stream.compose options', 2)
+  if opts.label ~= nil then Contract.non_empty_string(opts.label, 'Stream.compose opts.label', 2) end
+  if opts.mode ~= nil then Contract.non_empty_string(opts.mode, 'Stream.compose opts.mode', 2) end
+  if opts.kind ~= nil then Contract.non_empty_string(opts.kind, 'Stream.compose opts.kind', 2) end
   if read_flow ~= nil and (type(read_flow) ~= 'table' or type(read_flow.outlet) ~= 'function') then
     error('Stream.compose read_flow must be a Flow or nil', 2)
   end
@@ -152,24 +148,6 @@ function Duplex:read_all_op(opts)
   return endpoint(self, 'read'):read_all_op(opts)
 end
 
-
-function Duplex:read_op(spec, opts)
-  if type(spec) == 'number' then
-    return self:read_some_op(spec)
-  end
-  if spec == '*l' or spec == '*L' then
-    local line_opts = {}
-    for key, value in pairs(opts or {}) do
-      line_opts[key] = value
-    end
-    line_opts.keep_terminator = spec == '*L'
-    return self:read_line_op(line_opts)
-  end
-  if spec == '*a' then
-    return self:read_all_op(opts)
-  end
-  error("stream read_op expects a byte count, '*l', '*L' or '*a'", 2)
-end
 
 local function write_bytes(...)
   local count = select('#', ...)
@@ -297,9 +275,9 @@ end
 
 
 function Stream.memory_pair(opts)
-  opts = opts or {}
-  validate_options(opts, { label = true, capacity = true }, 'Stream.memory_pair options')
+  opts = Contract.options(opts, { label = true, capacity = true }, 'Stream.memory_pair options', 2)
   local label = opts.label or 'memory-flow'
+  Contract.non_empty_string(label, 'Stream.memory_pair opts.label', 2)
   local ab = Flow.new(opts.capacity):label(label .. ':a->b')
   local ba = Flow.new(opts.capacity):label(label .. ':b->a')
   return Stream.compose(ba, ab, { label = label .. ':a', mode = 'memory' }),
@@ -308,8 +286,12 @@ end
 
 
 function Stream.merge_lines_op(streams, opts)
+  Contract.table(streams, 'Stream.merge_lines_op streams', 2)
   local entries = {}
-  for name, stream in pairs(streams or {}) do
+  for name, stream in pairs(streams) do
+    if type(stream) ~= 'table' or type(stream.read_line_op) ~= 'function' then
+      error('Stream.merge_lines_op entries must be Streams', 2)
+    end
     entries[name] = stream:read_line_op(opts):map(function(line, err)
       return name, line, err
     end)
@@ -323,6 +305,6 @@ function Stream.merge_lines_op(streams, opts)
 end
 Direct.install_static(Stream, { 'merge_lines' })
 
-Direct.install(Duplex, { 'read_some', 'read_exactly', 'read_until', 'read_line', 'read_all', 'read', 'write', 'write_some', 'flush', 'shutdown_read', 'shutdown_write', 'abort_write', 'close', 'abort', 'closed' })
+Direct.install(Duplex, { 'read_some', 'read_exactly', 'read_until', 'read_line', 'read_all', 'write', 'write_some', 'flush', 'shutdown_read', 'shutdown_write', 'abort_write', 'close', 'abort', 'closed' })
 
 return Stream

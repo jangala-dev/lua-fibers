@@ -56,15 +56,11 @@ function Fake.new(opts)
     host = opts.host,
     readiness = type(opts.readiness) == 'table' and opts.readiness or nil,
     feed = opts.feed,
-    capabilities = {
-      read = true,
-      write = true,
-      shutdown_read = true,
-      shutdown_write = true,
-      close = true,
-      set_nonblocking = false,
-      readiness = true,
-    },
+    read = function(self, maximum) return Fake.read(self, maximum) end,
+    write = function(self, bytes) return Fake.write(self, bytes) end,
+    shutdown_read = function(self, reason) return Fake.shutdown_read(self, reason) end,
+    shutdown_write = function(self, reason) return Fake.shutdown_write(self, reason) end,
+    close = function(self, reason) return Fake.close(self, reason) end,
   })
   setmetatable(self, Fake)
   self.input, self.output = {}, {}

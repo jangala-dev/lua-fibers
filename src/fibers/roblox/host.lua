@@ -5,8 +5,14 @@
 ---lazily: a manually advanced application needs only a clock and this queue.
 
 local Queue = require('fibers.embed.queue')
+local Contract = require('fibers.internal.contract')
 
 local RobloxHost = {}
+
+local HOST_OPTIONS = {
+  now = true, task = true, make_event = true, done_event = true,
+  on_external_error = true, label = true,
+}
 RobloxHost.__index = RobloxHost
 setmetatable(RobloxHost, { __index = Queue })
 
@@ -89,10 +95,18 @@ function RobloxHost.is_supported()
 end
 
 function RobloxHost.new(opts)
-  opts = opts or {}
+  opts = Contract.options(opts, HOST_OPTIONS, 'RobloxHost.new options', 2)
+  Contract.optional_function(opts.now, 'RobloxHost.new opts.now', 2)
+  Contract.optional_function(opts.on_external_error, 'RobloxHost.new opts.on_external_error', 2)
+  if opts.label ~= nil then Contract.non_empty_string(opts.label, 'RobloxHost.new opts.label', 2) end
+  if opts.task ~= nil and opts.task ~= false and type(opts.task) ~= 'table' then
+    error('RobloxHost.new opts.task must be a task adapter, false, or nil', 2)
+  end
+  if opts.make_event ~= nil and opts.make_event ~= false and type(opts.make_event) ~= 'function' then
+    error('RobloxHost.new opts.make_event must be a function, false, or nil', 2)
+  end
   local self = Queue.new({
     kind = 'roblox',
-    name = 'roblox',
     family = 'roblox',
     now = opts.now or default_now,
     capabilities = {
@@ -102,6 +116,7 @@ function RobloxHost.new(opts)
       poller = false,
     },
     on_external_error = opts.on_external_error,
+    label = opts.label,
   })
   self._task = opts.task
   if self._task == nil then self._task = default_task() end
@@ -163,8 +178,7 @@ function RobloxHost:wait_done(timeout)
   if self._done then return true, self._done_value end
   local task_api = self:require_task()
   local done_event = self:_completion_event()
-  timeout = tonumber(timeout)
-  if timeout ~= nil and timeout < 0 then timeout = 0 end
+  if timeout ~= nil then Contract.non_negative_number(timeout, 'RobloxHost:wait_done timeout', 2) end
 
   local timed_out = false
   local timer

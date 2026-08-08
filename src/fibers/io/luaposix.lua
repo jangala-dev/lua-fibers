@@ -113,7 +113,10 @@ local function decode(value, family)
     return Address.ipv4(value.addr or value.host, tonumber(value.port) or 0)
   end
   if family == AF.inet6 or family == 'inet6' then
-    return Address.ipv6(value.addr or value.host, tonumber(value.port) or 0, value)
+    return Address.ipv6(value.addr or value.host, tonumber(value.port) or 0, {
+      flowinfo = value.flowinfo,
+      scope_id = value.scope_id,
+    })
   end
   if family == AF.unix or family == 'unix' then
     return Address.decode_unix(value.path or value.addr or value.host)

@@ -1,6 +1,7 @@
 ---Roblox scheduling above the generic embedded Application boundary.
 
 local Base = require('fibers.embed.application')
+local Contract = require('fibers.internal.contract')
 
 local Application = {}
 Application.__index = Application
@@ -18,19 +19,21 @@ local function safe_disconnect(connection)
   end
 end
 
-local function copy(value)
-  local out = {}
-  for key, item in pairs(value or {}) do out[key] = item end
-  return out
-end
+local APP_OPTIONS = {
+  host = true, label = true, closure = true, runtime_options = true, owns_host = true,
+  max_steps_per_turn = true, max_work_per_step = true, max_external_per_turn = true,
+  max_seconds_per_turn = true, on_status = true,
+}
+
+local ATTACH_OPTIONS = { scheduling = true, phase = true, run_service = true, phase_always = true }
 
 function Application.new(fn, opts)
-  opts = copy(opts)
+  opts = Contract.options(opts, APP_OPTIONS, 'Roblox Application options', 2)
   local host = opts.host
   if type(host) ~= 'table' or host.kind ~= 'roblox' then
     error('Roblox.prepare requires a fibers.roblox.host host', 2)
   end
-  opts.label = 'Roblox.prepare'
+  opts.label = opts.label or 'Roblox.prepare'
   opts.application_marker = '_fibers_roblox_application'
   opts.status_marker = '_fibers_roblox_status'
   local self = Base.new(fn, opts)
@@ -44,7 +47,6 @@ function Application.new(fn, opts)
   self._reschedule = false
   self._phase_requested = false
   self._scheduling = nil
-  self.on_turn_error = opts.on_turn_error
   return setmetatable(self, Application)
 end
 
@@ -188,7 +190,14 @@ end
 ---selected RunService phase, still deferring the solver until ordinary signal
 ---handlers at that resumption point have queued their observations.
 function Application:attach(opts)
-  opts = opts or {}
+  opts = Contract.options(opts, ATTACH_OPTIONS, 'Roblox Application:attach options', 2)
+  Contract.optional_boolean(opts.phase_always, 'Roblox Application:attach opts.phase_always', 2)
+  if opts.scheduling ~= nil and opts.scheduling ~= 'event' and opts.scheduling ~= 'phase' then
+    error('Roblox scheduling must be "event" or "phase"', 2)
+  end
+  if opts.phase ~= nil and type(opts.phase) ~= 'string' and type(opts.phase) ~= 'table' and type(opts.phase) ~= 'userdata' then
+    error('Roblox Application:attach opts.phase must be a phase name or signal', 2)
+  end
   if self._closed then
     error('cannot attach a closed Roblox application', 2)
   end
@@ -196,9 +205,6 @@ function Application:attach(opts)
     return self
   end
   local scheduling = opts.scheduling or 'event'
-  if scheduling ~= 'event' and scheduling ~= 'phase' then
-    error('Roblox scheduling must be "event" or "phase"', 2)
-  end
   self._task = self.host:require_task()
   self._attached = true
   self._scheduling = scheduling

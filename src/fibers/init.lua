@@ -11,16 +11,42 @@ local Scope = require('fibers.scope')
 local perform = require('fibers.perform')
 local ScopeOutcome = require('fibers.scope.outcome')
 local Execution = require('fibers.internal.execution')
+local Contract = require('fibers.internal.contract')
 
 local M = { perform = perform }
 
+local RUNTIME_OPTION_KEYS = {
+  instrumentation = true,
+  quiet_deadlock = true,
+  search_limit = true,
+  search_total_limit = true,
+  search_trail_limit = true,
+  search_depth_limit = true,
+  cycle_work_limit = true,
+  cycle_focus_limit = true,
+  choice_seed = true,
+}
+
+local TRY_RUN_OPTIONS = {
+  host = true,
+  now = true,
+  label = true,
+  closure = true,
+  run = true,
+  host_options = true,
+  max_iterations = true,
+}
+for key in pairs(RUNTIME_OPTION_KEYS) do
+  TRY_RUN_OPTIONS[key] = true
+end
 
 local function runtime_options(opts, host)
-  local runtime_opts = {}
-  for key, value in pairs(opts or {}) do
-    runtime_opts[key] = value
+  local runtime_opts = { host = host }
+  for key in pairs(RUNTIME_OPTION_KEYS) do
+    if opts[key] ~= nil then
+      runtime_opts[key] = opts[key]
+    end
   end
-  runtime_opts.host = host
   return runtime_opts
 end
 
@@ -38,7 +64,7 @@ local function default_host(opts)
 end
 
 function M.try_run(fn, opts)
-  opts = opts or {}
+  opts = Contract.options(opts, TRY_RUN_OPTIONS, 'fibers.try_run options', 2)
   if type(fn) ~= 'function' then
     error('fibers.try_run expects a function', 2)
   end
@@ -189,9 +215,9 @@ end
 
 function M.try_scope(opts, fn)
   if type(opts) == 'function' then
-    fn, opts = opts, {}
+    fn, opts = opts, nil
   end
-  opts = opts or {}
+  opts = Contract.options(opts, { closure = true, label = true }, 'fibers.try_scope options', 2)
   if type(fn) ~= 'function' then
     error('fibers.try_scope expects a function', 2)
   end
@@ -213,7 +239,7 @@ function M.scope(opts, fn)
   if type(opts) == 'function' then
     fn, opts = opts, {}
   end
-  return M.try_scope(opts or {}, fn):raise()
+  return M.try_scope(opts, fn):raise()
 end
 
 return M

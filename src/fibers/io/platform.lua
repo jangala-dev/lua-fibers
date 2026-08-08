@@ -7,6 +7,7 @@
 ---an apparently valid composition cannot silently stall.
 
 local Label = require('fibers.internal.label')
+local Contract = require('fibers.internal.contract')
 
 local Platform = {}
 Platform.__index = Platform
@@ -37,18 +38,10 @@ local PLATFORM_OPTIONS = {
   label = true,
   family = true,
   owns_providers = true,
-  capabilities = true,
 }
 
 local function validate_keys(value, allowed, label, level)
-  if value ~= nil and type(value) ~= 'table' then
-    error(label .. ' must be a table', level or 3)
-  end
-  for key in pairs(value or {}) do
-    if not allowed[key] then
-      error(label .. ' does not accept ' .. tostring(key), level or 3)
-    end
-  end
+  Contract.options(value, allowed, label, level or 3)
 end
 
 local METHOD_SLOTS = {
@@ -137,11 +130,27 @@ local function install_method(platform, method, provider)
   return false
 end
 
-local function copy_capability(dst, provider, name, fallback)
+local function provider_contract(provider, methods, label, required)
+  if provider == nil then return false end
+  if type(provider) ~= 'table' then error(label .. ' provider must be a table', 3) end
+  local present = 0
+  for i = 1, #methods do
+    if type(provider[methods[i]]) == 'function' then present = present + 1 end
+  end
+  if present ~= #methods and (required or present ~= 0) then
+    error(label .. ' provider does not implement its complete method contract', 3)
+  end
+  return present == #methods
+end
+
+local function copy_declared(dst, provider, names)
   local capabilities = type(provider) == 'table' and provider.capabilities or nil
-  local value = capabilities and capabilities[name]
-  if value == nil then value = fallback end
-  if value ~= nil and value ~= false then dst[name] = value end
+  if type(capabilities) ~= 'table' then return end
+  for i = 1, #names do
+    local name = names[i]
+    local value = capabilities[name]
+    if value ~= nil and value ~= false then dst[name] = value end
+  end
 end
 
 local function add_unique(out, seen, value)
@@ -152,19 +161,24 @@ local function add_unique(out, seen, value)
 end
 
 function Platform.new(opts)
-  opts = opts or {}
-  validate_keys(opts, PLATFORM_OPTIONS, 'fibers.io.platform options', 2)
+  opts = Contract.options(opts, PLATFORM_OPTIONS, 'fibers.io.platform options', 2)
   validate_keys(opts.providers, SLOT_SET, 'fibers.io.platform providers', 2)
+  Contract.optional_boolean(opts.allow_mixed_wait_domains, 'allow_mixed_wait_domains', 2)
+  Contract.optional_boolean(opts.owns_providers, 'owns_providers', 2)
+  if opts.compatible_wait_domains ~= nil
+      and type(opts.compatible_wait_domains) ~= 'table'
+      and type(opts.compatible_wait_domains) ~= 'function' then
+    error('compatible_wait_domains must be a table, function or nil', 2)
+  end
+  if opts.backend ~= nil and type(opts.backend) ~= 'table' then
+    error('fibers.io.platform backend must be a provider table or nil', 2)
+  end
   local providers = {}
   for i = 1, #SLOTS do
     local slot = SLOTS[i]
     providers[slot] = provider_for(opts, slot)
   end
 
-  providers.wait = providers.wait or providers.clock
-  providers.clock = providers.clock or providers.wait
-  providers.readiness = providers.readiness or providers.wait
-  providers.descriptor = providers.descriptor or providers.socket or providers.pipe
 
   if type(providers.clock) ~= 'table' or type(providers.clock.now) ~= 'function' then
     error('fibers.io.platform requires a clock provider with now()', 2)
@@ -217,36 +231,33 @@ function Platform.new(opts)
 
   platform.fd = providers.descriptor and providers.descriptor.fd or nil
   platform.capabilities.time = true
-  copy_capability(
-    platform.capabilities,
-    providers.readiness,
-    'readiness',
-    type(platform.set_readiness) == 'function' or nil
-  )
-  if platform.create_pipe then platform.capabilities.pipe = true end
-  if platform.create_listener or platform.start_dial then
+
+  local explicit = opts.providers or {}
+  if provider_contract(providers.readiness, { 'set_readiness' }, 'readiness', explicit.readiness ~= nil) then
+    platform.capabilities.readiness = true
+  end
+  if provider_contract(providers.pipe, { 'create_pipe' }, 'pipe', explicit.pipe ~= nil) then
+    platform.capabilities.pipe = true
+  end
+  if provider_contract(providers.socket, { 'create_listener', 'start_dial' }, 'socket', explicit.socket ~= nil) then
     platform.capabilities.socket = true
-    for _, name in ipairs({ 'socket_ipv4', 'socket_ipv6', 'socket_unix' }) do
-      copy_capability(platform.capabilities, providers.socket, name)
-    end
+    copy_declared(platform.capabilities, providers.socket, { 'socket_ipv4', 'socket_ipv6', 'socket_unix' })
   end
-  if platform.create_datagram then platform.capabilities.datagram = true end
-  if platform.resolve then
+  if provider_contract(providers.datagram, { 'create_datagram' }, 'datagram', explicit.datagram ~= nil) then
+    platform.capabilities.datagram = true
+    copy_declared(platform.capabilities, providers.datagram, { 'datagram_truncation' })
+  end
+  if provider_contract(providers.resolver, { 'resolve' }, 'resolver', explicit.resolver ~= nil) then
     platform.capabilities.resolver = true
-    copy_capability(platform.capabilities, providers.resolver, 'resolver_blocking')
+    copy_declared(platform.capabilities, providers.resolver, { 'resolver_blocking' })
   end
-  if platform.start_process then
+  if provider_contract(providers.process, { 'start_process' }, 'process', explicit.process ~= nil) then
     platform.capabilities.process = true
-    for _, name in ipairs({ 'process_close_fds', 'process_groups' }) do
-      copy_capability(platform.capabilities, providers.process, name)
-    end
+    copy_declared(platform.capabilities, providers.process, { 'process_close_fds', 'process_groups' })
   end
-  if platform.file_provider then
+  if provider_contract(providers.file, { 'file_provider' }, 'file', explicit.file ~= nil) then
     platform.capabilities.file = true
-    copy_capability(platform.capabilities, providers.file, 'file_backend')
-  end
-  for name, value in pairs(opts.capabilities or {}) do
-    if value ~= false and value ~= nil then platform.capabilities[name] = value end
+    copy_declared(platform.capabilities, providers.file, { 'file_backend' })
   end
 
   local close_order, seen = {}, {}
@@ -270,8 +281,14 @@ end
 
 
 function Platform.from(provider, opts)
+  local from_options = {
+    allow_mixed_wait_domains = true, compatible_wait_domains = true,
+    kind = true, label = true, family = true, owns_providers = true,
+  }
+  opts = Contract.options(opts, from_options, 'fibers.io.platform.from options', 2)
+  if type(provider) ~= 'table' then error('fibers.io.platform.from provider must be a table', 2) end
   local out = {}
-  for key, value in pairs(opts or {}) do out[key] = value end
+  for key, value in pairs(opts) do out[key] = value end
   out.backend = provider
   return Platform.new(out)
 end

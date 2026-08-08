@@ -17,7 +17,7 @@ local Search = {}
 Search.__index = Search
 local EMPTY = {}
 local ORDER_MOD, ORDER_MUL = 2147483647, 48271
-local function order_residue(value) return math.floor(tonumber(value) or 0) % ORDER_MOD end
+local function order_residue(value) return value % ORDER_MOD end
 local function order_step(state, salt) return (state * ORDER_MUL + order_residue(salt)) % ORDER_MOD end
 local function choice_indices(engine, task, occurrence, count, generation)
   local order = {}

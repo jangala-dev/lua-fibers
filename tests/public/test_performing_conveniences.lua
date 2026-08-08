@@ -84,7 +84,6 @@ do
     'read_until',
     'read_line',
     'read_all',
-    'read',
     'write',
     'write_some',
     'flush',
@@ -218,7 +217,7 @@ do
     local reader, writer = file.pipe({ label = 'direct-pipe' })
     writer:write('one', ' ', 'line\n')
     writer:close('done')
-    assert_eq(reader:read('*l'), 'one line')
+    assert_eq(reader:read_line(), 'one line')
     reader:close('done')
 
     local listener = assert(socket.listen_inet('127.0.0.1', 0, { label = 'direct-listener' }))

@@ -9,6 +9,7 @@ local Handle = require('fibers.io.handle')
 local IOError = require('fibers.io.error')
 local WaitSet = require('fibers.embed.wait_set')
 local Address = require('fibers.net.address')
+local Contract = require('fibers.internal.contract')
 
 local Posix = {}
 
@@ -53,8 +54,8 @@ local function make_fd(binding)
   local operations = {}
 
   function operations.read(self, maximum)
-    maximum = tonumber(maximum) or 4096
-    if maximum <= 0 then
+    maximum = Contract.non_negative_integer(maximum, 'host descriptor read maximum', 3)
+    if maximum == 0 then
       return ''
     end
     while true do
@@ -102,9 +103,6 @@ local function make_fd(binding)
   end
 
   function operations.shutdown_read(self)
-    if not raw.shutdown then
-      return true
-    end
     local ok, errno, message = raw.shutdown(self.handle, 'read')
     if ok or is_error(binding, 'not_socket', errno) or is_error(binding, 'not_connected', errno) then
       return true
@@ -113,9 +111,6 @@ local function make_fd(binding)
   end
 
   function operations.shutdown_write(self)
-    if not raw.shutdown then
-      return true
-    end
     local ok, errno, message = raw.shutdown(self.handle, 'write')
     if ok or is_error(binding, 'not_socket', errno) or is_error(binding, 'not_connected', errno) then
       return true
@@ -136,7 +131,8 @@ local function make_fd(binding)
   end
 
   function operations.set_nonblocking(self, value)
-    local ok, errno, message = raw.set_nonblocking(self.handle, value ~= false)
+    Contract.boolean(value, 'host descriptor nonblocking', 3)
+    local ok, errno, message = raw.set_nonblocking(self.handle, value)
     if not ok then
       return nil, error_detail(binding, errno, message), errno
     end
@@ -147,25 +143,41 @@ local function make_fd(binding)
     return raw.supported == nil or raw.supported()
   end
 
+  local FD_OPTIONS = {
+    host = true, key = true, label = Contract.non_empty_string,
+    readable = Contract.boolean, writable = Contract.boolean,
+    cloexec = Contract.boolean, nonblocking = Contract.boolean,
+  }
+
   function Fd.new(value, opts)
-    opts = opts or {}
+    opts = Contract.record(opts, FD_OPTIONS, binding.name .. ' fd options', 2)
     value = (raw.validate or function(v)
       return assert(v, 'native descriptor required')
     end)(value)
     generation = generation + 1
     local poll_value = raw.poll_value and raw.poll_value(value) or value
     local number = raw.number and raw.number(value) or nil
+    local readable = opts.readable ~= false
+    local writable = opts.writable ~= false
+    local has_shutdown = type(raw.shutdown) == 'function'
+      and (raw.supports_shutdown == nil or raw.supports_shutdown(value) == true)
+    local has_nonblocking = type(raw.set_nonblocking) == 'function'
+      and (raw.supports_nonblocking == nil or raw.supports_nonblocking(value) == true)
+    if type(raw.close) ~= 'function'
+        or (raw.supports_close ~= nil and raw.supports_close(value) ~= true) then
+      error('host binding produced a descriptor without close support', 2)
+    end
     local handle = Handle.new({
       label = opts.label or (binding.name .. '-fd-' .. tostring(number or poll_value)),
       key = opts.key or { family = binding.family, poll = poll_value, number = number, generation = generation },
       handle = value,
       host = opts.host,
-      read = operations.read,
-      write = operations.write,
-      shutdown_read = operations.shutdown_read,
-      shutdown_write = operations.shutdown_write,
+      read = readable and operations.read or nil,
+      write = writable and operations.write or nil,
+      shutdown_read = readable and has_shutdown and operations.shutdown_read or nil,
+      shutdown_write = writable and has_shutdown and operations.shutdown_write or nil,
       close = operations.close,
-      set_nonblocking = operations.set_nonblocking,
+      set_nonblocking = has_nonblocking and operations.set_nonblocking or nil,
     })
     handle.family, handle.generation = binding.family, generation
     if number ~= nil then
@@ -191,8 +203,10 @@ local function make_fd(binding)
     return handle
   end
 
+  local PIPE_OPTIONS = { host = true, label = Contract.non_empty_string, nonblocking = Contract.boolean }
+
   function Fd.pipe(opts)
-    opts = opts or {}
+    opts = Contract.record(opts, PIPE_OPTIONS, binding.name .. ' pipe options', 2)
     local reader_raw, writer_raw, errno, message = raw.pipe(opts.host)
     if not reader_raw then
       return nil, nil, system_error(binding, 'pipe', 'create', errno, message), errno
@@ -201,6 +215,7 @@ local function make_fd(binding)
       host = opts.host,
       label = opts.label and (opts.label .. ':read') or nil,
       nonblocking = opts.nonblocking,
+      writable = false,
     })
     if not reader then
       pcall(raw.close, writer_raw)
@@ -210,13 +225,12 @@ local function make_fd(binding)
       host = opts.host,
       label = opts.label and (opts.label .. ':write') or nil,
       nonblocking = opts.nonblocking,
+      readable = false,
     })
     if not writer then
       reader:close('paired pipe wrap failed')
       return nil, nil, write_err
     end
-    reader.capabilities.write, reader.capabilities.shutdown_write = false, false
-    writer.capabilities.read, writer.capabilities.shutdown_read = false, false
     return reader, writer
   end
 
@@ -273,10 +287,10 @@ local function make_network(binding, Fd)
     end
     handle.family, handle.socket_family = binding.family .. '-socket', family
     handle.local_address = function(self)
-      return query(raw_of(self), false, family)
+      return self._local_address_value or query(raw_of(self), false, family)
     end
-    handle.peer_address_value = function(self)
-      return query(raw_of(self), true, family)
+    handle.peer_address = function(self)
+      return self._peer_address_value or query(raw_of(self), true, family)
     end
     return handle
   end
@@ -291,7 +305,7 @@ local function make_network(binding, Fd)
     return net.supports('unix')
   end
   function Network.create_listener(host, address, opts)
-    opts = opts or {}
+    local backlog = opts.backlog == nil and 128 or opts.backlog
     local endpoint, err = net.encode(address)
     if not endpoint then
       return nil, err
@@ -323,7 +337,7 @@ local function make_network(binding, Fd)
     if not ok then
       return close_failed(handle, socket_error('bind', errno, message, { address = address }))
     end
-    ok, errno, message = net.listen(value, tonumber(opts.backlog) or 128)
+    ok, errno, message = net.listen(value, backlog)
     if not ok then
       return close_failed(handle, socket_error('listen', errno, message, { address = address }))
     end
@@ -371,8 +385,8 @@ local function make_network(binding, Fd)
         end
       end
       peer = net.decode(peer, endpoint.family) or query(child_raw, true, endpoint.family)
-      child.peer_address = peer
-      child.local_address_value = query(child_raw, false, endpoint.family)
+      child._peer_address_value = peer
+      child._local_address_value = query(child_raw, false, endpoint.family)
       if net.prime then
         net.prime(child)
       end
@@ -382,7 +396,6 @@ local function make_network(binding, Fd)
   end
 
   function Network.start_dial(host, address, opts)
-    opts = opts or {}
     local endpoint, err = net.encode(address)
     if not endpoint then
       return nil, err
@@ -477,7 +490,6 @@ local function make_network(binding, Fd)
     end
 
     function Network.create_datagram(host, address, opts)
-      opts = opts or {}
       local endpoint, err = net.encode(address)
       if not endpoint then
         return nil, err
@@ -690,7 +702,7 @@ function Posix.define(binding)
   end
 
   function Module.new(opts)
-    opts = opts or {}
+    Contract.record(opts, {}, binding.name .. ' host options', 2)
     if not Module.is_supported() then
       error(prefix .. ': ' .. tostring(Module.support_reason()), 2)
     end
@@ -715,10 +727,11 @@ function Posix.define(binding)
 
   if features.fd then
     function Host:create_pipe(opts)
+      if opts == nil then opts = {} end
       return Fd.pipe({
         host = self,
-        label = opts and opts.label,
-        nonblocking = opts == nil or opts.nonblocking ~= false,
+        label = opts.label,
+        nonblocking = opts.nonblocking == nil and true or opts.nonblocking,
       })
     end
   end

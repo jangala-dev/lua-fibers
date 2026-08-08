@@ -135,7 +135,7 @@ do
 
     local server = scope:spawn(function()
       local connection = assert(listener:accept())
-      assert_eq(connection:read(1), 'x')
+      assert_eq(connection:read_some(1), 'x')
       connection:close('server complete')
     end):label('resolver-echo-server')
 

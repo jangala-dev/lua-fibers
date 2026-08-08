@@ -19,6 +19,7 @@ local Scope = require('fibers.scope')
 local perform = require('fibers.perform')
 local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
+local Contract = require('fibers.internal.contract')
 
 local ListenerLifecycle = Lifecycle.define({
   prefix = 'socket.listener',
@@ -32,6 +33,31 @@ local Module = {}
 local Listener = {}
 Listener.__index = Listener
 local next_listener = 0
+
+local LISTEN_OPTIONS = {
+  scope = true, host = true, label = Contract.non_empty_string,
+  accept_capacity = Contract.positive_integer, backlog = Contract.positive_integer,
+  reuse_address = Contract.boolean, unlink_existing = Contract.boolean,
+  unlink_on_close = Contract.boolean, nodelay = Contract.boolean,
+  capacity = Contract.positive_integer, read_capacity = Contract.positive_integer,
+  write_capacity = Contract.positive_integer, chunk_size = Contract.positive_integer,
+  read_chunk_size = Contract.positive_integer, write_chunk_size = Contract.positive_integer,
+}
+
+local function validate_listen_options(opts)
+  return IO.copy_table(Contract.record(opts, LISTEN_OPTIONS, 'socket.listen_op options', 3))
+end
+
+local function host_listener_options(opts)
+  return {
+    label = opts.label,
+    reuse_address = opts.reuse_address,
+    unlink_existing = opts.unlink_existing,
+    unlink_on_close = opts.unlink_on_close,
+    backlog = opts.backlog,
+    nodelay = opts.nodelay,
+  }
+end
 
 local function close_socket(value, reason)
   return IO.close_value('socket', value, reason)
@@ -197,7 +223,7 @@ local function accepted_offers(listener, opts)
 end
 
 function Module.listen_op(address, opts)
-  opts = IO.copy_table(opts)
+  opts = validate_listen_options(opts)
   local scope = IO.current_scope(opts, 'socket.listen_op')
   next_listener = next_listener + 1
   local id = 'listener-' .. tostring(next_listener)
@@ -228,7 +254,7 @@ function Module.listen_op(address, opts)
     local active, activation_err = Activation.create(listener, {
       host = opts.host,
       host_method = 'create_listener',
-      options = opts,
+      options = host_listener_options(opts),
       lifecycle = listener.lifecycle,
       hold = listener.host_hold,
       hold_key = 'listener',

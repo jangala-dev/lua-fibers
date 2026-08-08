@@ -15,6 +15,7 @@ local Closure = require('fibers.closure')
 local ScopeResult = require('fibers.scope.outcome').Result
 local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
+local Contract = require('fibers.internal.contract')
 
 local unpack_ = table.unpack or unpack
 
@@ -82,7 +83,16 @@ Task.__index = Task
 
 function Task._new(fn, parent_scope, opts)
   if type(fn) ~= 'function' then error('Task creation expects a function', 2) end
-  opts = opts or {}
+  opts = Contract.options(opts, {
+    lifetime = true,
+    label = true,
+    closure = true,
+    body_result_owner = true,
+  }, 'Task._new options', 2)
+  local body_result_owner = opts.body_result_owner or 'task'
+  if body_result_owner ~= 'task' and body_result_owner ~= 'scope' then
+    error("Task._new body_result_owner must be 'task' or 'scope'", 2)
+  end
   local life = opts.lifetime
   if life ~= nil and not Lifetime.is(life) then
     error('Task lifetime must be a Lifetime', 2)
@@ -90,20 +100,26 @@ function Task._new(fn, parent_scope, opts)
   if not life then
     life = Lifetime.task(fn, {
       label = opts.label,
-      closure = Closure.running(opts.closure or (parent_scope and parent_scope.closure)),
+      closure = Closure.running(Closure.propagation(opts.closure or (parent_scope and parent_scope.closure))),
     })
   else
-    if life.body and life.body ~= fn then error('Lifetime already has another body', 2) end
+    if life.has_body or life.body ~= nil then
+      error('Lifetime already has a body', 2)
+    end
     life.body = fn
     life.has_body = true
     local propagation = opts.closure or (parent_scope and parent_scope.closure)
     if not life.closure or life.closure.name == 'none' then
-      life.closure = Closure.running(propagation)
+      life.closure = Closure.running(Closure.propagation(propagation))
     else
-      life.closure = Closure.combine(life.closure, propagation)
+      life.closure = Closure.combine(life.closure, Closure.propagation(propagation))
     end
   end
-  return setmetatable({ _lifetime = life, _fibers_task = true }, Task)
+  return setmetatable({
+    _lifetime = life,
+    _fibers_task = true,
+    _body_result_owner = body_result_owner,
+  }, Task)
 end
 
 function Task.is(value)
@@ -139,9 +155,9 @@ local function exit_from_protected(results)
 end
 
 -- Publish the execution result at the point where the user's Task body exits,
--- not after the Scope sharing this Lifetime has retired its descendants. The
--- publish is one-shot: the outer Task runner may call this again as a fallback
--- if setup failed before the user's body was entered.
+-- not after the Scope sharing this Lifetime has retired its descendants.
+-- Publication is strict and exactly once; a second publication is an invariant
+-- violation rather than an idempotent compatibility path.
 function Task:_publish_protected_body_result(results, runtime)
   local rt = runtime or Runtime.current()
   if not rt then error('task body result published without a current runtime', 2) end
@@ -157,7 +173,14 @@ function Task:_spawn_body(fn)
     if not rt then error('task started without a current runtime', 2) end
     local results = pack(Protected.pcall(fn, task))
     fn = nil
-    task:_publish_protected_body_result(results, rt)
+    if task._body_result_owner == 'task' then
+      task:_publish_protected_body_result(results, rt)
+    else
+      local state = rt:perform(task._lifetime.body_result:read_op(), { masked = true })
+      if type(state) ~= 'table' or state.status ~= 'done' then
+        error('Scope-backed Task returned without publishing its body result', 0)
+      end
+    end
   end
 end
 

@@ -261,6 +261,8 @@ handle:shutdown_write(reason)  -- optional
 handle:close(reason)           -- mandatory
 ```
 
+For a concrete `HostHandle`, this callback set is the capability record: there is no second Boolean capability table to keep in agreement. `supports(name)` reports whether the corresponding callback exists; readiness is intrinsic.
+
 `read` and `write` must be non-blocking. Facility-supplied offer pulls are
 stricter: they are bounded, non-yielding callbacks which receive the registered
 handle explicitly and may perform one authoritative host interaction. They may

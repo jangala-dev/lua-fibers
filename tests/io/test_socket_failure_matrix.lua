@@ -50,14 +50,6 @@ local function pending_dial_host()
       handle = Handle.new({
         label = (opts and opts.label or 'pending-dial') .. ':gate',
         host = self,
-        capabilities = {
-          read = true,
-          write = true,
-          shutdown_read = true,
-          shutdown_write = true,
-          close = true,
-          readiness = true,
-        },
         read = function(_self, max)
           return connected:read(max)
         end,

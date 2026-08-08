@@ -11,6 +11,7 @@ local Label = require('fibers.internal.label')
 local IOError = require('fibers.io.error')
 local IO = require('fibers.io.facility')
 local perform = require('fibers.perform')
+local Contract = require('fibers.internal.contract')
 
 local RFC_MINIMUM_ATTEMPT_DELAY = 0.010
 local DEFAULT_CONNECT_TIMEOUT = 30.0
@@ -18,25 +19,35 @@ local DEFAULT_MAXIMUM_CANDIDATES = 64
 
 local function finite_nonnegative(value, fallback, name, level)
   if value == nil then return fallback end
-  value = tonumber(value)
-  if not value or value ~= value or value == math.huge or value == -math.huge or value < 0 then
-    error(name .. ' must be a finite non-negative number', level or 3)
-  end
-  return value
+  return Contract.non_negative_number(value, name, level or 3)
 end
 
 local function positive_integer(value, fallback, name, level)
   if value == nil then return fallback end
-  value = tonumber(value)
-  if not value or value ~= math.floor(value) or value < 1 then
-    error(name .. ' must be a positive integer', level or 3)
-  end
-  return value
+  return Contract.positive_integer(value, name, level or 3)
 end
 
 local Named = { name = 'happy_eyeballs_v2' }
 
+local NAMED_OPTIONS = {
+  scope = true, host = true, label = Contract.non_empty_string,
+  nodelay = Contract.boolean, local_address = true, local_address_inet4 = true,
+  local_address_inet6 = true, resolution_delay = true, attempt_delay = true,
+  first_family_count = true, maximum_candidates = true, maximum_active_attempts = true,
+  attempt_timeout = true, timeout = true, deadline = true, destination_ordering = true,
+  order_destinations = Contract.func, resolver = true, resolver_options = Contract.table,
+  dns = Contract.boolean, nameservers = Contract.table,
+  capacity = Contract.positive_integer, read_capacity = Contract.positive_integer,
+  write_capacity = Contract.positive_integer, chunk_size = Contract.positive_integer,
+  read_chunk_size = Contract.positive_integer, write_chunk_size = Contract.positive_integer,
+}
+
+local function validate_named_contract(opts)
+  return Contract.record(opts, NAMED_OPTIONS, 'socket.dial_op options', 3)
+end
+
 function Named.normalise_options(opts, endpoint)
+  opts = validate_named_contract(opts)
   local out = IO.copy_table(opts)
   out.endpoint = endpoint
   out.resolution_delay = finite_nonnegative(out.resolution_delay, 0.050, 'resolution_delay')
@@ -62,9 +73,6 @@ function Named.normalise_options(opts, endpoint)
   end
   if out.destination_ordering ~= nil and out.destination_ordering ~= 'stable' then
     error("destination_ordering must be 'stable' when supplied", 3)
-  end
-  if out.order_destinations ~= nil and type(out.order_destinations) ~= 'function' then
-    error('order_destinations must be a function', 3)
   end
   return out
 end

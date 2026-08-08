@@ -7,6 +7,7 @@ local Context = require('fibers.internal.context')
 local Engine = require('fibers.internal.engine')
 local Execution = require('fibers.internal.execution')
 local Label = require('fibers.internal.label')
+local Contract = require('fibers.internal.contract')
 
 local function require_optional(module_name, feature)
   local ok, module = pcall(require, module_name)
@@ -215,11 +216,34 @@ function Runtime:_call_contract_in_phase(name, kind, fn, ...)
   })
 end
 
+local function instrumentation_option(value, label, level)
+  if value ~= true and value ~= false and type(value) ~= 'table' then
+    error(label .. ' must be true, false, a table or nil', level or 3)
+  end
+  return value
+end
+
+local RUNTIME_OPTIONS = {
+  host = Contract.table,
+  instrumentation = instrumentation_option,
+  quiet_deadlock = Contract.boolean,
+  search_limit = Contract.positive_integer,
+  search_total_limit = Contract.positive_integer,
+  search_trail_limit = Contract.positive_integer,
+  search_depth_limit = Contract.positive_integer,
+  cycle_work_limit = Contract.positive_integer,
+  cycle_focus_limit = Contract.positive_integer,
+  choice_seed = Contract.integer,
+}
+
 function Runtime.new(opts)
-  opts = opts or {}
+  opts = Contract.record(opts, RUNTIME_OPTIONS, 'Runtime options', 2)
   local instrumentation
-  if opts.instrumentation then
-    if type(opts.instrumentation) == 'table' and type(opts.instrumentation.inc) == 'function' then
+  if opts.instrumentation == true then
+    local Instrumentation = require_optional('fibers.diagnostics.search', 'Runtime instrumentation')
+    instrumentation = Instrumentation.new(true)
+  elseif type(opts.instrumentation) == 'table' then
+    if type(opts.instrumentation.inc) == 'function' then
       instrumentation = opts.instrumentation
     else
       local Instrumentation = require_optional('fibers.diagnostics.search', 'Runtime instrumentation')
@@ -459,7 +483,10 @@ function Runtime:_start_one()
 end
 
 
+local DRIVER_OPTIONS = { max_work = Contract.positive_integer }
+
 local function driver_call(self, action, opts)
+  opts = Contract.record(opts, DRIVER_OPTIONS, 'Runtime driver options', 3)
   self:_check_not_failed(2)
   self:_require_driver_call(action, 2)
   local result = phase_pcall(self, 'driver', self.engine.advance, self.engine, action, opts)

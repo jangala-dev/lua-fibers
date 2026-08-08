@@ -12,6 +12,7 @@
 -- became live again.
 
 local Op = require('fibers.op')
+local Contract = require('fibers.internal.contract')
 local Lifetime = require('fibers.lifetime')
 local Runtime = require('fibers.runtime')
 local StateMachine = require('fibers.resource.machine')
@@ -235,9 +236,6 @@ local function require_context(ctx)
 end
 
 local function ensure_op(op, label)
-  if op == nil then
-    return true_op()
-  end
   if type(op) ~= 'table' or type(op.and_then) ~= 'function' then
     error((label or 'Closure step') .. ' must return an Op', 3)
   end
@@ -248,6 +246,12 @@ local PROTOCOL_FIELDS = {
   'request_op', 'finish_op', 'force_op',
   'request_result', 'finish_result', 'force_result',
 }
+local PROTOCOL_ALLOWED = {
+  name = true, _fibers_closure_protocol = true,
+  on_child_outcome = true, on_cancel_requested = true, on_body_result = true,
+  permit_admission = true, permit_outward_move = true, child_failure = true,
+}
+for i = 1, #PROTOCOL_FIELDS do PROTOCOL_ALLOWED[PROTOCOL_FIELDS[i]] = true end
 
 local function capture_protocol(protocol, label)
   local out = { _fibers_closure_protocol = true, name = protocol.name or label or 'protocol' }
@@ -282,6 +286,10 @@ function Closure.protocol(protocol, label)
   elseif type(protocol) ~= 'table' then
     error(protocol_label .. ' must be a protocol table', 3)
   end
+  Contract.options(protocol, PROTOCOL_ALLOWED, protocol_label, 3)
+  if protocol._fibers_closure_protocol ~= nil and protocol._fibers_closure_protocol ~= true then
+    error(protocol_label .. ' has an invalid protocol marker', 3)
+  end
 
   if protocol.name ~= nil and type(protocol.name) ~= 'string' then
     error(protocol_label .. ' name must be a string', 3)
@@ -306,13 +314,14 @@ function Closure.request_then_wait(request_op, finish_op, opts)
   if type(finish_op) ~= 'function' then
     error('request_then_wait expects finish_op function', 2)
   end
-  if opts ~= nil and type(opts) ~= 'table' then
-    error('request_then_wait options must be a table', 2)
-  end
-  opts = opts or {}
-  if opts.name ~= nil and type(opts.name) ~= 'string' then
-    error('request_then_wait option name must be a string', 2)
-  end
+  opts = Contract.options(opts, {
+    name = true, force_op = true, request_result = true, finish_result = true, force_result = true,
+  }, 'request_then_wait options', 2)
+  if opts.name ~= nil then Contract.non_empty_string(opts.name, 'request_then_wait option name', 2) end
+  Contract.optional_function(opts.force_op, 'request_then_wait force_op', 2)
+  Contract.optional_function(opts.request_result, 'request_then_wait request_result', 2)
+  Contract.optional_function(opts.finish_result, 'request_then_wait finish_result', 2)
+  Contract.optional_function(opts.force_result, 'request_then_wait force_result', 2)
   local name = opts.name or 'request_then_wait'
   local function step(fn, field)
     return function(ctx, record, close)

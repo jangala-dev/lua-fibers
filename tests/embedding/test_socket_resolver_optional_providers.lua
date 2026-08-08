@@ -191,6 +191,12 @@ do
     local dial = assert(host:start_dial({ kind = 'inet4', host = '127.0.0.1', port = 80 }, {}))
     assert(dial._connect_pending)
     assert(dial:finish_connect() == dial)
+
+    -- Native sockaddr tables contain provider fields such as family and addr.
+    -- The adapter must project only canonical IPv6 metadata into Address.ipv6.
+    local listener6 = assert(host:create_listener({ kind = 'inet6', host = '::1', port = 0 }, {}))
+    assert(listener6:local_address().kind == 'inet6')
+
     local addresses = assert(host:resolve({ host = 'localhost', service = 80 }, { family = 'inet4' }))
     assert(#addresses == 1 and addresses[1].host == '127.0.0.1')
     assert(
@@ -199,6 +205,7 @@ do
         and resolver_calls[1].hints.family == socket.AF_INET
     )
     listener:close()
+    listener6:close()
     child:close()
     dial:close()
     host:close()

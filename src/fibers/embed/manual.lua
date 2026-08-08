@@ -5,6 +5,7 @@
 
 local WaitSet = require('fibers.embed.wait_set')
 local Label = require('fibers.internal.label')
+local Contract = require('fibers.internal.contract')
 
 local next_manual = 0
 
@@ -21,15 +22,24 @@ local FINAL_METHODS = {
   'file_provider',
 }
 
-local CAPABILITY_BY_METHOD = {
-  create_pipe = 'pipe',
-  create_listener = 'socket',
-  start_dial = 'socket',
-  create_datagram = 'datagram',
-  resolve = 'resolver',
-  start_process = 'process',
-  file_provider = 'file',
+local function now_option(value, label, level)
+  if type(value) == 'function' then return value end
+  return Contract.finite_number(value, label, level)
+end
+
+local MANUAL_OPTIONS = {
+  now = now_option, kind = true, family = true, wait_domain = true,
+  sleep = Contract.func, auto_advance_time = Contract.boolean,
+  capabilities = Contract.table, label = true,
 }
+for i = 1, #FINAL_METHODS do MANUAL_OPTIONS[FINAL_METHODS[i]] = Contract.func end
+
+local CAPABILITY_METHODS = {
+  pipe = { 'create_pipe' }, socket = { 'create_listener', 'start_dial' },
+  datagram = { 'create_datagram' }, resolver = { 'resolve' },
+  process = { 'start_process' }, file = { 'file_provider' },
+}
+
 
 function Manual.is_supported()
   return true
@@ -40,7 +50,7 @@ function Manual.support_reason()
 end
 
 function Manual.new(opts)
-  opts = opts or {}
+  opts = Contract.options(opts, MANUAL_OPTIONS, 'ManualHost options', 2)
   local initial = opts.now
   local now_fn = type(initial) == 'function' and initial or nil
   next_manual = next_manual + 1
@@ -49,7 +59,7 @@ function Manual.new(opts)
     kind = opts.kind or 'manual',
     family = opts.family or opts.kind or 'manual',
     wait_domain = opts.wait_domain or opts.family or opts.kind or 'manual',
-    _now = tonumber(initial) or 0,
+    _now = now_fn and 0 or (initial == nil and 0 or Contract.finite_number(initial, 'ManualHost opts.now', 2)),
     _now_fn = now_fn,
     _sleep = opts.sleep,
     auto_advance_time = opts.auto_advance_time ~= false,
@@ -63,24 +73,26 @@ function Manual.new(opts)
 
   for i = 1, #FINAL_METHODS do
     local name = FINAL_METHODS[i]
-    local method = opts[name]
-    if type(method) == 'function' then
-      host[name] = method
-      host.capabilities[CAPABILITY_BY_METHOD[name]] = true
-    end
+    if opts[name] then host[name] = opts[name] end
   end
 
   for name, value in pairs(opts.capabilities or {}) do
-    if value ~= false and value ~= nil then
-      host.capabilities[name] = value
+    if CAPABILITY_METHODS[name] then
+      error('ManualHost capabilities.' .. name .. ' is derived from its method contract', 2)
     end
+    if value ~= false and value ~= nil then host.capabilities[name] = value end
+  end
+  for capability, methods in pairs(CAPABILITY_METHODS) do
+    local present = true
+    for i = 1, #methods do present = present and type(host[methods[i]]) == 'function' end
+    if present then host.capabilities[capability] = true end
   end
 
   return host
 end
 
 function Manual:sleep(seconds)
-  seconds = math.max(0, tonumber(seconds) or 0)
+  seconds = Contract.non_negative_number(seconds, 'ManualHost sleep seconds', 2)
   if self._sleep then
     return self._sleep(seconds)
   end
@@ -94,12 +106,13 @@ function Manual:set_time(value)
   if self._now_fn then
     error('cannot set time when ManualHost uses opts.now function', 2)
   end
-  self._now = tonumber(value) or self._now
+  self._now = Contract.finite_number(value, 'ManualHost time', 2)
   return self._now
 end
 
 function Manual:advance(value)
-  return self:set_time(self._now + (tonumber(value) or 0))
+  value = Contract.non_negative_number(value, 'ManualHost advance seconds', 2)
+  return self:set_time(self._now + value)
 end
 
 function Manual:set_readiness(key, mode, value)

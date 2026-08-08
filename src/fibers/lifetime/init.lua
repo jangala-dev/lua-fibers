@@ -12,6 +12,7 @@ local Cell = require('fibers.resource.cell')
 local StateMachine = require('fibers.resource.machine')
 local Effect = require('fibers.effect')
 local Label = require('fibers.internal.label')
+local Contract = require('fibers.internal.contract')
 
 local Lifetime = {}
 Lifetime.CloseReason = { NORMAL = 'normal' }
@@ -103,11 +104,19 @@ local function node_for(value, level)
   error('expected a Lifetime or a value carrying a Lifetime', level or 3)
 end
 
+local LIFETIME_OPTIONS = {
+  parent = true, value = true, standalone_boundary = true, body = true, closure = true,
+  role = true, rights = true, meta = true, offers = true, label = true, children = true, runtime = true,
+}
+local DEFINE_OPTIONS = {
+  body = true, closure = true, role = true, rights = true, meta = true, children = true, label = true,
+}
+
 function Lifetime.new(opts)
-  opts = opts or {}
-  if type(opts) ~= 'table' then
-    error('Lifetime.new expects an options table or nil', 2)
-  end
+  opts = Contract.options(opts, LIFETIME_OPTIONS, 'Lifetime.new options', 2)
+  Contract.optional_boolean(opts.standalone_boundary, 'Lifetime.new standalone_boundary', 2)
+  Contract.optional_function(opts.body, 'Lifetime.new body', 2)
+  if opts.children ~= nil then Contract.table(opts.children, 'Lifetime.new children', 2) end
   local node_kind = 'lifetime'
   local node = setmetatable({
     _fibers_lifetime = true,
@@ -122,12 +131,11 @@ function Lifetime.new(opts)
     role = opts.role,
     rights = opts.rights,
     meta = opts.meta,
-    cancellation = opts.cancellation
-      or StateMachine.new({ requested = false, cancelled = false }):label(node_kind .. '-cancellation'),
-    interrupt = opts.interrupt or Runtime._new_interrupt(node_kind .. '-interrupt'),
-    body_result = opts.body_result or Cell.new(pending()):label(node_kind .. '-body-result'),
-    outcome = opts.outcome or Cell.new(pending()):label(node_kind .. '-outcome'),
-    closure_state = opts.closure_state or initial_closure_state(),
+    cancellation = StateMachine.new({ requested = false, cancelled = false }):label(node_kind .. '-cancellation'),
+    interrupt = Runtime._new_interrupt(node_kind .. '-interrupt'),
+    body_result = Cell.new(pending()):label(node_kind .. '-body-result'),
+    outcome = Cell.new(pending()):label(node_kind .. '-outcome'),
+    closure_state = initial_closure_state(),
     offers = opts.offers,
   }, Node)
   Label.attach(node)
@@ -208,7 +216,7 @@ function Lifetime.define(value, opts)
   if Lifetime.of(value) then
     error('value already carries a Lifetime', 2)
   end
-  opts = opts or {}
+  opts = Contract.options(opts, DEFINE_OPTIONS, 'Lifetime.define options', 2)
   local node = Lifetime.new({
     value = value,
     body = opts.body,
@@ -229,7 +237,7 @@ end
 
 function Lifetime.task(body, opts)
   if type(body) ~= 'function' then error('Lifetime.task expects a function', 2) end
-  opts = opts or {}
+  opts = Contract.options(opts, { closure = true, role = true, label = true }, 'Lifetime.task options', 2)
   return Lifetime.new({
     body = body,
     closure = opts.closure,
@@ -265,7 +273,9 @@ function Node:add_child(value)
     error('Lifetime child already has a structural parent', 2)
   end
   for i = 1, #self._construction_children do
-    if self._construction_children[i] == child then return child end
+    if self._construction_children[i] == child then
+      error('Lifetime structural child is already attached to this parent', 2)
+    end
   end
   child._construction_parent = self
   self._construction_children[#self._construction_children + 1] = child
@@ -437,11 +447,13 @@ function Node:cancellation_op()
   return self.cancellation:read_op()
 end
 
-local function publish_once_op(cell, result)
+local function publish_once_op(cell, result, label)
   return cell:read_op():and_then(Op.guard(function(value)
-    if is_done(value) then return Op.always(false, value.result) end
+    if is_done(value) then
+      error((label or 'Lifetime result') .. ' already published', 3)
+    end
     return cell:write_op({ status = 'done', result = result }):map(function()
-      return true, result
+      return result
     end)
   end))
 end
@@ -451,7 +463,7 @@ local function completed_op(cell)
 end
 
 function Node:publish_body_result_op(result)
-  return publish_once_op(self.body_result, result)
+  return publish_once_op(self.body_result, result, 'Lifetime body result')
 end
 
 function Node:body_result_op()
@@ -459,7 +471,7 @@ function Node:body_result_op()
 end
 
 function Node:publish_outcome_op(result)
-  return publish_once_op(self.outcome, result)
+  return publish_once_op(self.outcome, result, 'Lifetime outcome')
 end
 
 function Node:outcome_op()

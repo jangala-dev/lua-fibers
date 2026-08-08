@@ -23,31 +23,22 @@ local function scratch(engine, field)
   return value
 end
 
-local function positive_integer(value, name)
-  if value == nil then return nil end
-  if type(value) ~= 'number' or value ~= value or value == math.huge or value == -math.huge then
-    error(name .. ' must be a positive integer', 3)
-  end
-  value = math.floor(value)
-  if value < 1 then error(name .. ' must be a positive integer', 3) end
-  return value
-end
-
 function Engine.new(scheduler, opts)
-  opts = opts or {}
+  local search_limit = opts.search_limit or 1000000
+  local choice_seed = opts.choice_seed or 1
   return setmetatable({
     runtime = scheduler,
     instrumentation = scheduler.instrumentation,
     pending = {},
     next_request_order = 0,
     quiet_deadlock = opts.quiet_deadlock == true,
-    search_limit = opts.search_limit or 1000000,
-    search_total_limit = positive_integer(opts.search_total_limit, 'search_total_limit'),
-    search_trail_limit = positive_integer(opts.search_trail_limit, 'search_trail_limit'),
-    search_depth_limit = positive_integer(opts.search_depth_limit, 'search_depth_limit'),
-    cycle_work_limit = positive_integer(opts.cycle_work_limit, 'cycle_work_limit'),
-    cycle_focus_limit = positive_integer(opts.cycle_focus_limit, 'cycle_focus_limit'),
-    choice_seed = opts.choice_seed or 1,
+    search_limit = search_limit,
+    search_total_limit = opts.search_total_limit,
+    search_trail_limit = opts.search_trail_limit,
+    search_depth_limit = opts.search_depth_limit,
+    cycle_work_limit = opts.cycle_work_limit,
+    cycle_focus_limit = opts.cycle_focus_limit,
+    choice_seed = choice_seed,
     explicit_search_limit = opts.search_limit ~= nil,
     pending_generation = 0,
     epoch = 0,
@@ -468,9 +459,8 @@ local function scan_pending(engine, cursor, search_limit)
 end
 
 local function step(engine, opts)
-  opts = opts or {}
   engine._last_search_unknown_reason = nil
-  local search_limit = opts.max_work and math.max(1, opts.max_work) or nil
+  local search_limit = opts.max_work
 
   local fiber = engine.runtime:_start_one()
   if fiber and search_limit and search_limit <= 1 then
@@ -502,7 +492,6 @@ local function step(engine, opts)
 end
 
 local function run(engine, opts)
-  opts = opts or {}
   engine._last_search_unknown_reason = nil
   if opts.max_work then return step(engine, opts) end
   local committed, last_refs, last_unknown = false, {}, false

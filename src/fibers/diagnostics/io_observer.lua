@@ -8,6 +8,7 @@
 
 local Audit = {}
 local Label = require('fibers.internal.label')
+local Contract = require('fibers.internal.contract')
 
 local records = setmetatable({}, { __mode = 'k' })
 local runtime_values = setmetatable({}, { __mode = 'k' })
@@ -271,8 +272,17 @@ function Audit.record(value)
   return records[value]
 end
 
+local REPORT_OPTIONS = { include_closed = true, include_history = true }
+local ASSERT_OPTIONS = { label = true, allow_violations = true }
+
+local function report_options(opts, level)
+  opts = Contract.options(opts, REPORT_OPTIONS, 'I/O audit report options', level or 3)
+  Contract.optional_boolean(opts.include_closed, 'I/O audit include_closed', level or 3)
+  Contract.optional_boolean(opts.include_history, 'I/O audit include_history', level or 3)
+  return opts
+end
+
 local function include_record(rec, opts)
-  opts = opts or {}
   if opts.include_closed then
     return true
   end
@@ -280,7 +290,7 @@ local function include_record(rec, opts)
 end
 
 function Audit.report(rt, opts)
-  opts = opts or {}
+  opts = report_options(opts, 3)
   local items = {}
   local counts = {}
   local bucket = rt and runtime_values[rt] or nil
@@ -336,7 +346,9 @@ function Audit.active(rt)
 end
 
 function Audit.assert_clean(rt, opts)
-  opts = opts or {}
+  opts = Contract.options(opts, ASSERT_OPTIONS, 'I/O audit assert_clean options', 3)
+  if opts.label ~= nil then Contract.non_empty_string(opts.label, 'I/O audit label', 3) end
+  Contract.optional_boolean(opts.allow_violations, 'I/O audit allow_violations', 3)
   local snapshot = Audit.report(rt)
   local bad = {}
   for _, item in ipairs(snapshot.items) do

@@ -266,6 +266,7 @@ return {
     ['tests/public/test_public_surface.lua'] = 'portable',
     ['tests/public/test_sleep.lua'] = 'portable',
     ['tests/public/test_stream_memory.lua'] = 'portable',
+    ['tests/public/test_strict_v1.lua'] = 'portable',
     ['tests/resources/test_counter_and_fifo.lua'] = 'portable',
     ['tests/resources/test_event.lua'] = 'portable',
     ['tests/resources/test_external_resources.lua'] = 'portable',

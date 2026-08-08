@@ -42,15 +42,6 @@ function Helpers.pipe_pair(opts)
     label = (opts.label or ('manual-pipe-' .. id)) .. ':read',
     key = opts.read_key or ('manual-pipe-' .. id .. ':read'),
     host = opts.host,
-    capabilities = {
-      read = true,
-      write = false,
-      shutdown_read = true,
-      shutdown_write = false,
-      close = true,
-      set_nonblocking = false,
-      readiness = true,
-    },
     read = function(_self, max)
       max = tonumber(max) or 4096
       if state.read_closed then
@@ -95,15 +86,6 @@ function Helpers.pipe_pair(opts)
     label = (opts.label or ('manual-pipe-' .. id)) .. ':write',
     key = opts.write_key or ('manual-pipe-' .. id .. ':write'),
     host = opts.host,
-    capabilities = {
-      read = false,
-      write = true,
-      shutdown_read = false,
-      shutdown_write = true,
-      close = true,
-      set_nonblocking = false,
-      readiness = true,
-    },
     write = function(_self, bytes)
       if state.write_closed then
         return nil, HostError.closed('pipe', 'write')
@@ -160,26 +142,18 @@ function Helpers.duplex(read_handle, write_handle, opts)
       write = write_handle:readiness_key(),
     },
     host = opts.host or read_handle.host or write_handle.host,
-    capabilities = {
-      read = read_handle:supports('read'),
-      write = write_handle:supports('write'),
-      shutdown_read = read_handle:supports('shutdown_read'),
-      shutdown_write = write_handle:supports('shutdown_write'),
-      close = true,
-      readiness = true,
-    },
-    read = function(_, maximum)
+    read = read_handle:supports('read') and function(_, maximum)
       return read_handle:read(maximum)
-    end,
-    write = function(_, bytes)
+    end or nil,
+    write = write_handle:supports('write') and function(_, bytes)
       return write_handle:write(bytes)
-    end,
-    shutdown_read = function(_, reason)
+    end or nil,
+    shutdown_read = read_handle:supports('shutdown_read') and function(_, reason)
       return read_handle:shutdown_read(reason)
-    end,
-    shutdown_write = function(_, reason)
+    end or nil,
+    shutdown_write = write_handle:supports('shutdown_write') and function(_, reason)
       return write_handle:shutdown_write(reason)
-    end,
+    end or nil,
     ready = function(_, mode)
       return mode == 'write' and write_handle:write_ready_op() or read_handle:read_ready_op()
     end,

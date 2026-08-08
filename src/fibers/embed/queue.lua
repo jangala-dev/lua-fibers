@@ -5,6 +5,7 @@
 ---its external-driver boundary.
 
 local Label = require('fibers.internal.label')
+local Contract = require('fibers.internal.contract')
 
 local Queue = {}
 Queue.__index = Queue
@@ -20,8 +21,18 @@ local function default_now()
   return os and type(os.clock) == 'function' and os.clock() or 0
 end
 
+local QUEUE_OPTIONS = {
+  now = Contract.func,
+  kind = Contract.non_empty_string,
+  family = Contract.non_empty_string,
+  capabilities = Contract.table,
+  on_external_error = Contract.func,
+  on_done = Contract.func,
+  label = Contract.non_empty_string,
+}
+
 function Queue.new(opts)
-  opts = opts or {}
+  opts = Contract.record(opts, QUEUE_OPTIONS, 'Queue.new options', 2)
   local now = opts.now or default_now
   next_queue = next_queue + 1
   local self = Label.attach(setmetatable({

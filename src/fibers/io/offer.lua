@@ -18,11 +18,21 @@ local UnsafeExternalMutation = require('fibers.embed.unsafe_external_mutation')
 local Lifetime = require('fibers.lifetime')
 local Protected = require('fibers.protected')
 local Label = require('fibers.internal.label')
+local Contract = require('fibers.internal.contract')
 
 local Offer = {}
 Offer.__index = Offer
 local next_id = 0
 local unpack_ = table.unpack or unpack
+
+local OFFER_SPEC = {
+  pull = Contract.func, mode = true, handle = true, capacity = Contract.positive_integer,
+  label = Contract.non_empty_string, domain = Contract.non_empty_string,
+  action = Contract.non_empty_string, role = Contract.non_empty_string,
+  poll_interval = Contract.non_negative_number, one_shot = Contract.boolean,
+  closed_error = true, dispose = Contract.func, retired = Contract.func,
+  children = Contract.table,
+}
 
 local function source_error(source, state)
   if state and state.kind == 'failed' then return state.error end
@@ -54,10 +64,8 @@ local function source_closure(source)
 end
 
 function Offer.new(spec)
-  spec = spec or {}
-  if type(spec.pull) ~= 'function' then
-    error('HostOfferSource requires pull', 2)
-  end
+  spec = Contract.record(spec, OFFER_SPEC, 'HostOfferSource spec', 2)
+  if spec.pull == nil then error('HostOfferSource requires pull', 2) end
   local mode = spec.mode or 'read'
   if mode ~= 'read' and mode ~= 'write' and mode ~= 'poll' then
     error('HostOfferSource mode must be read, write or poll', 2)
@@ -69,9 +77,6 @@ function Offer.new(spec)
     error('polling HostOfferSource must not provide a handle', 2)
   end
   local capacity = spec.capacity or 1
-  if type(capacity) ~= 'number' or capacity < 1 or capacity % 1 ~= 0 then
-    error('HostOfferSource capacity must be a positive integer', 2)
-  end
 
   next_id = next_id + 1
   local id = 'host-offer-' .. tostring(next_id)
@@ -85,7 +90,7 @@ function Offer.new(spec)
     mode = mode,
     poll_interval = spec.poll_interval,
     capacity = capacity,
-    _one_shot = spec.one_shot == true,
+    _one_shot = spec.one_shot or false,
     _handle_provider = spec.handle,
     _pull = spec.pull,
     _closed_error = spec.closed_error,

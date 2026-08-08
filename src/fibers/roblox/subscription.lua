@@ -8,8 +8,11 @@ local Label = require('fibers.internal.label')
 local Closure = require('fibers.closure')
 local perform = require('fibers.perform')
 local Direct = require('fibers.internal.direct')
+local Contract = require('fibers.internal.contract')
 
 local Subscription = {}
+
+local SUBSCRIPTION_OPTIONS = { runtime = true, scope = true, host = true, mode = true, label = true }
 local next_subscription = 0
 Subscription.__index = Subscription
 
@@ -128,7 +131,8 @@ function Subscription:_disconnect()
 end
 
 function Subscription.new(signal, opts)
-  opts = opts or {}
+  opts = Contract.options(opts, SUBSCRIPTION_OPTIONS, 'Roblox Subscription options', 2)
+  if opts.label ~= nil then Contract.non_empty_string(opts.label, 'Roblox Subscription label', 2) end
   signal = require_signal(signal)
   local runtime = require_runtime(opts)
   local scope = require_scope(opts)

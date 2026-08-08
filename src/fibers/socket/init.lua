@@ -9,6 +9,43 @@ local DNSResolver = require('fibers.dns.resolver')
 local IOError = require('fibers.io.error')
 local perform = require('fibers.perform')
 local Direct = require('fibers.internal.direct')
+local Contract = require('fibers.internal.contract')
+
+local function address_options(opts)
+  if type(opts) ~= 'table' then return nil end
+  return { flowinfo = opts.flowinfo, scope_id = opts.scope_id }
+end
+
+local function name_address_options(opts)
+  if opts == nil then return nil end
+  Contract.table(opts, 'socket.resolve_name options', 3)
+  if opts.family_hint ~= nil and opts.family ~= nil then
+    error('socket.resolve_name options must not specify both family_hint and family', 3)
+  end
+  return {
+    family_hint = opts.family_hint ~= nil and opts.family_hint or opts.family,
+    socket_type = opts.socket_type,
+  }
+end
+
+local function resolve_operation_options(opts)
+  if opts == nil then return nil end
+  Contract.table(opts, 'socket.resolve_name options', 3)
+  local out = {}
+  for key, value in pairs(opts) do
+    if key ~= 'family_hint' and key ~= 'socket_type' then out[key] = value end
+  end
+  return out
+end
+
+local function operation_options(opts)
+  if type(opts) ~= 'table' then return opts end
+  local out = {}
+  for key, value in pairs(opts) do
+    if key ~= 'flowinfo' and key ~= 'scope_id' then out[key] = value end
+  end
+  return out
+end
 
 local Socket = {
   Listener = Listener.Listener,
@@ -51,11 +88,14 @@ function Socket.listen_ipv4_op(host, port, opts)
 end
 
 function Socket.listen_ipv6_op(host, port, opts)
-  return Listener.listen_op(Address.ipv6(host, port, opts), opts)
+  return Listener.listen_op(Address.ipv6(host, port, address_options(opts)), operation_options(opts))
 end
 
 function Socket.listen_inet_op(host, port, opts)
-  return Listener.listen_op(numeric(Address.inet(host, port, opts), 'socket.listen_inet_op'), opts)
+  return Listener.listen_op(
+    numeric(Address.inet(host, port, address_options(opts)), 'socket.listen_inet_op'),
+    operation_options(opts)
+  )
 end
 
 function Socket.listen_unix_op(path, opts)
@@ -71,7 +111,7 @@ function Socket.udp_ipv4_op(host, port, opts)
 end
 
 function Socket.udp_ipv6_op(host, port, opts)
-  return Datagram.udp_op(Address.ipv6(host, port, opts), opts)
+  return Datagram.udp_op(Address.ipv6(host, port, address_options(opts)), operation_options(opts))
 end
 
 function Socket.resolve_op(endpoint, opts)
@@ -79,7 +119,7 @@ function Socket.resolve_op(endpoint, opts)
 end
 
 function Socket.resolve_name_op(host, service, opts)
-  return Socket.resolve_op(Address.name(host, service, opts), opts)
+  return Socket.resolve_op(Address.name(host, service, name_address_options(opts)), resolve_operation_options(opts))
 end
 
 -- One Dial constructor dispatches by endpoint kind. Name endpoints select the

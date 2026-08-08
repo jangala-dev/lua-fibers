@@ -131,7 +131,6 @@ do
         label = opts.label .. ':bad-reader',
         key = opts.label .. ':bad-reader',
         host = h,
-        capabilities = { read = false, close = true, readiness = true },
         close = function()
           return true
         end,

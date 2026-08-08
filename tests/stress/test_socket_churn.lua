@@ -19,7 +19,7 @@ local report = fibers.try_run(function(scope)
   local server = scope:spawn(function()
     for i = 1, count do
       local connection = assert(listener:accept())
-      local byte = assert(connection:read(1))
+      local byte = assert(connection:read_some(1))
       connection:write(byte)
       connection:flush()
       connection:close('stress server complete')
@@ -32,7 +32,7 @@ local report = fibers.try_run(function(scope)
     local byte = string.char(64 + ((i - 1) % 26) + 1)
     connection:write(byte)
     connection:flush()
-    assert(connection:read(1) == byte)
+    assert(connection:read_some(1) == byte)
     connection:close('stress client complete')
   end
 

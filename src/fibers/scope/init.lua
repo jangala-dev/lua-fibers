@@ -15,6 +15,7 @@ local Closure = require('fibers.closure')
 local ScopeClosure = require('fibers.scope.closure')
 local Lifetime = require('fibers.lifetime')
 local Label = require('fibers.internal.label')
+local Contract = require('fibers.internal.contract')
 
 local unpack_ = table.unpack or unpack
 local function pack(...)
@@ -70,11 +71,10 @@ local function new_offers()
   return Rendezvous.new()
 end
 
+local SCOPE_OPTIONS = { parent = true, closure = true, runtime = true, lifetime = true, label = true }
+
 function Scope.new(opts)
-  opts = opts or {}
-  if type(opts) ~= 'table' then
-    error('Scope.new expects an options table or nil', 2)
-  end
+  opts = Contract.options(opts, SCOPE_OPTIONS, 'Scope.new options', 2)
   next_id = next_id + 1
   local id = 'scope-' .. tostring(next_id)
   if opts.parent ~= nil and not is_scope(opts.parent) then
@@ -88,19 +88,16 @@ function Scope.new(opts)
     lifetime = Lifetime.new({
       parent = opts.parent and opts.parent._lifetime or nil,
       closure = opts.closure,
-      cancellation = opts.cancellation,
-      interrupt = opts.interrupt,
-      outcome = opts.done,
       standalone_boundary = true,
       label = opts.label,
     })
   end
   if opts.runtime then lifetime:bind_runtime(opts.runtime) end
-  lifetime.closure = Closure.combine(lifetime.closure, opts.closure)
-  lifetime.offers = lifetime.offers or opts.offers or new_offers()
+  lifetime.closure = Closure.combine(lifetime.closure, Closure.propagation(opts.closure))
+  lifetime.offers = lifetime.offers or new_offers()
   Label.child(lifetime.offers, lifetime, 'offers')
   return setmetatable({
-    mask_depth = opts.mask_depth or 0,
+    mask_depth = 0,
     _lifetime = lifetime,
     _fibers_id = id,
     _fibers_scope = true,
@@ -211,34 +208,29 @@ function Scope:_run_child_body(fn, task, opts)
     runtime = self.runtime or Runtime.current(),
     lifetime = task._lifetime,
   })
-  return child:run(function(s)
-    -- The Task body's execution result is a fact distinct from complete Lifetime
-    -- closure. Capture and publish it before ScopeClosure starts retiring roots.
-    -- Re-raise the original result afterwards so the Scope boundary retains its
-    -- existing success/failure/cancellation semantics.
-    local results = pack(Protected.pcall(fn, s, task))
-    task:_publish_protected_body_result(results, child.runtime or Runtime.current())
-    if results[1] then
-      return unpack_(results, 2, results.n)
-    end
-    error(results[2], 0)
-  end)
+  -- ScopeClosure owns publication for Scope-backed Tasks. The body-exit hook
+  -- runs exactly once, immediately after the protected user body returns and
+  -- before descendant retirement begins. The outer Task runner verifies that
+  -- this publication happened; it never republishes as a fallback.
+  return ScopeClosure.run(child, function(s)
+    return fn(s, task)
+  end, child.closure or {}, function(results, runtime)
+    task:_publish_protected_body_result(results, runtime)
+  end):raise()
 end
 
 function Scope:spawn_op(fn, opts)
   if type(fn) ~= 'function' then
     error('Scope:spawn_op expects a function', 2)
   end
-  opts = opts or {}
-  if type(opts) ~= 'table' then
-    error('Scope:spawn_op expects an options table or nil; label the returned Task', 2)
-  end
+  opts = Contract.options(opts, { label = true, closure = true }, 'Scope:spawn_op options', 2)
   local parent = self
   local task = Task._new(function(task_handle)
     return parent:_run_child_body(fn, task_handle, opts)
   end, self, {
     label = opts.label,
-    closure = Closure.running(opts.closure or self.closure),
+    closure = Closure.running(Closure.propagation(opts.closure or self.closure)),
+    body_result_owner = 'scope',
   })
   return self
     :admit_op(task)
@@ -359,10 +351,7 @@ function Scope:grant_op(item, holder, rights, opts)
   if not is_scope(holder) then
     error('Scope:grant_op expects a holder Scope', 2)
   end
-  opts = opts or {}
-  if type(opts) ~= 'table' then
-    error('Scope:grant_op options must be a table', 2)
-  end
+  opts = Contract.options(opts, { label = true, meta = true, terms = true }, 'Scope:grant_op options', 2)
   local runtime = self:_bind_runtime()
   holder:_bind_runtime(runtime)
   if holder.runtime ~= runtime then
@@ -429,7 +418,9 @@ function Scope:running_children_op()
 end
 
 function Scope:begin_close_op(reason, opts)
-  opts = opts or {}
+  opts = Contract.options(opts, { cancel_body = true, cancel_children = true }, 'Scope:begin_close_op options', 2)
+  Contract.optional_boolean(opts.cancel_body, 'Scope:begin_close_op cancel_body', 2)
+  Contract.optional_boolean(opts.cancel_children, 'Scope:begin_close_op cancel_children', 2)
   return self:running_children_op():and_then(Op.guard(function(snapshot)
     local ops = { self._lifetime:request_close_op(reason), self:seal_op(reason) }
     if opts.cancel_body ~= false then

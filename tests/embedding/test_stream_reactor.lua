@@ -110,7 +110,8 @@ end
 -- Flow surfaces are capability-specific; looping friendly methods and duplex byte ops are absent.
 do
   local a, _b = Stream.memory_pair({ label = 'no-friendly-stream' })
-  assert_eq(type(a.read), 'function', 'stream exposes direct performing read')
+  assert_eq(a.read, nil, 'stream does not expose Lua-file-style read compatibility')
+  assert_eq(type(a.read_some), 'function', 'stream exposes direct performing read_some')
   assert_eq(type(a.write), 'function', 'stream exposes direct performing write')
   assert_eq(type(a.close), 'function', 'stream exposes direct performing close')
   assert_truthy(type(a.read_line_op) == 'function', 'duplex should forward reader options')
@@ -628,20 +629,15 @@ do
   assert_eq(backend.close_count, 1)
 end
 
--- Backend capabilities are validated before ownership or registrations commit.
+-- Backend contracts are validated before ownership or registrations commit.
 do
   local owner = FibersScope.new():label('backend-contract-owner')
   local ok, err = pcall(function()
-    Stream.open_op(
-      require('fibers.io.handle').new({
-        label = 'missing-close',
-        key = 'missing-close-key',
-        read = function()
-          return nil, 'would_block'
-        end,
-      }),
-      { scope = owner, read = true, write = false }
-    )
+    require('fibers.io.handle').new({
+      label = 'missing-close',
+      key = 'missing-close-key',
+      read = function() return nil, 'would_block' end,
+    })
   end)
   assert_eq(ok, false)
   assert_truthy(tostring(err):find('requires close', 1, true))
@@ -651,28 +647,13 @@ do
       require('fibers.io.handle').new({
         label = 'missing-read',
         key = 'missing-read-key',
-        close = function()
-          return true
-        end,
+        close = function() return true end,
       }),
       { scope = owner, read = true, write = false }
     )
   end)
   assert_eq(ok, false)
   assert_truthy(tostring(err):find('requires read', 1, true))
-
-  local wrapped = require('fibers.io.handle').new({
-    label = 'wrapped-missing-close',
-    key = 'wrapped-missing-close-key',
-    read = function()
-      return nil, 'would_block'
-    end,
-  })
-  ok, err = pcall(function()
-    Stream.open_op(wrapped, { scope = owner, read = true, write = false })
-  end)
-  assert_eq(ok, false)
-  assert_truthy(tostring(err):find('requires close', 1, true))
 end
 
 -- A backend readiness_key method may return distinct direction keys.

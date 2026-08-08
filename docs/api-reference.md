@@ -9,6 +9,21 @@ For practical explanations, see [Options](guide/options.md), [Lifetimes](guide/l
 
 The exact v1 module contract is recorded in [`packages/public_modules.lua`](../packages/public_modules.lua). A source module absent from that allow-list is an implementation detail even when it is importable from a repository checkout. There are no aggregate `fibers.io`, `fibers.embed` or `fibers.dns` modules; import the required explicit module.
 
+### Strict v1 contracts
+
+V1 public and trusted-extension boundaries are deliberately exact:
+
+- `nil` is the only omission/default sentinel unless a documented value such as `timeout = false` has explicit semantics;
+- public option tables are closed records and reject unknown keys;
+- numbers and booleans are not coerced from strings, truthy values or fractional integers;
+- compatibility aliases are not retained alongside canonical names;
+- host/provider, facility and effect callbacks have one authoritative contract; concrete handle/provider support is defined by its required method set, while supplementary capability metadata remains explicit;
+- cleanup failures are accounted for and are not silently discarded.
+
+Conversion remains appropriate only at explicit external boundaries, for example parsing `/etc/resolv.conf`, decoding a child-process protocol record, or converting native ABI values into Lua values. Those adapters normalise external representation; they do not broaden the v1 Lua contract.
+
+Canonical examples include `process_group = "new"` rather than `new_session`, `family_hint` on unresolved name endpoints rather than `family`, and the explicit Stream methods `read_some`, `read_exactly`, `read_until`, `read_line` and `read_all` rather than Lua-file-style `read(...)` aliases.
+
 
 ### Direct and `_op` forms
 
@@ -561,7 +576,6 @@ stream:read_exactly_op(n)
 stream:read_until_op(separator [, opts])
 stream:read_line_op([opts])
 stream:read_all_op([opts])
-stream:read_op(spec [, opts])
 stream:write_op(...)
 stream:write_some_op(bytes)
 stream:flush_op()

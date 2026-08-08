@@ -1,21 +1,52 @@
 -- Immutable child-process command specifications and redirections.
 
+local Contract = require('fibers.internal.contract')
+
 local CommandModule = {}
 local Command = {}
 Command.__index = Command
 
-local function copy_table(value)
+local COMMAND_FIELDS = {
+  argv = true, stdin = true, stdout = true, stderr = true, cwd = true,
+  env = true, env_mode = true, unset_env = true, shutdown = true,
+  process_group = true, pass_fds = true, close_fds = true, label = true,
+}
+
+local function copy_list(value, label, item)
+  if value == nil then return {} end
+  Contract.dense(value, label or 'list', 3, item)
   local out = {}
-  for key, item in pairs(value or {}) do
-    out[key] = item
-  end
+  for i = 1, #value do out[i] = value[i] end
   return out
 end
 
-local function copy_list(value)
+local function validate_process_group(value, level)
+  if value == nil or value == 'inherit' or value == 'new' then return value end
+  if type(value) == 'number' then
+    return Contract.non_negative_integer(value, 'process group', level or 3)
+  end
+  error("process group must be nil, 'inherit', 'new' or a non-negative integer group", level or 3)
+end
+
+local function validate_command_keys(input)
+  local n = #input
+  for key in pairs(input) do
+    if type(key) == 'number' then
+      if key < 1 or key ~= math.floor(key) or key > n then
+        error('process.command positional argv must be a dense array', 3)
+      end
+    elseif not COMMAND_FIELDS[key] then
+      error('process.command does not accept ' .. tostring(key), 3)
+    end
+  end
+end
+
+local function copy_table(value, label)
+  if value == nil then return {} end
+  Contract.table(value, label or 'table', 3)
   local out = {}
-  for i = 1, #(value or {}) do
-    out[i] = value[i]
+  for key, item in pairs(value) do
+    out[key] = item
   end
   return out
 end
@@ -56,20 +87,24 @@ local function normalise_stdio(value, which)
   error(which .. " must be 'inherit', 'null', 'pipe'" .. extra .. ' or a Stream', 3)
 end
 
+local function signal(value, label, level)
+  if type(value) ~= 'string' and type(value) ~= 'number' then
+    error(label .. ' must be a signal name or number', level or 3)
+  end
+  return value
+end
+
+local SHUTDOWN_OPTIONS = {
+  grace = Contract.non_negative_number, signal = signal, kill_signal = signal, target = true,
+}
+
 local function normalise_shutdown(value)
-  value = copy_table(value)
-  if value.grace == nil then
-    value.grace = 1.0
-  end
-  if type(value.grace) ~= 'number' or value.grace < 0 then
-    error('shutdown.grace must be a non-negative number', 3)
-  end
+  value = copy_table(Contract.record(value, SHUTDOWN_OPTIONS, 'process shutdown', 3), 'process shutdown')
+  value.grace = value.grace or 1.0
   value.signal = value.signal or 'term'
   value.kill_signal = value.kill_signal or 'kill'
   value.target = value.target or 'process'
-  if value.target ~= 'process' and value.target ~= 'group' then
-    error("shutdown.target must be 'process' or 'group'", 3)
-  end
+  if value.target ~= 'process' and value.target ~= 'group' then error("shutdown.target must be 'process' or 'group'", 3) end
   return value
 end
 
@@ -77,11 +112,14 @@ local function parse_command(...)
   local n = select('#', ...)
   if n == 1 and type((...)) == 'table' then
     local input = (...)
+    validate_command_keys(input)
     local spec = copy_table(input)
-    local argv = input.argv and copy_list(input.argv) or {}
+    local argv = input.argv and copy_list(input.argv, 'process command argv', Contract.non_empty_string) or {}
     if #argv == 0 then
       for i = 1, #input do
-        argv[i] = input[i]
+        local value = input[i]
+        Contract.non_empty_string(value, 'process command argv[' .. i .. ']', 3)
+        argv[i] = value
       end
     end
     if #argv == 0 then
@@ -95,10 +133,18 @@ local function parse_command(...)
     if spec.env_mode ~= 'extend' and spec.env_mode ~= 'replace' then
       error("env_mode must be 'extend' or 'replace'", 3)
     end
-    spec.env = copy_table(spec.env)
-    spec.unset_env = copy_list(spec.unset_env)
+    spec.env = copy_table(spec.env, 'process command env')
+    for key, value in pairs(spec.env) do
+      if type(key) ~= 'string' or key == '' or type(value) ~= 'string' then
+        error('process command env must map non-empty string names to strings', 3)
+      end
+    end
+    spec.unset_env = copy_list(spec.unset_env, 'process command unset_env', Contract.non_empty_string)
+    spec.pass_fds = copy_list(spec.pass_fds, 'process command pass_fds', Contract.non_negative_integer)
+    validate_process_group(spec.process_group, 3)
     spec.shutdown = normalise_shutdown(spec.shutdown)
-    spec.close_fds = spec.close_fds ~= false
+    Contract.optional_boolean(spec.close_fds, 'process command close_fds', 3)
+    spec.close_fds = spec.close_fds == nil and true or spec.close_fds
     return spec
   end
   if n == 0 then
@@ -123,7 +169,8 @@ function CommandModule.shell(script, opts)
   if type(script) ~= 'string' then
     error('process.shell expects a command string', 2)
   end
-  opts = copy_table(opts)
+  opts = Contract.options(opts, { shell = true, stdin = true, stdout = true, stderr = true, cwd = true, env = true, env_mode = true, unset_env = true, shutdown = true, process_group = true, pass_fds = true, close_fds = true, label = true }, 'process.shell options', 2)
+  opts = copy_table(opts, 'process.shell options')
   local shell = opts.shell or '/bin/sh'
   opts.shell = nil
   local spec = copy_table(opts)
@@ -135,12 +182,12 @@ function CommandModule.redirect(stream, opts)
   if not is_stream(stream) then
     error('process.redirect expects a Stream', 2)
   end
-  opts = copy_table(opts)
+  opts = Contract.record(opts, { close = Contract.boolean, flush = Contract.boolean }, 'process.redirect options', 2)
   return {
     _fibers_process_redirect = true,
     stream = stream,
-    close = opts.close == true,
-    flush = opts.flush ~= false,
+    close = opts.close or false,
+    flush = opts.flush == nil and true or opts.flush,
   }
 end
 
@@ -175,11 +222,16 @@ function Command:with_cwd(path)
 end
 
 function Command:with_env(values, opts)
-  opts = opts or {}
+  opts = Contract.options(opts, { mode = true, unset = true }, 'Command:with_env options', 2)
   local spec = copy_spec(self._spec)
-  spec.env = copy_table(values)
+  spec.env = copy_table(values, 'Command:with_env values')
+  for key, value in pairs(spec.env) do
+    if type(key) ~= 'string' or key == '' or type(value) ~= 'string' then
+      error('Command:with_env values must map non-empty string names to strings', 2)
+    end
+  end
   spec.env_mode = opts.mode or spec.env_mode or 'extend'
-  spec.unset_env = copy_list(opts.unset or spec.unset_env)
+  spec.unset_env = copy_list(opts.unset == nil and spec.unset_env or opts.unset, 'Command:with_env unset', Contract.non_empty_string)
   if spec.env_mode ~= 'extend' and spec.env_mode ~= 'replace' then
     error("environment mode must be 'extend' or 'replace'", 2)
   end
@@ -203,10 +255,7 @@ function Command:with_shutdown(value)
 end
 
 function Command:with_process_group(value)
-  if value ~= nil and value ~= 'inherit' and value ~= 'new' and type(value) ~= 'number' then
-    error("process group must be nil, 'inherit', 'new' or a numeric group", 2)
-  end
-  return with_field(self, 'process_group', value)
+  return with_field(self, 'process_group', validate_process_group(value, 2))
 end
 
 CommandModule.Command = Command

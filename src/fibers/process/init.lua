@@ -522,11 +522,11 @@ local function supervise(proc, driver_scope, opts)
   endpoints = endpoints or {}
 
   local entries = {
-    { name = 'process', value = host_process, close = close_host_process },
+    { key = 'process', value = host_process, close = close_host_process },
   }
   for _, which in ipairs({ 'stdin', 'stdout', 'stderr' }) do
     if endpoints[which] then
-      entries[#entries + 1] = { name = which, value = endpoints[which], close = close_process_endpoint }
+      entries[#entries + 1] = { key = which, value = endpoints[which], close = close_process_endpoint }
     end
   end
   local held, hold_err = host_hold:hold_many(entries)
@@ -739,9 +739,8 @@ function Command:launch_op(opts)
     spec.shutdown.target == 'group'
     and spec.process_group ~= 'new'
     and type(spec.process_group) ~= 'number'
-    and not spec.new_session
   then
-    error("group shutdown requires process_group = 'new', a numeric group, or new_session", 2)
+    error("group shutdown requires process_group = 'new' or a numeric group", 2)
   end
 
   -- Custody comes from the surrounding fiber context and is resolved when the

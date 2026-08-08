@@ -13,6 +13,7 @@ local Errors = require('fibers.resource.flow.errors')
 local Rope = require('fibers.resource.flow.rope')
 local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
+local Contract = require('fibers.internal.contract')
 
 local Ready, Wait = Machine.Ready, Machine.Wait
 local INF = math.huge
@@ -45,11 +46,7 @@ local function capacity(value)
 end
 
 local function options(opts, allowed, label)
-  opts = opts or {}
-  for key in pairs(opts) do
-    if not allowed[key] then error(label .. ' does not accept ' .. tostring(key), 3) end
-  end
-  return opts
+  return Contract.options(opts, allowed, label, 3)
 end
 
 local function separator(value, label)
@@ -597,6 +594,7 @@ end
 
 function Outlet:read_until_op(sep, opts)
   opts = options(opts, { include = true, max = true }, 'read_until_op options')
+  Contract.optional_boolean(opts.include, 'read_until_op opts.include', 2)
   sep = separator(sep, 'flow read_until separator')
   return live(self, function()
     return transition(self.flow, T.read_until, {
@@ -611,6 +609,8 @@ end
 
 function Outlet:read_line_op(opts)
   opts = options(opts, { terminator = true, keep_terminator = true, max = true }, 'read_line_op options')
+  Contract.optional_boolean(opts.keep_terminator, 'read_line_op opts.keep_terminator', 2)
+  if opts.terminator ~= nil then separator(opts.terminator, 'flow line terminator') end
   return live(self, function()
     return transition(self.flow, T.read_until, {
       sep = separator(opts.terminator or '\n', 'flow line terminator'),

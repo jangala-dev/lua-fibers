@@ -14,6 +14,7 @@ local Host = require('fibers.roblox.host')
 local Application = require('fibers.roblox.app')
 local Subscription = require('fibers.roblox.subscription')
 local perform = require('fibers.perform')
+local Contract = require('fibers.internal.contract')
 
 local Roblox = {
   Host = Host,
@@ -21,16 +22,48 @@ local Roblox = {
   Subscription = Subscription,
 }
 
-local function copy(value)
+local PREPARE_OPTIONS = {
+  host = true, host_config = Contract.table, owns_host = Contract.boolean,
+  label = Contract.non_empty_string, closure = true, runtime_options = Contract.table,
+  max_steps_per_turn = Contract.positive_integer, max_work_per_step = Contract.positive_integer,
+  max_external_per_turn = Contract.positive_integer,
+  max_seconds_per_turn = Contract.non_negative_number, on_status = Contract.func,
+}
+local ATTACH_ONLY_OPTIONS = {
+  scheduling = true, phase = true, run_service = true, phase_always = Contract.boolean,
+}
+local TRY_ONLY_OPTIONS = { await_timeout = Contract.non_negative_number }
+local BIND_OPTIONS = {
+  runtime = true, scope = true, host = true, game = true,
+  reason = Contract.non_empty_string, deadline = Contract.non_negative_number,
+  label = Contract.non_empty_string, monitor_label = Contract.non_empty_string,
+  on_timeout = Contract.func,
+}
+local SUBSCRIPTION_PUBLIC_OPTIONS = {
+  runtime = true, scope = true, host = true, label = Contract.non_empty_string,
+}
+
+local function union_options(...)
   local out = {}
-  for key, item in pairs(value or {}) do
-    out[key] = item
-  end
+  for i = 1, select('#', ...) do for key, rule in pairs(select(i, ...)) do out[key] = rule end end
+  return out
+end
+
+local ATTACH_OPTIONS = union_options(PREPARE_OPTIONS, ATTACH_ONLY_OPTIONS)
+local TRY_OPTIONS = union_options(ATTACH_OPTIONS, TRY_ONLY_OPTIONS)
+
+local function checked_options(value, allowed, label, level)
+  return Contract.record(value, allowed, label, level or 3)
+end
+
+local function project(value, allowed)
+  local out = {}
+  for key in pairs(allowed) do if value[key] ~= nil then out[key] = value[key] end end
   return out
 end
 
 local function current_context(opts)
-  opts = opts or {}
+  opts = checked_options(opts, { runtime = true, scope = true, host = true }, 'Roblox context options', 3)
   local runtime = opts.runtime or Runtime.current()
   if not runtime then
     error('Roblox adapter requires a running fiber or opts.runtime', 3)
@@ -52,7 +85,8 @@ end
 ---under the current Scope's custody and disconnects during closure. Create
 ---subscriptions from committed fiber code, not a speculative callback.
 function Roblox.events(signal, opts)
-  opts = copy(opts)
+  opts = checked_options(opts, SUBSCRIPTION_PUBLIC_OPTIONS, 'Roblox.events options', 2)
+  opts = project(opts, SUBSCRIPTION_PUBLIC_OPTIONS)
   opts.mode = 'events'
   return Subscription.new(signal, opts)
 end
@@ -62,7 +96,8 @@ end
 ---Firing bursts are coalesced before host delivery and each delivered value
 ---replaces any older unconsumed value. This suits state-like observations.
 function Roblox.latest(signal, opts)
-  opts = copy(opts)
+  opts = checked_options(opts, SUBSCRIPTION_PUBLIC_OPTIONS, 'Roblox.latest options', 2)
+  opts = project(opts, SUBSCRIPTION_PUBLIC_OPTIONS)
   opts.mode = 'latest'
   return Subscription.new(signal, opts)
 end
@@ -72,7 +107,8 @@ end
 ---Each engine firing increments a logical generation. Consumers receive only the
 ---newest pending generation, which suits frame and property invalidation signals.
 function Roblox.pulse(signal, opts)
-  opts = copy(opts)
+  opts = checked_options(opts, SUBSCRIPTION_PUBLIC_OPTIONS, 'Roblox.pulse options', 2)
+  opts = project(opts, SUBSCRIPTION_PUBLIC_OPTIONS)
   opts.mode = 'pulse'
   return Subscription.new(signal, opts)
 end
@@ -86,11 +122,10 @@ function Roblox.new_host(opts)
 end
 
 local function application_options(opts, host, owns_host)
-  local out = copy(opts)
+  local out = project(opts, PREPARE_OPTIONS)
   out.host = host
-  out.owns_host = owns_host
   out.host_config = nil
-  out.await_timeout = nil
+  out.owns_host = owns_host
   return out
 end
 
@@ -100,7 +135,7 @@ end
 ---of the engine loop and invokes `app:advance({ horizon = ... })` at suitable
 ---boundaries. No Roblox task or RunService connection is created.
 function Roblox.prepare(fn, opts)
-  opts = opts or {}
+  opts = checked_options(opts, PREPARE_OPTIONS, 'Roblox.prepare options', 2)
   local host = opts.host or Host.new(opts.host_config)
   local owns_host = opts.owns_host
   if owns_host == nil then
@@ -115,9 +150,9 @@ end
 ---a Fibers deadline, or retained immediate work. `scheduling = "phase"` advances
 ---on a selected RunService phase under the same bounded turn controls.
 function Roblox.attach(fn, opts)
-  opts = opts or {}
-  local app = Roblox.prepare(fn, opts)
-  app:attach(opts)
+  opts = checked_options(opts, ATTACH_OPTIONS, 'Roblox.attach options', 2)
+  local app = Roblox.prepare(fn, project(opts, PREPARE_OPTIONS))
+  app:attach(project(opts, ATTACH_ONLY_OPTIONS))
   return app
 end
 
@@ -127,8 +162,8 @@ end
 ---yields on application completion; the Fibers driver itself remains
 ---non-blocking and is advanced by `attach`.
 function Roblox.try_run(fn, opts)
-  opts = opts or {}
-  local app = Roblox.attach(fn, opts)
+  opts = checked_options(opts, TRY_OPTIONS, 'Roblox.try_run options', 2)
+  local app = Roblox.attach(fn, project(opts, ATTACH_OPTIONS))
   local result, reason = app:await(opts.await_timeout)
   if not result then
     app:close()
@@ -145,9 +180,9 @@ end
 
 local function parse_bind_args(scope_or_opts, maybe_opts)
   if type(scope_or_opts) == 'table' and scope_or_opts._fibers_scope == true then
-    return scope_or_opts, maybe_opts or {}
+    return scope_or_opts, checked_options(maybe_opts, BIND_OPTIONS, 'Roblox.bind_to_close options', 3)
   end
-  local opts = scope_or_opts or {}
+  local opts = checked_options(scope_or_opts, BIND_OPTIONS, 'Roblox.bind_to_close options', 3)
   local scope = Runtime.current_scope and Runtime.current_scope()
   return scope, opts
 end
@@ -174,7 +209,7 @@ function Roblox.bind_to_close(scope_or_opts, maybe_opts)
   end
 
   local reason = opts.reason or 'Roblox server closing'
-  local deadline = opts.deadline or 25
+  local deadline = opts.deadline == nil and 25 or opts.deadline
   local shutdown_events, shutdown_feed = External.events(runtime)
   shutdown_events:label(opts.label or 'roblox-shutdown')
 

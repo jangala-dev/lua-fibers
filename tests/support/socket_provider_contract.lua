@@ -58,7 +58,7 @@ function Contract.exercise(name, host, address, opts)
       accepted_local = connection:local_address()
       accepted_peer = connection:peer_address()
       stage = 'server read'
-      local byte, read_err = connection:read(1)
+      local byte, read_err = connection:read_some(1)
       assert_eq(byte, 'x', name .. ' accepted read: ' .. tostring(read_err))
       stage = 'server write'
       assert_eq(connection:write('y'), 1, name .. ' accepted write')
@@ -84,7 +84,7 @@ function Contract.exercise(name, host, address, opts)
     stage = 'client flush'
     assert_eq(connection:flush(), true, name .. ' client flush')
     stage = 'client read'
-    local byte, read_err = connection:read(1)
+    local byte, read_err = connection:read_some(1)
     assert_eq(byte, 'y', name .. ' client read: ' .. tostring(read_err))
     assert_eq(connection:close('client complete'), true, name .. ' client close')
     stage = 'server completion'

@@ -29,29 +29,27 @@ local function assert_truthy(v, msg)
   end
 end
 
--- Declared capabilities, including explicit false values, are authoritative.
+-- A concrete HostHandle has one source of truth for capability: its callback set.
 do
+  local missing_close = pcall(function()
+    Handle.new({
+      label = 'missing-close-handle',
+      read = function() return 'x' end,
+    })
+  end)
+  assert_eq(missing_close, false, 'every HostHandle must provide close')
+
   local h = Handle.new({
     label = 'capability-handle',
-    capabilities = { read = false, write = true, close = false, readiness = true },
-    read = function()
-      return 'should-not-run'
-    end,
-    write = function(_, bytes)
-      return #bytes
-    end,
+    write = function(_, bytes) return #bytes end,
+    close = function() return true end,
   })
   assert_eq(h:supports('read'), false)
   assert_eq(h:supports('write'), true)
+  assert_eq(h:supports('close'), true)
   local bytes, err = h:read(1)
   assert_eq(bytes, nil)
   assert_truthy(HostError.is_unsupported(err, 'read'))
-  local ok, close_err = h:close()
-  assert_eq(ok, nil)
-  assert_truthy(HostError.is_unsupported(close_err, 'close'))
-  local ok2, close_err2 = h:close()
-  assert_eq(ok2, nil)
-  assert_eq(close_err2, close_err, 'repeat close should preserve the original error')
 end
 
 -- Host errors are stable tagged values with useful predicates and text.
@@ -141,13 +139,11 @@ do
 
     local first = Handle.new({
       label = 'invalid-accepted-handle',
-      capabilities = { read = false, write = true, close = true, readiness = true },
       write = function(_, bytes) return #bytes end,
       close = function() first_closed = first_closed + 1; return true end,
     })
     local second = Handle.new({
       label = 'queued-sibling-handle',
-      capabilities = { close = true, readiness = true },
       close = function() second_closed = second_closed + 1; return true end,
     })
 

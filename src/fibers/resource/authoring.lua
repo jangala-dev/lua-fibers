@@ -13,6 +13,7 @@ local Values = require('fibers.internal.values')
 local Journal = require('fibers.internal.kernel.journal')
 local Algebra = require('fibers.internal.kernel.algebra')
 local Label = require('fibers.internal.label')
+local Contract = require('fibers.internal.contract')
 
 local M = {}
 
@@ -30,19 +31,37 @@ local RULE_OPTIONS = {
 }
 
 local function validate_keys(value, allowed, label, level)
-  if type(value) ~= 'table' then error(label .. ' must be a table', level or 3) end
-  for key in pairs(value) do
-    if not allowed[key] then error(label .. ' does not accept ' .. tostring(key), level or 3) end
-  end
+  return Contract.options(value, allowed, label, level or 3)
 end
+
+
+local LOCATION_OPTIONS = {
+  algebra = true,
+  domain = true,
+  value = true,
+  version = true,
+  key = true,
+  clone_value = true,
+  put_equal = true,
+  remove_idempotent = true,
+}
 
 local ids = {}
 
 function M.kind(name)
-  return { name = assert(name, 'facility kind requires a name') }
+  return { _fibers_facility_kind = true, name = Contract.non_empty_string(name, 'facility kind name', 2) }
 end
 
 function M.identity(resource, kind)
+  if type(resource) ~= 'table' then
+    error('facility identity requires a table resource', 2)
+  end
+  if type(kind) ~= 'table' or kind._fibers_facility_kind ~= true then
+    error('facility identity requires a kind created by Facility.kind', 2)
+  end
+  if rawget(resource, '_fibers_id') ~= nil or rawget(resource, '_fibers_kind') ~= nil then
+    error('facility resource already has an identity', 2)
+  end
   local prefix = kind.name
   local id = (ids[prefix] or 0) + 1
   ids[prefix] = id
@@ -52,9 +71,19 @@ function M.identity(resource, kind)
 end
 
 function M.location(owner, opts)
-  opts = opts or {}
-  opts.owner = opts.owner or owner
-  return Journal.new_location(opts)
+  if type(owner) ~= 'table' then
+    error('Facility.location owner must be a table', 2)
+  end
+  opts = Contract.options(opts, LOCATION_OPTIONS, 'Facility.location options', 2)
+  if opts.algebra == nil then error('Facility.location requires algebra', 2) end
+  if opts.version ~= nil then Contract.non_negative_integer(opts.version, 'Facility.location version', 2) end
+  Contract.optional_function(opts.clone_value, 'Facility.location clone_value', 2)
+  Contract.optional_boolean(opts.put_equal, 'Facility.location put_equal', 2)
+  Contract.optional_boolean(opts.remove_idempotent, 'Facility.location remove_idempotent', 2)
+  local location_opts = {}
+  for key, value in pairs(opts) do location_opts[key] = value end
+  location_opts.owner = owner
+  return Journal.new_location(location_opts)
 end
 
 M.ABSENT = Algebra.ABSENT
@@ -138,7 +167,7 @@ function M.outcome(patch, ...)
 end
 
 function M.outcome_packed(patch, packed)
-  assert(is_pack(packed), 'packed outcome requires a Fibers value pack')
+  if not is_pack(packed) then error('packed outcome requires a Fibers value pack', 2) end
   return { patch = patch, result = packed }
 end
 
@@ -164,10 +193,12 @@ end
 
 local function validate_rule(mode, opts, level)
   validate_keys(opts, RULE_OPTIONS, mode .. ' rule options', (level or 2) + 1)
-  assert(opts.location, mode .. ' rule requires location')
+  if opts.location == nil then error(mode .. ' rule requires location', (level or 2) + 1) end
   local has_step = type(opts.step) == 'function'
   local has_cursor = type(opts.cursor) == 'function'
-  assert(has_step ~= has_cursor, mode .. ' rule requires exactly one of step or cursor')
+  if has_step == has_cursor then
+    error(mode .. ' rule requires exactly one of step or cursor', (level or 2) + 1)
+  end
 
   local visibility = opts.visibility or 'own'
   if visibility ~= 'own' and visibility ~= 'together' then

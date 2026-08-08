@@ -1,6 +1,7 @@
 -- Deterministic in-memory file provider for ManualHost and semantic tests.
 
 local IOError = require('fibers.io.error')
+local Contract = require('fibers.internal.contract')
 
 local Provider = {}
 Provider.__index = Provider
@@ -12,16 +13,22 @@ local function new_inode(bytes, permissions)
 end
 
 function Provider.new(opts)
-  opts = opts or {}
+  opts = Contract.options(opts, { files = true, directories = true }, 'memory file provider options', 2)
+  local files = opts.files or {}
+  local directory_spec = opts.directories or {}
+  Contract.table(files, 'memory file provider files', 2)
+  Contract.table(directory_spec, 'memory file provider directories', 2)
   local paths = {}
-  for path, bytes in pairs(opts.files or {}) do
-    paths[path] = new_inode(tostring(bytes))
+  for path, bytes in pairs(files) do
+    Contract.non_empty_string(path, 'memory file path', 2)
+    if type(bytes) ~= 'string' then error('memory file contents must be bytes', 2) end
+    paths[path] = new_inode(bytes)
   end
   local directories = {}
-  for path, value in pairs(opts.directories or {}) do
-    if value then
-      directories[path] = true
-    end
+  for path, value in pairs(directory_spec) do
+    Contract.non_empty_string(path, 'memory directory path', 2)
+    Contract.boolean(value, 'memory directory presence', 2)
+    if value then directories[path] = true end
   end
   return setmetatable({ name = 'memory', paths = paths, directories = directories }, Provider)
 end
@@ -31,7 +38,9 @@ function Provider:is_supported()
 end
 
 function Provider:open(path, mode, opts)
-  opts = opts or {}
+  opts = Contract.options(opts, { exclusive = true, permissions = true }, 'memory file open options', 2)
+  Contract.optional_boolean(opts.exclusive, 'memory file exclusive', 2)
+  if opts.permissions ~= nil then Contract.non_negative_integer(opts.permissions, 'memory file permissions', 2) end
   local first = mode:sub(1, 1)
   local inode = self.paths[path]
   if opts.exclusive and inode then

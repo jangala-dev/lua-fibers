@@ -23,6 +23,24 @@ local Query = {}
 Query.__index = Query
 local next_query = 0
 
+local SOCKET_RESOLVE_OPTIONS = { scope = true, resolver = true, dns = true }
+
+local function validate_resolve_options(value)
+  local opts = DNSResolver.validate_options(value, SOCKET_RESOLVE_OPTIONS, 'socket.resolve_op options')
+  if opts.resolver ~= nil and type(opts.resolver) ~= 'table' then
+    error('socket.resolve_op opts.resolver must be a resolver object', 3)
+  end
+  if opts.dns ~= nil and type(opts.dns) ~= 'boolean' and type(opts.dns) ~= 'table' then
+    error('socket.resolve_op opts.dns must be a boolean, resolver object or DNS option table', 3)
+  end
+  if type(opts.dns) == 'table'
+      and type(opts.dns.resolve) ~= 'function'
+      and type(opts.dns.resolve_family) ~= 'function' then
+    DNSResolver.validate_constructor_options(opts.dns)
+  end
+  return opts
+end
+
 local function query_closure(query)
   return Closure.request_then_wait(function(_ctx, _record, reason)
     return query:close_op(reason or 'resolver query closure')
@@ -225,11 +243,8 @@ end
 
 local function dns_options(opts, host)
   local source = type(opts.dns) == 'table' and opts.dns or opts
-  local out = {}
-  for key, value in pairs(source or {}) do
-    out[key] = value
-  end
-  out.host = out.host or host
+  local out = DNSResolver.project_constructor_options(source)
+  if out.host == nil then out.host = host end
   return out
 end
 
@@ -392,7 +407,8 @@ local function drive_dns(query, backend, opts, rt)
     local family = requested[i]
     scope:spawn(function()
       local ok, addresses, err = Protected.pcall(function()
-        return backend:resolve_family(query.endpoint, family, opts)
+        local backend_opts = DNSResolver.is(backend) and DNSResolver.project_query_options(opts) or opts
+        return backend:resolve_family(query.endpoint, family, backend_opts)
       end)
       if not ok then
         if Runtime.is_cancelled(addresses) then
@@ -454,7 +470,7 @@ local function drive(query, opts)
 end
 
 function Module.resolve_op(endpoint, opts)
-  opts = IO.copy_table(opts)
+  opts = validate_resolve_options(opts)
   endpoint = Address.validate(endpoint, 'socket.resolve_op')
   if not Address.is_name(endpoint) then
     error('socket.resolve_op expects a name endpoint', 2)

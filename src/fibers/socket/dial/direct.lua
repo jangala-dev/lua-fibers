@@ -10,27 +10,24 @@ local Connection = require('fibers.socket.connection')
 local Clock = require('fibers.resource.clock')
 local HostOffer = require('fibers.io.offer')
 local perform = require('fibers.perform')
-
-local function finite_time(value, name, level)
-  value = tonumber(value)
-  if not value or value ~= value or value == math.huge or value == -math.huge then
-    error(name .. ' must be a finite monotonic time', level or 3)
-  end
-  return value
-end
+local Contract = require('fibers.internal.contract')
 
 local Label = require('fibers.internal.label')
 
 local Direct = { name = 'direct' }
 
+local DIRECT_OPTIONS = {
+  scope = true, host = true, label = Contract.non_empty_string,
+  nodelay = Contract.boolean, local_address = true,
+  connect_deadline = Contract.finite_number,
+  capacity = Contract.positive_integer, read_capacity = Contract.positive_integer,
+  write_capacity = Contract.positive_integer, chunk_size = Contract.positive_integer,
+  read_chunk_size = Contract.positive_integer, write_chunk_size = Contract.positive_integer,
+}
+
 function Direct.normalise_options(opts)
-  local out = IO.copy_table(opts)
-  if type(out.local_address) == 'table' then
-    out.local_address = IO.copy_table(out.local_address)
-  end
-  if out.connect_deadline ~= nil then
-    out.connect_deadline = finite_time(out.connect_deadline, 'connect_deadline', 3)
-  end
+  local out = IO.copy_table(Contract.record(opts, DIRECT_OPTIONS, 'socket.dial_op options', 3))
+  if type(out.local_address) == 'table' then out.local_address = IO.copy_table(out.local_address) end
   return out
 end
 
@@ -117,7 +114,11 @@ function Direct.run(dial, driver_scope, opts)
     return nil, err, report(dial, 'failed', started_at, rt:now(), err)
   end
 
-  local handle, err = start_dial(host, dial.endpoint, opts)
+  local handle, err = start_dial(host, dial.endpoint, {
+    label = opts.label,
+    nodelay = opts.nodelay,
+    local_address = opts.local_address,
+  })
   if not handle then
     err = IOError.normalise(err, {
       domain = 'socket',

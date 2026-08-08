@@ -9,17 +9,10 @@ local Reactor = require('fibers.io.reactor')
 local Runtime = require('fibers.runtime')
 local Stream = require('fibers.stream')
 local Label = require('fibers.internal.label')
+local Contract = require('fibers.internal.contract')
 
 local HostStream = {}
 setmetatable(HostStream, { __index = Stream })
-
-local function validate_options(opts, allowed, label)
-  for key in pairs(opts or {}) do
-    if not allowed[key] then
-      error((label or 'options') .. ' does not accept ' .. tostring(key), 3)
-    end
-  end
-end
 
 local function host_stream(label, opts)
   local read_flow = opts.read and Flow.new(opts.read_capacity):label(label .. ':rx') or nil
@@ -58,7 +51,7 @@ local function attach_direction(stream, side, reactor, handle, registrations, ch
 end
 
 local function open_in_op(scope, handle, opts)
-  validate_options(opts, {
+  opts = Contract.options(opts, {
     scope = true,
     label = true,
     read = true,
@@ -67,13 +60,14 @@ local function open_in_op(scope, handle, opts)
     write_capacity = true,
     read_chunk_size = true,
     write_chunk_size = true,
-  }, 'Stream.open_op options')
+  }, 'Stream.open_op options', 3)
   if not (scope and scope._fibers_scope) then
     error('Stream.open_op scope must be a Scope', 3)
   end
   if type(handle) ~= 'table' or handle._fibers_host_handle ~= true then
     error('Stream.open_op expects a HostHandle', 3)
   end
+  if opts.label ~= nil then Contract.non_empty_string(opts.label, 'Stream.open_op opts.label', 3) end
   if type(opts.read) ~= 'boolean' or type(opts.write) ~= 'boolean' then
     error('Stream.open_op requires explicit boolean opts.read and opts.write', 3)
   end
@@ -112,7 +106,16 @@ local function open_in_op(scope, handle, opts)
 end
 
 function HostStream.open_op(handle, opts)
-  opts = opts or {}
+  opts = Contract.options(opts, {
+    scope = true,
+    label = true,
+    read = true,
+    write = true,
+    read_capacity = true,
+    write_capacity = true,
+    read_chunk_size = true,
+    write_chunk_size = true,
+  }, 'Stream.open_op options', 2)
   local scope = opts.scope or (Runtime.current_scope and Runtime.current_scope())
   if not scope then
     error('Stream.open_op requires opts.scope or a current Scope', 2)

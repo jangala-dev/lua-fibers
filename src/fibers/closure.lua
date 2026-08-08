@@ -8,6 +8,7 @@
 -- The Runtime applies the contract. All externally visible changes remain Ops.
 
 local Engine = require('fibers.internal.lifetime.closure')
+local Contract = require('fibers.internal.contract')
 
 local Closure = {}
 
@@ -26,15 +27,21 @@ local propagation_callbacks = {
   on_body_result = true,
 }
 
+local propagation_allowed = {}
+for i = 1, #propagation_fields do propagation_allowed[propagation_fields[i]] = true end
+
 local propagation_booleans = {
   permit_admission = true,
   permit_outward_move = true,
 }
 
-local function copy_propagation(target, source, label)
+local function copy_propagation(target, source, label, strict)
   if source == nil then return target end
   if type(source) ~= 'table' then
     error((label or 'Closure propagation') .. ' must be a table', 3)
+  end
+  if strict then
+    Contract.options(source, propagation_allowed, label or 'Closure propagation', 3)
   end
   for i = 1, #propagation_fields do
     local field = propagation_fields[i]
@@ -76,7 +83,14 @@ end
 -- cancellation during abnormal closure. Propagation decisions may be supplied
 -- in the same table.
 function Closure.running(opts)
-  return copy_propagation(Engine.running(), opts, 'Closure.running options')
+  if opts == nil then return Engine.running() end
+  local allowed = { name = true }
+  for key in pairs(propagation_allowed) do allowed[key] = true end
+  opts = Contract.options(opts, allowed, 'Closure.running options', 2)
+  if opts.name ~= nil then Contract.non_empty_string(opts.name, 'Closure.running name', 2) end
+  local contract = copy_propagation(Engine.running(), opts, 'Closure.running options', false)
+  if opts.name ~= nil then contract.name = opts.name end
+  return contract
 end
 
 -- Compose domain-local shutdown with boundary propagation without mutating
@@ -84,7 +98,7 @@ end
 -- the second argument contributes only pure propagation and admission rules.
 function Closure.combine(local_contract, propagation)
   local local_closure = Engine.protocol(local_contract, 'local closure')
-  return copy_propagation(local_closure, propagation, 'Closure.combine propagation')
+  return copy_propagation(local_closure, propagation, 'Closure.combine propagation', true)
 end
 
 local Boundary = {}
@@ -100,13 +114,12 @@ function Boundary:on_body_result(_parent, _state, ok, primary)
 end
 
 local function boundary(kind, opts, default_name)
-  if opts ~= nil and type(opts) ~= 'table' then
-    error('Closure.' .. kind .. ' options must be a table', 3)
-  end
-  opts = opts or {}
-  if opts.name ~= nil and type(opts.name) ~= 'string' then
-    error('Closure.' .. kind .. ' name must be a string', 3)
-  end
+  local allowed = { name = true, permit_outward_move = true, permit_admission = true }
+  if kind == 'supervisor' then allowed.child_failure = true end
+  opts = Contract.options(opts, allowed, 'Closure.' .. kind .. ' options', 3)
+  if opts.name ~= nil then Contract.non_empty_string(opts.name, 'Closure.' .. kind .. ' name', 3) end
+  Contract.optional_boolean(opts.permit_outward_move, 'Closure.' .. kind .. ' permit_outward_move', 3)
+  Contract.optional_boolean(opts.permit_admission, 'Closure.' .. kind .. ' permit_admission', 3)
   local contract = Closure.running()
   contract.name = opts.name or default_name
   contract.permit_outward_move = opts.permit_outward_move ~= false

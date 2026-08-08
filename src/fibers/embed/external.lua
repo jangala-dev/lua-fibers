@@ -1,4 +1,5 @@
 local Proof = require('fibers.internal.proof')
+local Contract = require('fibers.internal.contract')
 
 -- Authorised host delivery into versioned managed locations.
 
@@ -116,10 +117,7 @@ local INTEREST_DETAIL = {
 local DRIVE_OPTIONS = { host = true, run = true, max_iterations = true, host_options = true }
 
 local function validate_keys(value, allowed, label, level)
-  if value ~= nil and type(value) ~= 'table' then error(label .. ' must be a table', level or 3) end
-  for key in pairs(value or {}) do
-    if not allowed[key] then error(label .. ' does not accept ' .. tostring(key), level or 3) end
-  end
+  return Contract.options(value, allowed, label, level or 3)
 end
 local next_id = 0
 
@@ -262,8 +260,12 @@ function External.readiness(runtime, key)
 end
 
 function External.drive(runtime, opts)
-  opts = opts or {}
-  validate_keys(opts, DRIVE_OPTIONS, 'External.drive options', 2)
+  opts = validate_keys(opts, DRIVE_OPTIONS, 'External.drive options', 2)
+  if opts.max_iterations ~= nil then
+    Contract.positive_integer(opts.max_iterations, 'External.drive opts.max_iterations', 2)
+  end
+  if opts.run ~= nil then Contract.table(opts.run, 'External.drive opts.run', 2) end
+  if opts.host_options ~= nil then Contract.table(opts.host_options, 'External.drive opts.host_options', 2) end
   local host = opts.host or runtime.host
   local run_opts = opts.run
   local max_iterations = opts.max_iterations

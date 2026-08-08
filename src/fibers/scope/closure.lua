@@ -413,7 +413,7 @@ local function capture_failure(out, fn)
   if not ok then out[#out + 1] = err end
 end
 
-function Driver.run(scope, fn, closure)
+function Driver.run(scope, fn, closure, on_body_exit)
   if type(fn) ~= 'function' then
     error('Scope:run expects a function', 2)
   end
@@ -439,6 +439,25 @@ function Driver.run(scope, fn, closure)
   else
     body_results = pack(false, setup_err)
   end
+  if on_body_exit ~= nil then
+    if type(on_body_exit) ~= 'function' then
+      error('Scope closure body-exit hook must be a function or nil', 2)
+    end
+    local published, publish_err = Protected.pcall(on_body_exit, body_results, rt)
+    if not published then
+      if token then
+        local pop_ok, pop_err = Protected.pcall(function()
+          return Context.pop_scope(rt, token)
+        end)
+        if not pop_ok then
+          error('body-exit hook failed: ' .. tostring(publish_err)
+            .. '; scope context pop also failed: ' .. tostring(pop_err), 0)
+        end
+      end
+      error(publish_err, 0)
+    end
+  end
+
   local body_ok = body_results[1]
   local body_primary = body_results[2]
   local close_reason = body_ok and Lifetime.CloseReason.NORMAL or body_primary

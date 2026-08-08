@@ -18,7 +18,7 @@ function M.resource(name, closure, opts)
   local value = opts.value or { name = name or 'test-resource' }
   if closure then
     Lifetime.define(value, {
-      name = name,
+      label = name,
       closure = closure,
       rights = opts.rights,
       role = opts.role,
@@ -26,7 +26,7 @@ function M.resource(name, closure, opts)
     })
   else
     Lifetime.inert(value, {
-      name = name,
+      label = name,
       rights = opts.rights,
       role = opts.role,
       children = opts.children,

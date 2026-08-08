@@ -25,21 +25,14 @@ function Connection.options(source, fields)
   return out
 end
 
-local function address_from(handle, method_name, field_name)
-  if type(handle[method_name]) == 'function' then
-    return handle[method_name](handle)
+local function require_address_accessor(handle, name)
+  local accessor = handle and handle[name]
+  if type(accessor) ~= 'function' then
+    error('connected host handle must provide ' .. name .. '()', 3)
   end
-  return handle[field_name]
+  return accessor(handle)
 end
 
-local function set_addresses(connection, local_address, peer_address)
-  if type(connection._set_addresses) == 'function' then
-    connection:_set_addresses(local_address, peer_address)
-  else
-    connection._local_address = local_address
-    connection._peer_address = peer_address
-  end
-end
 
 function Connection.open(rt, scope, handle, opts)
   return IO.open_handle_stream(rt, scope, handle, {
@@ -79,14 +72,14 @@ function Connection.from_host_hold(rt, scope, host_hold, key, handle, opts)
 
   local local_address = opts.local_address
   if local_address == nil then
-    local_address = address_from(handle, 'local_address', 'local_address_value')
+    local_address = require_address_accessor(handle, 'local_address')
   end
   local peer_address = opts.peer_address
   if peer_address == nil then
-    peer_address = address_from(handle, 'peer_address_value', 'peer_address_value')
+    peer_address = require_address_accessor(handle, 'peer_address')
   end
-  peer_address = peer_address or opts.default_peer
-  set_addresses(connection, local_address, peer_address)
+  if peer_address == nil then peer_address = opts.default_peer end
+  connection:_set_addresses(local_address, peer_address)
 
   local released, release_err = host_hold:release(key, handle)
   if not released then

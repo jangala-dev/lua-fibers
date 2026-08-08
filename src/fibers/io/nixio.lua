@@ -281,22 +281,31 @@ binding.fd = {
     local message, number = split(a, b)
     return nil, number, message
   end,
+  supports_shutdown = function(value)
+    return value ~= nil and type(value.shutdown) == 'function'
+  end,
+  supports_close = function(value)
+    return value ~= nil and type(value.close) == 'function'
+  end,
+  supports_nonblocking = function(value)
+    return value ~= nil and type(value.setblocking) == 'function'
+  end,
   shutdown = function(value, mode)
-    -- The working Nixio integration treated shutdown as best effort.  Nixio
-    -- builds differ in the errors returned for already-closed, anonymous and
-    -- non-socket handles, so do not turn those differences into stream errors.
-    if value and type(value.shutdown) == 'function' then
-      pcall(value.shutdown, value, mode == 'read' and 'rd' or 'wr')
+    if not value or type(value.shutdown) ~= 'function' then
+      error('nixio descriptor does not support shutdown', 2)
     end
-    return true
+    local ok, a, b = value:shutdown(mode == 'read' and 'rd' or 'wr')
+    if ok ~= nil and ok ~= false then return true end
+    local message, number = split(a, b)
+    return nil, number, message
   end,
   close = function(value)
-    open_objects[value] = nil
     if not value or type(value.close) ~= 'function' then
-      return true
+      error('nixio descriptor does not support close', 2)
     end
     local ok, a, b = value:close()
     if ok ~= nil and ok ~= false then
+      open_objects[value] = nil
       return true
     end
     local message, number = split(a, b)
@@ -304,12 +313,10 @@ binding.fd = {
   end,
   set_nonblocking = function(value, enabled)
     if not value or type(value.setblocking) ~= 'function' then
-      return true
+      error('nixio descriptor does not support nonblocking mode', 2)
     end
     local ok, a, b = value:setblocking(not enabled)
-    if ok ~= nil and ok ~= false then
-      return true
-    end
+    if ok ~= nil and ok ~= false then return true end
     local message, number = split(a, b)
     return nil, number, message
   end,

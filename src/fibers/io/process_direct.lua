@@ -232,12 +232,7 @@ function Direct.new(spec)
           child_fail(error_write, 'cwd', errno)
         end
       end
-      if process_spec.new_session then
-        local ok, errno = spec.setsid()
-        if not ok then
-          child_fail(error_write, 'session', errno)
-        end
-      elseif process_spec.process_group == 'new' then
+      if process_spec.process_group == 'new' then
         local ok, errno = spec.setpgid(0, 0)
         if not ok then
           child_fail(error_write, 'group', errno)
@@ -337,11 +332,9 @@ function Direct.new(spec)
           label = (process_spec.label or ('process-' .. pid)) .. ':pidfd',
           nonblocking = true,
           cloexec = true,
+          readable = false,
+          writable = false,
         })
-        if pidfd then
-          pidfd.capabilities.write = false
-          pidfd.capabilities.shutdown_write = false
-        end
       end
     end
 
@@ -349,7 +342,7 @@ function Direct.new(spec)
       _fibers_id = 'host-process-' .. tostring(pid),
       _pid = pid,
       pidfd = pidfd,
-      group_id = (process_spec.new_session or process_spec.process_group == 'new') and pid
+      group_id = process_spec.process_group == 'new' and pid
         or (type(process_spec.process_group) == 'number' and process_spec.process_group or nil),
       poll_interval = process_spec.poll_interval or 0.025,
       status = nil,

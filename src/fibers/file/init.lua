@@ -11,9 +11,16 @@ local Protected = require('fibers.protected')
 local Direct = require('fibers.internal.direct')
 local Regular = require('fibers.file.regular')
 local Label = require('fibers.internal.label')
+local Contract = require('fibers.internal.contract')
 
 local File = {}
 local next_pipe = 0
+
+local PIPE_OPTIONS = {
+  scope = true, host = true, label = true, capacity = true,
+  read_capacity = true, write_capacity = true, chunk_size = true,
+  read_chunk_size = true, write_chunk_size = true,
+}
 
 local function close_pipe_handle(handle, reason)
   return IO.close_value('pipe', handle, reason)
@@ -32,19 +39,23 @@ local function acquire_handles(rt, opts)
     nonblocking = true,
   })
   if not read_handle or not write_handle then
+    local primary = IOError.normalise(err or detail or 'pipe creation failed', {
+      domain = 'pipe',
+      action = 'create',
+      detail = detail,
+    })
+    local cleanup_errors = {}
     if read_handle then
-      close_pipe_handle(read_handle, 'partial pipe acquisition')
+      IOError.capture_cleanup(cleanup_errors, 'pipe', 'partial_read_close', nil, close_pipe_handle, read_handle, primary)
     end
     if write_handle then
-      close_pipe_handle(write_handle, 'partial pipe acquisition')
+      IOError.capture_cleanup(cleanup_errors, 'pipe', 'partial_write_close', nil, close_pipe_handle, write_handle, primary)
     end
-    return nil,
-      nil,
-      IOError.normalise(err or detail or 'pipe creation failed', {
-        domain = 'pipe',
-        action = 'create',
-        detail = detail,
-      })
+    return nil, nil, IOError.with_cleanup(
+      primary, 'pipe', 'create',
+      'pipe creation failed and partial host-handle cleanup was incomplete',
+      cleanup_errors
+    )
   end
   return read_handle, write_handle
 end
@@ -64,18 +75,23 @@ local function open_endpoint(rt, scope, handle, mode, opts)
 end
 
 local function fail_start(rt, start, err)
+  local cleanup_errors = {}
   if start.read_stream then
-    Protected.pcall(function()
-      IO.masked_perform(rt, start.read_stream:abort_op(err))
+    IOError.capture_cleanup(cleanup_errors, 'pipe', 'abort_read_stream', nil, function()
+      return IO.masked_perform(rt, start.read_stream:abort_op(err))
     end)
   end
   if start.write_stream then
-    Protected.pcall(function()
-      IO.masked_perform(rt, start.write_stream:abort_op(err))
+    IOError.capture_cleanup(cleanup_errors, 'pipe', 'abort_write_stream', nil, function()
+      return IO.masked_perform(rt, start.write_stream:abort_op(err))
     end)
   end
-  start.host_hold:close(err)
-  return nil, nil, err
+  IOError.capture_cleanup(cleanup_errors, 'pipe', 'close_host_hold', nil, start.host_hold.close, start.host_hold, err)
+  return nil, nil, IOError.with_cleanup(
+    err, 'pipe', 'start',
+    'pipe start failed and cleanup was incomplete',
+    cleanup_errors
+  )
 end
 
 local function finish_endpoint(rt, start, which, handle, opts)
@@ -128,7 +144,11 @@ local function start_pipe(rt, start, opts)
 end
 
 function File.pipe_op(opts)
-  opts = opts or {}
+  opts = Contract.options(opts, PIPE_OPTIONS, 'file.pipe_op options', 2)
+  if opts.label ~= nil then Contract.non_empty_string(opts.label, 'file.pipe_op opts.label', 2) end
+  for _, key in ipairs({ 'chunk_size', 'read_chunk_size', 'write_chunk_size' }) do
+    if opts[key] ~= nil then Contract.positive_integer(opts[key], 'file.pipe_op opts.' .. key, 2) end
+  end
   next_pipe = next_pipe + 1
   local label = opts.label
   local scope = IO.current_scope(opts, 'file.pipe_op')

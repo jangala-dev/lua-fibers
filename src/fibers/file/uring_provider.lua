@@ -277,7 +277,7 @@ function Provider.new(runtime, opts)
   self.handle = handle
   self.reactor = Reactor.for_runtime(runtime)
   self.completion_entry = self.reactor:callback({
-    name = 'file-io-uring-completions',
+    label = 'file-io-uring-completions',
     mode = 'read',
     handle = handle,
     callback = function(registered_handle)

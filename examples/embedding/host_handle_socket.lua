@@ -66,6 +66,10 @@ local handle = HostHandle.new({
   label = 'example-socket-handle',
   key = socket.key,
   host = host,
+  capabilities = {
+    read = true, write = true, shutdown_read = false, shutdown_write = false,
+    close = true, set_nonblocking = false, readiness = true,
+  },
   read = function(_handle, max)
     return socket:read(max)
   end,

@@ -21,6 +21,7 @@ local Protected = require('fibers.protected')
 local perform = require('fibers.perform')
 local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
+local Contract = require('fibers.internal.contract')
 
 local DatagramLifecycle = Lifecycle.define({
   prefix = 'socket.datagram',
@@ -227,13 +228,11 @@ function Datagram:flush_op()
   return self.sends:flush_op()
 end
 
+local RECEIVE_OPTIONS = { max_size = true }
+
 local function limit_packet(packet, opts)
-  opts = opts or {}
-  local max_size = opts.max_size and tonumber(opts.max_size) or nil
+  local max_size = opts.max_size
   if max_size ~= nil then
-    if max_size < 0 or max_size ~= math.floor(max_size) then
-      error('DatagramSocket:receive_from_op max_size must be a non-negative integer', 3)
-    end
     if #packet.data > max_size then
       local copy = {}
       for key, value in pairs(packet) do
@@ -249,7 +248,10 @@ local function limit_packet(packet, opts)
 end
 
 function Datagram:receive_from_op(opts)
-  opts = IO.copy_table(opts)
+  opts = Contract.options(opts, RECEIVE_OPTIONS, 'DatagramSocket:receive_from_op options', 2)
+  if opts.max_size ~= nil then
+    Contract.non_negative_integer(opts.max_size, 'DatagramSocket:receive_from_op max_size', 2)
+  end
   local received = self.packets:next_op():map(function(packet)
     return limit_packet(packet, opts)
   end)
@@ -451,24 +453,29 @@ local function driver(socket, driver_scope)
   close_from_driver(socket, rt, 'datagram driver failed', failure, fatal)
 end
 
+local UDP_OPTIONS = {
+  scope = true,
+  host = true,
+  label = true,
+  receive_capacity = true,
+  send_capacity = true,
+  max_datagram_size = true,
+  reuse_address = true,
+}
+
 function Module.udp_op(address, opts)
-  opts = IO.copy_table(opts)
+  opts = Contract.options(opts, UDP_OPTIONS, 'socket.udp_op options', 2)
   address = Address.validate(address, 'socket.udp_op')
   if address.kind ~= 'inet4' and address.kind ~= 'inet6' then
     error('socket.udp_op currently supports IPv4 and IPv6 local addresses', 2)
   end
-  local receive_capacity = tonumber(opts.receive_capacity or 64)
-  local send_capacity = tonumber(opts.send_capacity or 64)
-  local max_datagram_size = tonumber(opts.max_datagram_size or 65535)
-  if not receive_capacity or receive_capacity < 1 or receive_capacity ~= math.floor(receive_capacity) then
-    error('socket.udp_op receive_capacity must be a positive integer', 2)
-  end
-  if not send_capacity or send_capacity < 1 or send_capacity ~= math.floor(send_capacity) then
-    error('socket.udp_op send_capacity must be a positive integer', 2)
-  end
-  if not max_datagram_size or max_datagram_size < 0 or max_datagram_size ~= math.floor(max_datagram_size) then
-    error('socket.udp_op max_datagram_size must be a non-negative integer', 2)
-  end
+  local receive_capacity = opts.receive_capacity or 64
+  local send_capacity = opts.send_capacity or 64
+  local max_datagram_size = opts.max_datagram_size or 65535
+  Contract.positive_integer(receive_capacity, 'socket.udp_op receive_capacity', 2)
+  Contract.positive_integer(send_capacity, 'socket.udp_op send_capacity', 2)
+  Contract.non_negative_integer(max_datagram_size, 'socket.udp_op max_datagram_size', 2)
+  Contract.optional_boolean(opts.reuse_address, 'socket.udp_op reuse_address', 2)
   local scope = IO.current_scope(opts, 'socket.udp_op')
   next_datagram = next_datagram + 1
   local id = 'datagram-' .. tostring(next_datagram)
@@ -497,7 +504,7 @@ function Module.udp_op(address, opts)
     return Activation.create(socket, {
       host = opts.host,
       host_method = 'create_datagram',
-      options = opts,
+      options = { label = opts.label, reuse_address = opts.reuse_address },
       lifecycle = socket.lifecycle,
       hold = socket.host_hold,
       hold_key = 'socket',

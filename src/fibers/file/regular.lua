@@ -100,6 +100,21 @@ function Algorithms.write_all(write, bytes, fields)
   return total
 end
 
+
+local function provider_open_options(opts)
+  return {
+    exclusive = opts and opts.exclusive or nil,
+    permissions = opts and opts.permissions or nil,
+  }
+end
+
+local function provider_path_options(action, opts)
+  if action == 'mkdir' or action == 'mkdir_p' then
+    return { permissions = opts and opts.permissions or nil }
+  end
+  return nil
+end
+
 local Provider = {}
 local by_runtime = setmetatable({}, { __mode = 'k' })
 
@@ -121,15 +136,29 @@ function Provider.for_runtime(runtime, opts)
       })
   end
   local ok, provider = pcall(host.file_provider, host, runtime, opts or {})
-  if
-    not ok
-    or not provider
-    or (type(provider.is_supported) == 'function' and not provider:is_supported())
-  then
-    return nil,
-      IOError.unsupported('file', 'provider', {
+  if not ok then error(provider, 0) end
+  if provider == nil then
+    return nil, IOError.unsupported('file', 'provider', {
+      host = Label.describe(host, host.kind or host.family),
+    })
+  end
+  if type(provider) ~= 'table' then
+    error('host:file_provider must return a provider table or nil', 2)
+  end
+  for _, method in ipairs({ 'open', 'rename', 'unlink', 'mkdir' }) do
+    if type(provider[method]) ~= 'function' then
+      error('file provider must implement ' .. method, 2)
+    end
+  end
+  if provider.is_supported ~= nil then
+    if type(provider.is_supported) ~= 'function' then
+      error('file provider is_supported must be a function when supplied', 2)
+    end
+    if not provider:is_supported() then
+      return nil, IOError.unsupported('file', 'provider', {
         host = Label.describe(host, host.kind or host.family),
       })
+    end
   end
 
   by_runtime[runtime] = provider
@@ -523,9 +552,7 @@ local function drive_file(file, opts)
     local attempts = opts.attempts or 64
     for _ = 1, attempts do
       local candidate = temp_candidate(opts)
-      local open_opts = IO.copy_table(opts)
-      open_opts.exclusive = true
-      open_opts.permissions = opts.permissions or 384
+      local open_opts = { exclusive = true, permissions = opts.permissions or 384 }
       backend, open_err = provider:open(candidate, 'w+b', open_opts)
       if backend then
         file.path = candidate
@@ -537,7 +564,7 @@ local function drive_file(file, opts)
       end
     end
   else
-    backend, open_err = provider:open(file.path, file.mode, opts)
+    backend, open_err = provider:open(file.path, file.mode, provider_open_options(opts))
   end
   if not backend then
     local failure = IOError.normalise(open_err, { domain = 'file', action = 'open', path = file.path })
@@ -585,7 +612,7 @@ local function drive_file(file, opts)
   end
   local ok, err = backend:close('file request queue closed')
   if ok and file.auto_unlink then
-    local unlinked, unlink_err = provider:unlink(file.path, file.provider_opts or {})
+    local unlinked, unlink_err = provider:unlink(file.path)
     if not unlinked and not (IOError.is(unlink_err, 'system') and unlink_err.code == 'ENOENT') then
       ok, err = nil, unlink_err
     end
@@ -629,13 +656,23 @@ local function new_file_op(path, mode, opts, operation, temporary)
       local failure = Runtime.is_cancelled(err)
           and IOError.closed('file', 'driver', { path = file.path, reason = err.reason or 'file driver cancelled' })
         or IO.protocol_error('file', 'driver', err, { path = file.path })
-      if file.backend then Protected.pcall(file.backend.close, file.backend, failure) end
+      local cleanup_errors = {}
+      if file.backend then
+        IOError.capture_cleanup(cleanup_errors, 'file', 'driver_backend_close', nil, file.backend.close, file.backend, failure)
+      end
       if file.auto_unlink then
-        Protected.pcall(function()
-          local provider = Provider.for_runtime(rt, opts)
-          if provider then provider:unlink(file.path, opts) end
+        IOError.capture_cleanup(cleanup_errors, 'file', 'driver_auto_unlink', nil, function()
+          local provider, provider_err = Provider.for_runtime(rt, opts)
+          if not provider then return nil, provider_err end
+          local unlinked, unlink_err = provider:unlink(file.path)
+          if not unlinked and not (IOError.is(unlink_err, 'system') and unlink_err.code == 'ENOENT') then
+            return nil, unlink_err
+          end
+          return true
         end)
       end
+      failure = IOError.with_cleanup(failure, 'file', 'driver_cleanup',
+        'file driver and cleanup both failed', cleanup_errors, { path = failure and failure.path or nil })
       if file.ready_completion:is_pending() then publish(rt, file.ready_completion, false, failure) end
       IO.masked_perform(rt, file.tx:close_op(failure))
       if file.closed_completion:is_pending() then publish(rt, file.closed_completion, false, failure) end
@@ -725,7 +762,7 @@ local function read_all_job(path, opts, label)
   local max, chunk = validate_read_limits(opts, 3)
   return path_job_op('read_all', function(job_opts)
     local file, err = with_provider(job_opts, 'read_all', function(provider)
-      return provider:open(path, 'rb', job_opts)
+      return provider:open(path, 'rb', provider_open_options(job_opts))
     end)
     if not file then
       return nil, err
@@ -763,7 +800,7 @@ local function write_all_job(path, bytes, opts, label)
   local mode = validate_mode(opts.mode or (opts.append and 'ab' or 'wb'))
   return path_job_op('write_all', function(job_opts)
     local file, err = with_provider(job_opts, 'write_all', function(provider)
-      return provider:open(path, mode, job_opts)
+      return provider:open(path, mode, provider_open_options(job_opts))
     end)
     if not file then
       return nil, err
@@ -798,9 +835,9 @@ local function path_action(action, args, opts)
   return path_job_op(action, function(job_opts)
     return with_provider(job_opts, action, function(provider)
       if action == 'rename' then
-        return provider:rename(args[1], args[2], job_opts)
+        return provider:rename(args[1], args[2])
       end
-      return provider[action](provider, args[1], job_opts)
+      return provider[action](provider, args[1], provider_path_options(action, job_opts))
     end)
   end, opts)
 end
@@ -839,7 +876,7 @@ local function mkdir_p_job(path, opts, label)
   return path_job_op('mkdir_p', function(job_opts)
     return with_provider(job_opts, 'mkdir_p', function(provider)
       if type(provider.mkdir_p) == 'function' then
-        return provider:mkdir_p(path, job_opts)
+        return provider:mkdir_p(path, provider_path_options('mkdir_p', job_opts))
       end
       return nil, IOError.unsupported('file', 'mkdir_p', { path = path })
     end)

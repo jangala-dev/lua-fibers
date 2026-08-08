@@ -7,6 +7,7 @@
 
 local WaitSet = require('fibers.embed.wait_set')
 local Label = require('fibers.internal.label')
+local Contract = require('fibers.internal.contract')
 
 local next_pure = 0
 
@@ -18,8 +19,8 @@ local function default_now()
 end
 
 local function default_sleep(seconds)
-  seconds = tonumber(seconds) or 0
-  if seconds <= 0 then
+  seconds = Contract.non_negative_number(seconds, 'PureHost sleep seconds', 3)
+  if seconds == 0 then
     return true
   end
   local whole = math.ceil(seconds)
@@ -33,8 +34,12 @@ local function default_sleep(seconds)
   return execute('sleep ' .. tostring(whole))
 end
 
+local PURE_OPTIONS = {
+  now = Contract.func, sleep = Contract.func, label = Contract.non_empty_string,
+}
+
 function Pure.new(opts)
-  opts = opts or {}
+  opts = Contract.record(opts, PURE_OPTIONS, 'PureHost options', 2)
   local now = opts.now or default_now
   local sleep = opts.sleep or default_sleep
   next_pure = next_pure + 1

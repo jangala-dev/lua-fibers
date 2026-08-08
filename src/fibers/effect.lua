@@ -22,23 +22,34 @@
 -- distinct keys.  nil is supported; NaN is rejected because it has no stable
 -- table-key identity.
 
+local Contract = require('fibers.internal.contract')
+
 local EffectKind = (function()
   local EffectKind = {}
   EffectKind.__index = EffectKind
 
 
-  local function assert_field(spec, name, ty)
-    if type(spec[name]) ~= ty then
-      error('EffectKind.new requires ' .. name .. ' :: ' .. ty, 3)
+  local KIND_OPTIONS = {
+    name = true,
+    key = true,
+    merge = true,
+    prepare = true,
+    validate_payload = true,
+  }
+
+  local function require_function(spec, name)
+    if type(spec[name]) ~= 'function' then
+      error('Effect.kind requires ' .. name .. ' to be a function', 3)
     end
   end
 
   function EffectKind.new(spec)
-    assert(type(spec) == 'table', 'EffectKind.new expects a spec table')
-    assert_field(spec, 'name', 'string')
-    assert_field(spec, 'key', 'function')
-    assert_field(spec, 'merge', 'function')
-    assert_field(spec, 'prepare', 'function')
+    spec = Contract.options(spec, KIND_OPTIONS, 'Effect.kind specification', 2)
+    Contract.non_empty_string(spec.name, 'Effect.kind name', 2)
+    require_function(spec, 'key')
+    require_function(spec, 'merge')
+    require_function(spec, 'prepare')
+    Contract.optional_function(spec.validate_payload, 'Effect.kind validate_payload', 2)
 
     local kind = {
       _fibers_effect_kind = true,
@@ -54,13 +65,16 @@ local EffectKind = (function()
 
   function EffectKind:of(payload)
     if type(payload) ~= 'table' then
-      return nil, { kind = 'invalid_effect_payload', message = self.name .. ' payload must be a table' }
+      error(self.name .. ' effect payload must be a table', 2)
     end
 
     if self.validate_payload then
       local ok, err = self.validate_payload(self, payload)
-      if not ok then
-        return nil, err
+      if ok ~= true then
+        if err == nil then
+          error(self.name .. ' validate_payload must return true or false/nil plus an error', 2)
+        end
+        error(type(err) == 'table' and (err.message or err.kind) or tostring(err), 2)
       end
     end
 
@@ -92,11 +106,10 @@ Rejection.__index = Rejection
 -- nil returns are reserved for authoring mistakes so they cannot silently alter
 -- choice/or_else semantics.
 function Effect.reject(reason)
-  if reason == nil then
-    reason = { kind = 'effect_rejected', message = 'effect candidate rejected' }
-  elseif type(reason) == 'string' then
-    reason = { kind = 'effect_rejected', message = reason }
+  if type(reason) ~= 'table' then
+    error('Effect.reject requires a structured reason table', 2)
   end
+  Contract.non_empty_string(reason.kind, 'Effect.reject reason.kind', 2)
   return setmetatable({ _fibers_effect_rejection = true, reason = reason }, Rejection)
 end
 
@@ -120,11 +133,7 @@ function Effect.of(kind, payload)
   if not EffectKind.is_kind(kind) then
     error('Effect.of expects an Effect kind', 2)
   end
-  local e, err = kind:of(payload)
-  if not e then
-    error(err and (err.message or tostring(err)) or 'invalid effect payload', 2)
-  end
-  return e
+  return kind:of(payload)
 end
 
 local InterruptKind

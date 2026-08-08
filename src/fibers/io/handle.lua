@@ -13,6 +13,7 @@ local UnsafeExternalMutation = require('fibers.embed.unsafe_external_mutation')
 local IOError = require('fibers.io.error')
 local IOAudit = require('fibers.internal.io_audit')
 local Label = require('fibers.internal.label')
+local Contract = require('fibers.internal.contract')
 
 local Handle = {}
 Handle.__index = Handle
@@ -69,35 +70,26 @@ local function callback(self, name, ...)
   return nil, IOError.unsupported('handle', name, { handle = Label.describe(self, self._fibers_id) })
 end
 
+local HANDLE_OPTIONS = {
+  label = Contract.non_empty_string, key = true, handle = true, host = true,
+  readiness = true, feed = true,
+  read = Contract.func, write = Contract.func,
+  shutdown_read = Contract.func, shutdown_write = Contract.func,
+  close = Contract.func, set_nonblocking = Contract.func,
+  bind_runtime = Contract.func, attach_stream = Contract.func, ready = Contract.func,
+}
+
+local CAPABILITY_FIELDS = {
+  read = '_read', write = '_write', shutdown_read = '_shutdown_read',
+  shutdown_write = '_shutdown_write', close = '_close', set_nonblocking = '_set_nonblocking',
+}
+
 function Handle.new(opts)
-  opts = opts or {}
+  opts = Contract.record(opts, HANDLE_OPTIONS, 'HostHandle options', 2)
+  if opts.close == nil then error('HostHandle requires close', 2) end
+
   next_id = next_id + 1
   local key = opts.key or opts.handle or ('host-handle-' .. tostring(next_id))
-  local declared = opts.capabilities or {}
-  local function capability(name, fallback)
-    if declared[name] ~= nil then
-      return not not declared[name]
-    end
-    return not not fallback
-  end
-  local capabilities = {
-    read = capability('read', type(opts.read) == 'function'),
-    write = capability('write', type(opts.write) == 'function'),
-    shutdown_read = capability(
-      'shutdown_read',
-      type(opts.shutdown_read) == 'function'
-    ),
-    shutdown_write = capability(
-      'shutdown_write',
-      type(opts.shutdown_write) == 'function'
-    ),
-    close = capability('close', type(opts.close) == 'function'),
-    set_nonblocking = capability(
-      'set_nonblocking',
-      type(opts.set_nonblocking) == 'function'
-    ),
-    readiness = capability('readiness', true),
-  }
   local id = 'host-handle-' .. tostring(next_id)
   local handle = setmetatable({
     _fibers_id = id,
@@ -106,7 +98,6 @@ function Handle.new(opts)
     host = opts.host,
     readiness = opts.readiness or Readiness.new(key, nil),
     feed = opts.feed,
-    capabilities = capabilities,
     _read = opts.read,
     _write = opts.write,
     _shutdown_read = opts.shutdown_read,
@@ -127,7 +118,9 @@ function Handle.new(opts)
 end
 
 function Handle:supports(capability)
-  return self.capabilities and self.capabilities[capability] == true
+  if capability == 'readiness' then return true end
+  local field = CAPABILITY_FIELDS[capability]
+  return field ~= nil and self[field] ~= nil
 end
 
 local function require_capability(self, capability)
@@ -229,7 +222,8 @@ function Handle:set_nonblocking(value)
   if not ok then
     return nil, err
   end
-  local changed, detail, extra = callback(self, 'set_nonblocking', value ~= false)
+  value = Contract.boolean(value, 'HostHandle:set_nonblocking value', 2)
+  local changed, detail, extra = callback(self, 'set_nonblocking', value)
   if not changed then
     return nil, call_error(self, 'set_nonblocking', detail, extra)
   end
@@ -241,8 +235,9 @@ Handle.write = data_method('write', 'write')
 
 local function shutdown_method(action)
   return function(self, reason)
-    if not self:supports(action) then
-      return true
+    local supported, unsupported = require_capability(self, action)
+    if not supported then
+      return nil, unsupported
     end
     local ok, detail, extra = callback(self, action, reason)
     if not ok then

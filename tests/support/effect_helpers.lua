@@ -86,11 +86,7 @@ M.DischargeFatalKind = Effect.kind({
 function M.tag(name, fields)
   fields = fields or {}
   fields.tag = fields.tag or name
-  local c, err = M.TagKind:of(fields)
-  if not c then
-    error(err and err.message or tostring(err), 2)
-  end
-  return c
+  return M.TagKind:of(fields)
 end
 
 function M.kind(name)
@@ -98,27 +94,15 @@ function M.kind(name)
 end
 
 function M.conflict(label)
-  local c, err = M.ConflictKind:of({ label = label })
-  if not c then
-    error(err and err.message or tostring(err), 2)
-  end
-  return c
+  return M.ConflictKind:of({ label = label })
 end
 
 function M.prepare_refuse()
-  local c, err = M.PrepareRefuseKind:of({})
-  if not c then
-    error(err and err.message or tostring(err), 2)
-  end
-  return c
+  return M.PrepareRefuseKind:of({})
 end
 
 function M.discharge_fatal()
-  local c, err = M.DischargeFatalKind:of({})
-  if not c then
-    error(err and err.message or tostring(err), 2)
-  end
-  return c
+  return M.DischargeFatalKind:of({})
 end
 
 return M

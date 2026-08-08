@@ -245,7 +245,7 @@ function Reaper.new(spec)
           child_fail(launch_write, 'cwd', number)
         end
       end
-      if process_spec.new_session or process_spec.process_group == 'new' then
+      if process_spec.process_group == 'new' then
         local ok, number = spec.setsid()
         if not ok then
           child_fail(launch_write, 'session', number)
@@ -367,12 +367,12 @@ function Reaper.new(spec)
     self.buffer = rest
     local code = line:match('^exited (%d+)$')
     if code then
-      self.status = Core.exited(code)
+      self.status = Core.exited(tonumber(code))
       return
     end
     local number = line:match('^signalled (%d+)$')
     if number then
-      self.status = Core.signalled(signals, number)
+      self.status = Core.signalled(signals, tonumber(number))
       return
     end
     local stage, errno = line:match('^failed ([%w_]+) (%d+)$')
@@ -567,13 +567,14 @@ function Reaper.new(spec)
     end
     local status_handle, wrap_err = spec.Fd.new(
       status_read,
-      { host = host, label = (process_spec.label or ('process-' .. pid)) .. ':status', nonblocking = true }
+      {
+        host = host, label = (process_spec.label or ('process-' .. pid)) .. ':status',
+        nonblocking = true, readable = true, writable = false,
+      }
     )
     if not status_handle then
       return nil, nil, IOError.normalise(wrap_err, { domain = 'process', action = 'wrap_status' })
     end
-    status_handle.capabilities.write = false
-    status_handle.capabilities.shutdown_write = false
     local endpoints, endpoint_err = IO.wrap({
       host = host,
       label = process_spec.label,
@@ -590,7 +591,7 @@ function Reaper.new(spec)
       _fibers_id = 'host-process-' .. tostring(pid),
       _pid = pid,
       reaper_pid = reaper,
-      group_id = (process_spec.new_session or process_spec.process_group == 'new') and pid or nil,
+      group_id = process_spec.process_group == 'new' and pid or nil,
       poll_interval = process_spec.poll_interval or 0.025,
       status_handle = status_handle,
       buffer = buffer or '',

@@ -247,7 +247,11 @@ function Dial:connect(target)
   local closed, close_err = self:closed()
   if not closed then
     if connection and type(connection.abort) == 'function' then
-      Protected.pcall(connection.abort, connection, close_err or 'Dial closure failed')
+      local cleanup = {}
+      IOError.capture_cleanup(cleanup, 'socket', 'dial_cleanup', nil,
+        connection.abort, connection, close_err or 'Dial closure failed')
+      close_err = IOError.with_cleanup(close_err, 'socket', 'dial_close',
+        'Dial closure and returned-connection cleanup both failed', cleanup)
     end
     return nil, close_err
   end
@@ -258,7 +262,7 @@ end
 
 
 local function new_op(endpoint, opts, strategy)
-  opts = opts or {}
+  assert(type(opts) == 'table', 'dial strategy must produce an option table')
   local scope = IO.current_scope(opts, 'socket.dial_op')
   next_dial = next_dial + 1
   local id = 'dial-' .. tostring(next_dial)

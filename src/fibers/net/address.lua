@@ -4,12 +4,13 @@
 -- unresolved endpoints and must pass through fibers.socket.resolve before a
 -- native listener or DialAttempt can use them.
 
+local Contract = require('fibers.internal.contract')
+
 local Address = {}
 
 local function port_number(port, label)
-  port = tonumber(port)
-  if not port or port < 0 or port > 65535 or port ~= math.floor(port) then
-    error((label or 'socket address') .. ' expects a port from 0 to 65535', 3)
+  if type(port) ~= 'number' or port ~= port or port < 0 or port > 65535 or port ~= math.floor(port) then
+    error((label or 'socket address') .. ' expects an integer port from 0 to 65535', 3)
   end
   return port
 end
@@ -31,18 +32,22 @@ end
 
 function Address.ipv4(host, port)
   return build('inet4', {
-    host = nonempty(host or '0.0.0.0', 'socket.ipv4_address'),
-    port = port_number(port or 0, 'socket.ipv4_address'),
+    host = nonempty(host == nil and '0.0.0.0' or host, 'socket.ipv4_address'),
+    port = port_number(port == nil and 0 or port, 'socket.ipv4_address'),
   })
 end
 
 function Address.ipv6(host, port, opts)
-  opts = opts or {}
+  opts = Contract.options(opts, { flowinfo = true, scope_id = true }, 'socket.ipv6_address options', 2)
+  local flowinfo = opts.flowinfo == nil and 0
+    or Contract.non_negative_integer(opts.flowinfo, 'socket.ipv6_address flowinfo', 2)
+  local scope_id = opts.scope_id == nil and 0
+    or Contract.non_negative_integer(opts.scope_id, 'socket.ipv6_address scope_id', 2)
   return build('inet6', {
-    host = nonempty(host or '::', 'socket.ipv6_address'),
-    port = port_number(port or 0, 'socket.ipv6_address'),
-    flowinfo = tonumber(opts.flowinfo) or 0,
-    scope_id = tonumber(opts.scope_id) or 0,
+    host = nonempty(host == nil and '::' or host, 'socket.ipv6_address'),
+    port = port_number(port == nil and 0 or port, 'socket.ipv6_address'),
+    flowinfo = flowinfo,
+    scope_id = scope_id,
   })
 end
 
@@ -61,20 +66,32 @@ function Address.decode_unix(path)
 end
 
 function Address.name(host, service, opts)
-  opts = opts or {}
+  opts = Contract.options(opts, { family_hint = true, socket_type = true }, 'socket.name_endpoint options', 2)
   if service == nil then
     error('socket.name_endpoint expects a service or port', 2)
+  end
+  if type(service) ~= 'string' and type(service) ~= 'number' then
+    error('socket.name_endpoint service must be a string or integer port', 2)
+  end
+  if type(service) == 'string' then nonempty(service, 'socket.name_endpoint service')
+  else port_number(service, 'socket.name_endpoint service') end
+  if opts.family_hint ~= nil and opts.family_hint ~= 'unspec' and opts.family_hint ~= 'inet4' and opts.family_hint ~= 'inet6' then
+    error("socket.name_endpoint family_hint must be 'unspec', 'inet4', 'inet6' or nil", 2)
+  end
+  if opts.socket_type ~= nil and opts.socket_type ~= 'stream' and opts.socket_type ~= 'datagram' then
+    error("socket.name_endpoint socket_type must be 'stream', 'datagram' or nil", 2)
   end
   return build('name', {
     host = nonempty(host, 'socket.name_endpoint'),
     service = service,
-    family_hint = opts.family_hint or (opts.family ~= 'name' and opts.family or nil),
+    family_hint = opts.family_hint,
     socket_type = opts.socket_type or 'stream',
   })
 end
 
 function Address.inet(host, port, opts)
-  host = host or '0.0.0.0'
+  host = host == nil and '0.0.0.0' or host
+  nonempty(host, 'socket.inet_address')
   if string.find(host, ':', 1, true) then
     return Address.ipv6(host, port, opts)
   end
@@ -88,8 +105,9 @@ function Address.inet(host, port, opts)
 end
 
 function Address.copy(value)
+  Contract.table(value, 'socket address copy source', 2)
   local out = {}
-  for key, item in pairs(value or {}) do
+  for key, item in pairs(value) do
     out[key] = item
   end
   return out
@@ -120,19 +138,28 @@ function Address.validate(value, label)
   if type(value) ~= 'table' then
     error(label .. ' expects an address value', 3)
   end
-  if value.kind == 'inet4' or value.family == 'inet4' then
+  if type(value.kind) ~= 'string' then
+    error(label .. ' requires a canonical kind field', 3)
+  end
+  if value.family ~= nil and value.family ~= value.kind then
+    error(label .. ' kind and family fields disagree', 3)
+  end
+  if value.kind == 'inet4' then
     return Address.ipv4(value.host, value.port)
   end
-  if value.kind == 'inet6' or value.family == 'inet6' then
-    return Address.ipv6(value.host, value.port, value)
+  if value.kind == 'inet6' then
+    return Address.ipv6(value.host, value.port, { flowinfo = value.flowinfo, scope_id = value.scope_id })
   end
-  if value.kind == 'unix' or value.family == 'unix' then
+  if value.kind == 'unix' then
     return Address.unix(value.path)
   end
-  if value.kind == 'name' or value.family == 'name' then
-    return Address.name(value.host, value.service or value.port, value)
+  if value.kind == 'name' then
+    return Address.name(value.host, value.service, {
+      family_hint = value.family_hint,
+      socket_type = value.socket_type,
+    })
   end
-  error(label .. ' has unknown address kind ' .. tostring(value.kind or value.family), 3)
+  error(label .. ' has unknown address kind ' .. tostring(value.kind), 3)
 end
 
 function Address.equal(a, b)
@@ -152,7 +179,7 @@ function Address.display(value)
   if value.kind == 'unix' then
     return value.path
   elseif value.kind == 'inet6' then
-    local scope = tonumber(value.scope_id) or 0
+    local scope = value.scope_id
     local host = value.host .. (scope ~= 0 and ('%' .. tostring(scope)) or '')
     return '[' .. host .. ']:' .. tostring(value.port)
   elseif value.kind == 'inet4' then

@@ -117,12 +117,11 @@ reader:close('complete')
 ```
 
 Internally, private host holds cover both handles until their Streams are
-admitted and take custody. Public callers receive the two Streams directly,
-matching the successful surface of the pre-version-1 library.
+admitted and take custody. Public callers receive the two Streams directly.
 
-## Stream migration helpers
+## Stream operations
 
-Streams retain the explicit option-building methods:
+Streams expose one explicit operation per read contract:
 
 ```lua
 stream:read_some_op(4096)
@@ -134,16 +133,9 @@ stream:flush_op()
 stream:close_op()
 ```
 
-`read_op` supports the familiar Lua-file forms while still returning an option:
-
-```lua
-stream:read_op(128)
-stream:read_op('*l')
-stream:read_op('*L')
-stream:read_op('*a', { max = 1024 * 1024 })
-```
-
-`*a` remains bounded deliberately.
+There is deliberately no Lua-file-style `read`/`read_op` compatibility shim.
+Choosing `read_some`, `read_exactly`, `read_line` or `read_all` states the byte
+contract at the call site.
 
 ## Processes
 

@@ -7,6 +7,7 @@
 local Instrumentation = {}
 local Operation = require('fibers.internal.operation')
 local Label = require('fibers.internal.label')
+local Contract = require('fibers.internal.contract')
 Instrumentation.__index = Instrumentation
 
 local function copy_map(source)
@@ -37,19 +38,25 @@ local function histogram_bucket(value)
   return tostring(math.floor(upper / 2) + 1) .. '-' .. tostring(upper)
 end
 
+local INSTRUMENTATION_OPTIONS = { clock = true, slow_search_limit = true }
+
 local function normalise_options(options)
-  return options == true and {} or type(options) == 'table' and options or {}
+  if options == true or options == nil then return {} end
+  return Contract.options(options, INSTRUMENTATION_OPTIONS, 'search instrumentation options', 3)
 end
 
 function Instrumentation.new(options)
   options = normalise_options(options)
+  Contract.optional_function(options.clock, 'search instrumentation clock', 2)
+  local slow_search_limit = options.slow_search_limit == nil
+    and 16 or Contract.non_negative_integer(options.slow_search_limit, 'slow_search_limit', 2)
   return setmetatable({
-    clock = type(options.clock) == 'function' and options.clock or default_clock,
+    clock = options.clock or default_clock,
     counters = {},
     maxima = {},
     histograms = {},
     slow_searches = {},
-    slow_search_limit = math.max(0, math.floor(options.slow_search_limit or 16)),
+    slow_search_limit = slow_search_limit,
     search_serial = 0,
     active_searches = setmetatable({}, { __mode = 'k' }),
   }, Instrumentation)

@@ -13,47 +13,44 @@ local Runtime = require('fibers.runtime')
 local Scope = require('fibers.scope')
 local ScopeOutcome = require('fibers.scope.outcome')
 local ScopeResult = ScopeOutcome.Result
+local Contract = require('fibers.internal.contract')
 
 local Application = {}
 Application.__index = Application
 
-local function copy(value)
+local APPLICATION_OPTIONS = {
+  host = true, closure = true,
+  label = Contract.non_empty_string, runtime_options = Contract.table,
+  status_marker = Contract.non_empty_string, application_marker = Contract.non_empty_string,
+  owns_host = Contract.boolean, on_status = Contract.func,
+  max_steps_per_turn = Contract.positive_integer,
+  max_work_per_step = Contract.positive_integer,
+  max_external_per_turn = Contract.positive_integer,
+  max_seconds_per_turn = Contract.non_negative_number,
+}
+
+local ADVANCE_OPTIONS = {
+  max_steps = Contract.positive_integer, max_work = Contract.positive_integer,
+  max_external = Contract.positive_integer, horizon = Contract.finite_number,
+  max_seconds = Contract.non_negative_number,
+}
+
+local function copy(value, label)
+  value = Contract.table(value, label or 'table', 3)
   local out = {}
-  for key, item in pairs(value or {}) do
+  for key, item in pairs(value) do
     out[key] = item
   end
   return out
 end
 
 
-local function positive_integer(value, fallback, name)
-  if value == nil then
-    return fallback
-  end
-  value = tonumber(value)
-  if not value or value ~= value or value == math.huge or value == -math.huge then
-    error(name .. ' must be a positive integer', 3)
-  end
-  value = math.floor(value)
-  if value < 1 then
-    error(name .. ' must be a positive integer', 3)
-  end
-  return value
-end
-
-local function non_negative_number(value, fallback, name)
-  if value == nil then
-    return fallback
-  end
-  value = tonumber(value)
-  if not value or value ~= value or value == math.huge or value == -math.huge or value < 0 then
-    error(name .. ' must be a finite non-negative number', 3)
-  end
-  return value
+local function default(value, fallback)
+  return value == nil and fallback or value
 end
 
 local function runtime_options(opts, host)
-  local out = copy(opts.runtime_options)
+  local out = opts.runtime_options == nil and {} or copy(opts.runtime_options, 'Application runtime_options')
   out.host = host
   return out
 end
@@ -96,7 +93,7 @@ local function runtime_has_ready(runtime)
 end
 
 function Application.new(fn, opts)
-  opts = opts or {}
+  opts = Contract.record(opts, APPLICATION_OPTIONS, 'Application.new options', 2)
   if type(fn) ~= 'function' then
     error((opts.label or 'Embed.prepare') .. ' expects a root function', 2)
   end
@@ -128,10 +125,10 @@ function Application.new(fn, opts)
     _closed = false,
     _owns_host = opts.owns_host ~= false,
     _next_deadline = nil,
-    max_steps_per_turn = positive_integer(opts.max_steps_per_turn, 128, 'max_steps_per_turn'),
-    max_work_per_step = positive_integer(opts.max_work_per_step, 512, 'max_work_per_step'),
-    max_external_per_turn = positive_integer(opts.max_external_per_turn, 4096, 'max_external_per_turn'),
-    max_seconds_per_turn = non_negative_number(opts.max_seconds_per_turn, 0.002, 'max_seconds_per_turn'),
+    max_steps_per_turn = default(opts.max_steps_per_turn, 128),
+    max_work_per_step = default(opts.max_work_per_step, 512),
+    max_external_per_turn = default(opts.max_external_per_turn, 4096),
+    max_seconds_per_turn = default(opts.max_seconds_per_turn, 0.002),
     on_status = opts.on_status,
   }, Application)
 
@@ -229,31 +226,15 @@ function Application:_complete(runtime_status, runtime_error)
 end
 
 local function advance_limits(self, opts)
-  opts = opts or {}
+  opts = Contract.record(opts, ADVANCE_OPTIONS, 'Application:advance options', 3)
   local max_steps =
-    positive_integer(opts.max_steps, self.max_steps_per_turn, 'advance max_steps')
+    default(opts.max_steps, self.max_steps_per_turn)
   local max_work =
-    positive_integer(opts.max_work, self.max_work_per_step, 'advance max_work')
-  local max_external = positive_integer(
-    opts.max_external,
-    self.max_external_per_turn,
-    'advance max_external'
-  )
+    default(opts.max_work, self.max_work_per_step)
+  local max_external = default(opts.max_external, self.max_external_per_turn)
 
   local horizon = opts.horizon
-  if horizon ~= nil then
-    horizon = tonumber(horizon)
-    if not horizon or horizon ~= horizon then
-      error('advance horizon must be a number', 3)
-    end
-  else
-    local seconds = non_negative_number(
-      opts.max_seconds,
-      self.max_seconds_per_turn,
-      'advance max_seconds'
-    )
-    horizon = self:now() + seconds
-  end
+  if horizon == nil then horizon = self:now() + default(opts.max_seconds, self.max_seconds_per_turn) end
   return max_steps, max_work, max_external, horizon
 end
 

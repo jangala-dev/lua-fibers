@@ -42,7 +42,7 @@ do
     local reader, writer = file.pipe({ label = 'audited-pipe' })
     writer:write('x')
     writer:flush()
-    assert_eq(reader:read(1), 'x')
+    assert_eq(reader:read_some(1), 'x')
     during = IOAudit.report(fibers.current_runtime())
     assert_truthy((during.counts.in_custody or 0) >= 2, 'pipe handles should be in Stream custody')
     assert_eq((during.counts.registered or 0), 2, 'directional pipe Streams should have two registrations')
@@ -84,7 +84,6 @@ do
   local err = HostError.system('handle', 'close', 'injected audit close failure', 'EIO')
   local handle = Handle.new({
     label = 'audit-close-failure',
-    capabilities = { close = true },
     close = function()
       return nil, err
     end,

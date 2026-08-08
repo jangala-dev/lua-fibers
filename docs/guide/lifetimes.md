@@ -782,7 +782,7 @@ This makes it compose directly with `or_else`:
 ```lua
 local result = fibers.perform(
   worker:can_op(stream, 'read')
-    :and_then(stream:read_op())
+    :and_then(stream:read_some_op(4096))
     :or_else(Op.always(nil, 'not authorised'))
 )
 ```

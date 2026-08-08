@@ -537,7 +537,7 @@ local base_new = Simulated.new
 
 function Simulated.new(opts)
   opts = opts or {}
-  local host = base_new(opts)
+  local host = base_new()
   local base_create_pipe = host.create_pipe
   local base_create_listener = host.create_listener
   local base_start_dial = host.start_dial
