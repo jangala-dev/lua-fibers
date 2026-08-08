@@ -105,17 +105,16 @@ function RobloxHost.new(opts)
   if opts.make_event ~= nil and opts.make_event ~= false and type(opts.make_event) ~= 'function' then
     error('RobloxHost.new opts.make_event must be a function, false, or nil', 2)
   end
-  local self = Queue.new({
+  local self
+  self = Queue.new({
     kind = 'roblox',
     family = 'roblox',
     now = opts.now or default_now,
-    capabilities = {
-      time = true,
-      external = true,
-      readiness = false,
-      poller = false,
-    },
+    features = { time = true, external = true, readiness = false, poller = false },
     on_external_error = opts.on_external_error,
+    on_done = function(value)
+      if self and self._done_event then self._done_event:Fire(value) end
+    end,
     label = opts.label,
   })
   self._task = opts.task
@@ -158,20 +157,6 @@ function RobloxHost:block()
   return nil, 'roblox-host-is-embedded-use-fibers.roblox'
 end
 
-function RobloxHost:mark_done(value)
-  local was_done = self._done == true
-  Queue.mark_done(self, value)
-  if not was_done and self._done_event then self._done_event:Fire(value) end
-  return value
-end
-
-function RobloxHost:is_done()
-  return self._done == true
-end
-
-function RobloxHost:done_value()
-  return self._done_value
-end
 
 ---Wait from a convenience caller or shutdown callback until closure.
 function RobloxHost:wait_done(timeout)
@@ -197,11 +182,8 @@ end
 
 function RobloxHost:close()
   if self._closed then return true end
-  self._closed = true
-  self._wake_callback = nil
   self:mark_done(self._done_value)
-  self._queue = {}
-  self._queue_head, self._queue_tail = 1, 0
+  Queue.close(self)
   local done_event = self._done_event
   self._done_event = nil
   if done_event then

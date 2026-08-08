@@ -73,7 +73,7 @@ local function delivery_for(self, packed)
   if self._closed then
     return
   end
-  self.feed:set(unpack_(packed, 1, packed.n))
+  self._feed:set(unpack_(packed, 1, packed.n))
 end
 
 local function replacement_delivery_for(self, packed)
@@ -83,13 +83,13 @@ local function replacement_delivery_for(self, packed)
   -- `latest` and `pulse` have at most one pending observation, even when the
   -- consumer lags across several host turns. Clearing and publishing happen at
   -- the external-driver boundary, outside proof search.
-  self.feed:clear()
-  self.feed:set(unpack_(packed, 1, packed.n))
+  self._feed:clear()
+  self._feed:set(unpack_(packed, 1, packed.n))
 end
 
 function Subscription:_queue_events(...)
   local packed = pack(...)
-  self.host:enqueue(delivery_for, self, packed)
+  self._host:enqueue(delivery_for, self, packed)
 end
 
 function Subscription:_queue_latest(...)
@@ -98,7 +98,7 @@ function Subscription:_queue_latest(...)
     return
   end
   self._delivery_pending = true
-  self.host:enqueue(function(subscription)
+  self._host:enqueue(function(subscription)
     subscription._delivery_pending = false
     local packed = subscription._latest
     subscription._latest = nil
@@ -117,13 +117,13 @@ function Subscription:_disconnect()
   if self._closed then
     return true
   end
-  local connection = self.connection
+  local connection = self._connection
   if connection and type(connection.Disconnect) == 'function' then
     -- Keep the connection and open state intact until Disconnect succeeds. A
     -- failed closure must retain enough truth and authority to be retried.
     connection:Disconnect()
   end
-  self.connection = nil
+  self._connection = nil
   self._closed = true
   self._latest = nil
   self._delivery_pending = false
@@ -147,13 +147,13 @@ function Subscription.new(signal, opts)
   local resource, feed = External.events(runtime)
   local self = Label.attach(setmetatable({
     _fibers_id = id,
-    mode = mode,
-    runtime = runtime,
-    scope = scope,
-    host = host,
-    resource = resource,
-    feed = feed,
-    connection = nil,
+    _mode = mode,
+    _runtime = runtime,
+    _scope = scope,
+    _host = host,
+    _resource = resource,
+    _feed = feed,
+    _connection = nil,
     _closed = false,
     _latest = nil,
     _delivery_pending = false,
@@ -186,34 +186,19 @@ function Subscription.new(signal, opts)
 
   -- Admission happens before connecting. If Connect fails, scope unwinding still
   -- owns and retires the dormant subscription Lifetime; no unmanaged connection can leak.
-  self.connection = signal:Connect(callback)
+  self._connection = signal:Connect(callback)
   return self
 end
 
 ---Return an option for the next queued or retained observation.
 function Subscription:next_op()
-  return self.resource:next_op()
+  return self._resource:next_op()
 end
 
 ---Wait directly for the next queued or retained observation.
 
----Return the number of observations currently pending in Fibers.
-function Subscription:length()
-  return self.resource:length()
-end
-
----Report whether the underlying Roblox connection is still live.
-function Subscription:is_connected()
-  if self._closed or self.connection == nil then
-    return false
-  end
-  local connected = self.connection.Connected
-  return connected == nil or connected == true
-end
-
----Report whether successful closure disconnected the subscription.
-function Subscription:is_closed()
-  return self._closed
+function Subscription:closed_op()
+  return Lifetime.require(self):closed_op():map(function() return self end)
 end
 
 ---Return an option which retires this subscription from its owning scope.
@@ -221,7 +206,7 @@ function Subscription:close_op(reason)
   if self._closed then
     return require('fibers.op').always(true)
   end
-  return Closure.close_op(self.scope, self, reason or 'subscription closed')
+  return Closure.close_op(self._scope, self, reason or 'subscription closed')
 end
 
 ---Retire and disconnect the subscription through its owning Scope.
@@ -229,9 +214,9 @@ function Subscription:close(reason)
   if self._closed then
     return true
   end
-  return self.scope:perform(self:close_op(reason))
+  return self._scope:perform(self:close_op(reason))
 end
 
-Direct.install(Subscription, { 'next' })
+Direct.install(Subscription, { 'next', 'closed' })
 
 return Subscription

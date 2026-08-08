@@ -82,8 +82,8 @@ do
   end, { choice_seed = 3 }).runtime_status
   assert_status(st, 'found')
   assert_eq(got, 'winner')
-  assert_nil(backend.runtime, 'losing open should not start or bind reactor fibers')
-  assert_nil(backend.stream, 'losing open should not attach backend to an uncommitted stream')
+  assert_nil(backend._runtime, 'losing open should not start or bind reactor fibers')
+  assert_nil(backend._stream, 'losing open should not attach backend to an uncommitted stream')
 end
 
 -- HostHandle Streams expose stable reader and writer capabilities.
@@ -99,7 +99,7 @@ do
   end):label('root')
   assert_status(rt:run(), 'found')
   assert_truthy(stream, 'open_op should return a stream')
-  assert_eq(stream.handle, backend, 'HostStream should retain its HostHandle')
+  assert_eq(stream._handle, backend, 'HostStream should retain its HostHandle')
   assert_truthy(stream:reader() and stream:writer(), 'stream should expose reader and writer handles')
   assert_eq(stream:reader(), stream:reader(), 'reader handle should be stable')
   assert_eq(stream:writer(), stream:writer(), 'writer handle should be stable')
@@ -133,9 +133,9 @@ do
   end):label('root')
   assert_status(rt:run(), 'found')
   assert_truthy(rt.host_reactor, 'runtime should own a host reactor')
-  assert_eq(stream_a.reactor, rt.host_reactor)
-  assert_eq(stream_b.reactor, rt.host_reactor)
-  assert_eq(rt.host_reactor:registration_count(), 4, 'two duplex streams should register four directions')
+  assert_eq(stream_a._reactor, rt.host_reactor)
+  assert_eq(stream_b._reactor, rt.host_reactor)
+  assert_eq(rt.host_reactor:_registration_count(), 4, 'two duplex streams should register four directions')
   assert_nil(stream_a.read_task, 'host stream should allocate no read task')
   assert_nil(stream_a.write_task, 'host stream should allocate no write task')
 end
@@ -279,8 +279,8 @@ do
   for _ = 1, 10 do
     if
       stream
-      and Inspect.first_lease_bytes(stream:writer().flow) ~= nil
-      and Inspect.first_lease_bytes(stream:writer().flow) ~= ''
+      and Inspect.first_lease_bytes(stream:writer()._flow) ~= nil
+      and Inspect.first_lease_bytes(stream:writer()._flow) ~= ''
     then
       break
     end
@@ -288,8 +288,8 @@ do
   end
   assert_truthy(
     stream
-      and Inspect.first_lease_bytes(stream:writer().flow) ~= nil
-      and Inspect.first_lease_bytes(stream:writer().flow) ~= '',
+      and Inspect.first_lease_bytes(stream:writer()._flow) ~= nil
+      and Inspect.first_lease_bytes(stream:writer()._flow) ~= '',
     'write reaction should hold an in-flight lease while blocked'
   )
   assert_nil(flushed, 'flush should wait while bytes are in flight')
@@ -341,8 +341,8 @@ do
   for _ = 1, 10 do
     if
       stream
-      and Inspect.first_lease_bytes(stream:writer().flow) ~= nil
-      and Inspect.first_lease_bytes(stream:writer().flow) ~= ''
+      and Inspect.first_lease_bytes(stream:writer()._flow) ~= nil
+      and Inspect.first_lease_bytes(stream:writer()._flow) ~= ''
     then
       break
     end
@@ -405,22 +405,22 @@ do
   for _ = 1, 10 do
     if
       stream
-      and Inspect.first_lease_bytes(stream:writer().flow) ~= nil
-      and Inspect.first_lease_bytes(stream:writer().flow) ~= ''
+      and Inspect.first_lease_bytes(stream:writer()._flow) ~= nil
+      and Inspect.first_lease_bytes(stream:writer()._flow) ~= ''
     then
       break
     end
     rt:run()
   end
   assert_eq(
-    Inspect.first_lease_bytes(stream:writer().flow),
+    Inspect.first_lease_bytes(stream:writer()._flow),
     'abc',
     'reactor should have leased the first write'
   )
   assert_eq(
     (
-      stream:writer().flow.capacity
-      - (#(stream:writer().flow.data or '') + Inspect.leased_bytes(stream:writer().flow))
+      stream:writer()._flow._capacity
+      - (#(stream:writer()._flow.data or '') + Inspect.leased_bytes(stream:writer()._flow))
     ),
     0,
     'leased bytes should still reserve capacity'
@@ -482,11 +482,11 @@ do
   drive_until(rt, function()
     return closed == true and rt.host_reactor and rt.host_reactor.running == false
   end, 'stream closure should retire the reactor registrations')
-  assert_eq(rt.host_reactor:registration_count(), 0)
+  assert_eq(rt.host_reactor:_registration_count(), 0)
   assert_eq(backend.closed_reason, 'finished')
   assert_eq(backend.close_count, 1, 'shared backend should close exactly once')
-  assert_eq(stream.read_registration.retired, true)
-  assert_eq(stream.write_registration.retired, true)
+  assert_eq(stream._read_registration.retired, true)
+  assert_eq(stream._write_registration.retired, true)
 end
 
 -- Directional host Streams allocate only the supported Flow and reaction.
@@ -519,13 +519,13 @@ do
   assert_eq(writer:is_readable(), false)
   assert_truthy(writer:writer())
   assert_nil(writer:reader())
-  assert_eq(rt.host_reactor:registration_count(), 2)
+  assert_eq(rt.host_reactor:_registration_count(), 2)
   rt:spawn_raw(function()
     rt:perform(reader:abort_op('test complete'))
     rt:perform(writer:abort_op('test complete'))
   end):label('close-directional')
   drive_until(rt, function()
-    return rt.host_reactor:registration_count() == 0
+    return rt.host_reactor:_registration_count() == 0
   end, 'directional streams should retire')
 end
 
@@ -566,7 +566,7 @@ do
     rt:perform(reader:abort_op('test complete'))
   end):label('close')
   drive_until(rt, function()
-    return rt.host_reactor:registration_count() == 0
+    return rt.host_reactor:_registration_count() == 0
   end)
 end
 
@@ -683,14 +683,14 @@ do
     }))
   end):label('direction-key-open')
   assert_status(rt:run(), 'found')
-  assert_eq(stream.read_registration.key, 'direction-read-key')
-  assert_eq(stream.write_registration.key, 'direction-write-key')
+  assert_eq(stream._read_registration.key, 'direction-read-key')
+  assert_eq(stream._write_registration.key, 'direction-write-key')
   rt:spawn_raw(function()
     rt:perform(stream:close_op('done'))
     rt:perform(stream:closed_op())
   end):label('direction-key-close')
   drive_until(rt, function()
-    return backend.closed == true or rt.host_reactor:registration_count() == 0
+    return backend.closed == true or rt.host_reactor:_registration_count() == 0
   end)
 end
 

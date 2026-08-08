@@ -23,26 +23,7 @@ local function pack(...)
 end
 
 local Scope = {}
-Scope.__index = function(self, key)
-  local method = Scope[key]
-  if method ~= nil then return method end
-  local life = rawget(self, '_lifetime')
-  if not life then return nil end
-  if key == 'runtime' then return life.runtime end
-  if key == 'closure' then return life.closure end
-  if key == 'offers' then return life.offers end
-  if key == 'interrupt' then return life.interrupt end
-  if key == 'cancellation' then return life.cancellation end
-  return nil
-end
-Scope.__newindex = function(self, key, value)
-  if key == 'runtime' or key == 'closure' or key == 'offers'
-      or key == 'interrupt' or key == 'cancellation'
-      or key == 'parent' then
-    error('Scope capability fields are read-only views of its Lifetime', 2)
-  end
-  rawset(self, key, value)
-end
+Scope.__index = Scope
 
 local next_id = 0
 
@@ -55,7 +36,7 @@ local function target_scope(target)
 end
 
 local function require_closure_permission(scope, field, action)
-  local closure = scope.closure
+  local closure = scope._lifetime._closure
   if closure and closure[field] == false then
     error((action or field) .. ' denied by scope Closure', 3)
   end
@@ -64,7 +45,7 @@ end
 local function item_kind(item)
   local life = Lifetime.of(item)
   if not life then return nil end
-  return life.has_body and 'task' or 'resource'
+  return life._has_body and 'task' or 'resource'
 end
 
 local function new_offers()
@@ -92,12 +73,12 @@ function Scope.new(opts)
       label = opts.label,
     })
   end
-  if opts.runtime then lifetime:bind_runtime(opts.runtime) end
-  lifetime.closure = Closure.combine(lifetime.closure, Closure.propagation(opts.closure))
-  lifetime.offers = lifetime.offers or new_offers()
-  Label.child(lifetime.offers, lifetime, 'offers')
+  if opts.runtime then lifetime:_bind_runtime(opts.runtime) end
+  lifetime._closure = Closure.combine(lifetime._closure, Closure.propagation(opts.closure))
+  lifetime._offers = lifetime._offers or new_offers()
+  Label.child(lifetime._offers, lifetime, 'offers')
   return setmetatable({
-    mask_depth = 0,
+    _mask_depth = 0,
     _lifetime = lifetime,
     _fibers_id = id,
     _fibers_scope = true,
@@ -111,7 +92,7 @@ function Scope.for_lifetime(lifetime)
   end
   next_id = next_id + 1
   return setmetatable({
-    mask_depth = 0,
+    _mask_depth = 0,
     _lifetime = lifetime,
     _fibers_id = 'scope-view-' .. tostring(next_id),
     _fibers_scope = true,
@@ -121,8 +102,8 @@ end
 function Scope:parent_scope()
   local lifetime = self._lifetime
   local parent
-  if lifetime.runtime then
-    parent = lifetime.runtime:_lifetime_store():current_custodian(lifetime)
+  if lifetime._runtime then
+    parent = lifetime._runtime:_lifetime_store():_custodian(lifetime)
   end
   parent = parent or lifetime:_construction_parent_node()
   if not parent or parent == lifetime then return nil end
@@ -147,11 +128,11 @@ end
 
 
 function Scope:_bind_runtime(runtime)
-  runtime = runtime or self._lifetime.runtime or Runtime.current()
+  runtime = runtime or self._lifetime._runtime or Runtime.current()
   if not runtime then error('Scope requires a current Runtime', 2) end
   local parent = self:parent_scope()
   if parent then parent:_bind_runtime(runtime) end
-  self._lifetime:bind_runtime(runtime)
+  self._lifetime:_bind_runtime(runtime)
   return runtime
 end
 
@@ -166,20 +147,20 @@ function Scope:admit_op(value)
     error('Scope:admit_op expects a value carrying a dormant Lifetime', 2)
   end
   local runtime = self:_bind_runtime()
-  node:assert_runtime_compatible(runtime)
+  node:_assert_runtime_compatible(runtime)
   return runtime:_lifetime_store():admit_op(self, node):map(function()
     return value
   end)
 end
 
 function Scope:perform(op)
-  local rt = self.runtime or Runtime.current()
+  local rt = self._lifetime._runtime or Runtime.current()
   if not rt then
     error('Scope:perform requires a current runtime or scope runtime', 2)
   end
   local token
-  if (self.mask_depth or 0) <= 0 then
-    token = self.interrupt
+  if (self._mask_depth or 0) <= 0 then
+    token = self._lifetime._interrupt
   end
   return rt:_perform_current(op, token, false)
 end
@@ -188,9 +169,9 @@ function Scope:mask(fn, ...)
   if type(fn) ~= 'function' then
     error('Scope:mask expects a function', 2)
   end
-  self.mask_depth = (self.mask_depth or 0) + 1
+  self._mask_depth = (self._mask_depth or 0) + 1
   local r = pack(Protected.pcall(fn, ...))
-  self.mask_depth = self.mask_depth - 1
+  self._mask_depth = self._mask_depth - 1
   if not r[1] then
     error(r[2], 0)
   end
@@ -204,8 +185,8 @@ function Scope:_run_child_body(fn, task, opts)
   end
   local child = Scope.new({
     parent = self,
-    closure = opts.closure or self.closure,
-    runtime = self.runtime or Runtime.current(),
+    closure = opts.closure or self._lifetime._closure,
+    runtime = self._lifetime._runtime or Runtime.current(),
     lifetime = task._lifetime,
   })
   -- ScopeClosure owns publication for Scope-backed Tasks. The body-exit hook
@@ -214,7 +195,7 @@ function Scope:_run_child_body(fn, task, opts)
   -- this publication happened; it never republishes as a fallback.
   return ScopeClosure.run(child, function(s)
     return fn(s, task)
-  end, child.closure or {}, function(results, runtime)
+  end, child._lifetime._closure or {}, function(results, runtime)
     task:_publish_protected_body_result(results, runtime)
   end):raise()
 end
@@ -229,7 +210,7 @@ function Scope:spawn_op(fn, opts)
     return parent:_run_child_body(fn, task_handle, opts)
   end, self, {
     label = opts.label,
-    closure = Closure.running(Closure.propagation(opts.closure or self.closure)),
+    closure = Closure.running(Closure.propagation(opts.closure or self._lifetime._closure)),
     body_result_owner = 'scope',
   })
   return self
@@ -270,7 +251,7 @@ function Scope:offer_op(item, target, terms)
     item_kind = item_kind(item),
     terms = terms,
   }
-  local put_offer = target_sc.offers:put_op(offer)
+  local put_offer = target_sc._lifetime._offers:put_op(offer)
   return self:move_op(item, target_sc):and_then(put_offer:map(function()
       return offer
     end))
@@ -278,12 +259,12 @@ end
 
 function Scope:accept_op(filter)
   if filter == nil then
-    return self.offers:get_op()
+    return self._lifetime._offers:get_op()
   end
   if type(filter) ~= 'function' then
     error('Scope:accept_op filter must be a function', 2)
   end
-  return self.offers:get_op():and_then(Op.guard(function(offer)
+  return self._lifetime._offers:get_op():and_then(Op.guard(function(offer)
     if filter(offer) then
       return Op.always(offer)
     end
@@ -354,7 +335,7 @@ function Scope:grant_op(item, holder, rights, opts)
   opts = Contract.options(opts, { label = true, meta = true, terms = true }, 'Scope:grant_op options', 2)
   local runtime = self:_bind_runtime()
   holder:_bind_runtime(runtime)
-  if holder.runtime ~= runtime then
+  if holder._lifetime._runtime ~= runtime then
     error('Scope:grant_op requires both Scopes to belong to the same Runtime', 2)
   end
   local grant = Grant._new(self, holder, item, rights, {
@@ -396,32 +377,22 @@ function Scope:cancel_requested_op()
   return self._lifetime:cancel_requested_op()
 end
 
-function Scope:cancellation_op()
-  return self._lifetime:cancellation_op()
-end
-
-function Scope:running_children_op()
-  local roots_op = self:_store():roots_op(self)
-  return self:_store():status_op(self):and_then(Op.guard(function(status)
-    return roots_op:map(function(roots)
-      local tasks = {}
-      for i = 1, #roots do
-        local item = roots[i]
-        local life = Lifetime.of(item)
-        if life and life.has_body then
-          tasks[#tasks + 1] = life
-        end
-      end
-      return { version = status.version, tasks = tasks, roots = roots }
-    end)
-  end))
+function Scope:_running_children_op()
+  return self:_store():roots_op(self):map(function(roots)
+    local tasks = {}
+    for i = 1, #roots do
+      local life = Lifetime.of(roots[i])
+      if life and life._has_body then tasks[#tasks + 1] = life end
+    end
+    return { tasks = tasks, roots = roots }
+  end)
 end
 
 function Scope:begin_close_op(reason, opts)
   opts = Contract.options(opts, { cancel_body = true, cancel_children = true }, 'Scope:begin_close_op options', 2)
   Contract.optional_boolean(opts.cancel_body, 'Scope:begin_close_op cancel_body', 2)
   Contract.optional_boolean(opts.cancel_children, 'Scope:begin_close_op cancel_children', 2)
-  return self:running_children_op():and_then(Op.guard(function(snapshot)
+  return self:_running_children_op():and_then(Op.guard(function(snapshot)
     local ops = { self._lifetime:request_close_op(reason), self:seal_op(reason) }
     if opts.cancel_body ~= false then
       ops[#ops + 1] = self:_request_cancel_op(reason)
@@ -486,47 +457,6 @@ end
 function Scope:has_custody_op(item)
   return self:_store():has_custody_op(self, item)
 end
-function Scope:children_op()
-  return self:_store():roots_op(self)
-end
-function Scope:custody_op(item)
-  return self:_store():record_op(self, item)
-end
-function Scope:subtree_op(item)
-  return self:_store():subtree_op(self, item)
-end
-
-function Scope:inspect_op()
-  local outcome_read = self._lifetime.outcome:read_op()
-  local node_state = self:_store():node_state_op(self._lifetime)
-  return self:_store():status_op(self):and_then(Op.guard(function(lifetime_status)
-    return node_state:and_then(Op.guard(function(state)
-      return outcome_read:map(function(outcome_state)
-        local done = type(outcome_state) == 'table' and outcome_state.status == 'done'
-        local result = done and outcome_state.result or nil
-        return {
-          label = Label.describe(self._lifetime, self._lifetime._fibers_id or self._fibers_id),
-          phase = state.closure_phase,
-          close_reason = state.closure_reason,
-          close_error = state.closure_error,
-          open = lifetime_status.open == true,
-          sealed = lifetime_status.sealed == true,
-          done = done,
-          outcome = done and (ScopeResult.is(result) and result:done_outcome() or result) or nil,
-          result = result,
-          cancelled = self.interrupt and self.interrupt.raised or false,
-          cancel_reason = self.interrupt and self.interrupt.reason or nil,
-          custody_count = lifetime_status.custody_count,
-          root_count = lifetime_status.root_count,
-          lifetime_version = lifetime_status.version,
-          lifetime = self._lifetime,
-          scope = self,
-        }
-      end)
-    end))
-  end))
-end
-
 function Scope:_make_report(primary, secondaries, fields)
   return ScopeReport.new(self, primary, secondaries, fields)
 end

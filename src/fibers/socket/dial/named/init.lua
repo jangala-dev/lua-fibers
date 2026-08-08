@@ -101,17 +101,17 @@ end
 
 local function start_options(opts, started_at, host)
   local out = IO.copy_table(opts)
-  local capabilities = host and host.capabilities or {}
+  local function feature(name) return host and type(host.feature) == 'function' and host:feature(name) end
   out.maximum_active_attempts = math.min(
     out.maximum_active_attempts
-      or capabilities.happy_eyeballs_maximum_active_attempts
+      or feature('happy_eyeballs_maximum_active_attempts')
       or out.maximum_candidates,
     out.maximum_candidates
   )
   if out.attempt_timeout == false then
     out.attempt_timeout = nil
   elseif out.attempt_timeout == nil then
-    out.attempt_timeout = capabilities.happy_eyeballs_attempt_timeout
+    out.attempt_timeout = feature('happy_eyeballs_attempt_timeout')
   end
   out.order_destinations, out.destination_ordering = destination_ordering(out, host)
 
@@ -146,9 +146,9 @@ function Named.run(dial, driver_scope, opts)
   local strategy_opts = start_options(opts, started_at, host)
   dial.started_at = started_at
 
-  local strategy = State.new(dial.endpoint, strategy_opts, host, started_at)
+  local strategy = State.new(dial._endpoint, strategy_opts, host, started_at)
   local query = perform(
-    Resolver.resolve_op(dial.endpoint, resolver_options(dial, driver_scope, strategy_opts, host))
+    Resolver.resolve_op(dial._endpoint, resolver_options(dial, driver_scope, strategy_opts, host))
   )
 
   while true do
@@ -172,7 +172,7 @@ function Named.terminal_report(dial, status, err, completed_at)
     kind = 'dial',
     strategy = 'happy_eyeballs_v2',
     status = status,
-    endpoint = dial.endpoint,
+    endpoint = dial._endpoint,
     started_at = started_at,
     completed_at = completed_at,
     duration = completed_at - started_at,

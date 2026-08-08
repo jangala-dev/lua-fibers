@@ -3,15 +3,7 @@ local Extreme = require('fibers.resource.extreme')
 local Direct = require('fibers.internal.direct')
 
 local Index = {}
-Index.__index = function(self, key)
-  if key == 'entries' then
-    return self._location and self._location.value or self._initial_entries
-  end
-  if key == 'version' then
-    return self._location and self._location.version or 0
-  end
-  return Index[key]
-end
+Index.__index = Index
 local Kind = Facility.kind('index')
 local ENTRY_RESULT = Facility.result.project(function(entry)
   return entry and { key = entry.key, rank = entry.rank, value = entry.value, seq = entry.seq }
@@ -65,7 +57,6 @@ local function create(entries)
       result = ENTRY_RESULT,
     })
   )
-  index._changed_spec = Facility.version_wait(index._location, index)
   return index
 end
 
@@ -148,11 +139,8 @@ function Index:pop_last_op()
   return self._pop_last_op
 end
 
-function Index:changed_op(version)
-  return Facility.bind(self._changed_spec, version)
-end
 
 Index.Kind = Kind
-Direct.install(Index, { 'insert', 'insert_auto', 'append', 'remove', 'pop_first', 'pop_last', 'changed' })
+Direct.install(Index, { 'insert', 'insert_auto', 'append', 'remove', 'pop_first', 'pop_last' })
 
 return Index

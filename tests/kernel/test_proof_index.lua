@@ -68,7 +68,7 @@ do
   assert(blocked == 'pending' or blocked == 'quiescent')
   local receiver = rt.engine.pending[1]
   local frontier = assert(receiver._proof)
-  assert(frontier.latent_exchanges[ch] and frontier.latent_exchanges[ch].get)
+  assert(frontier.latent.exchanges[ch] and frontier.latent.exchanges[ch].get)
   rt:spawn_raw(function() rt:perform(ch:put_op('primary')) end):label('late-sender')
   eq(rt:run().tag, 'found')
   eq(got, 'primary', 'late compatible participant should invalidate latent Retry')

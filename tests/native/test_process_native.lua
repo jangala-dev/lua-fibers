@@ -15,7 +15,7 @@ for _, spec in ipairs({
   end
   if supported then
     local host = host_module.new()
-    if host.capabilities.process then
+    if host:feature('process') then
       local contract_ok, contract_err = pcall(Contract.exercise, spec.name, host)
       if type(host.close) == 'function' then
         host:close()

@@ -36,6 +36,7 @@ local Add = StateMachine.select('countdown_latch.add', function(st, payload)
       return Wait
     end
     local generation = st.generation
+    if n == 0 then return Ready.same(true, st.count, generation) end
     if st.count == 0 and new_count > 0 then
       generation = generation + 1
     end
@@ -86,11 +87,6 @@ end
 function CountdownLatch:add_op(n)
   n = n or 1
   integer(n, 'countdown_latch add amount', 2)
-  if n == 0 then
-    return self:state_op():map(function(st)
-      return true, st.count, st.generation
-    end)
-  end
   return self.state:transition_op(Add, { n = n })
 end
 
@@ -100,12 +96,6 @@ end
 
 function CountdownLatch:wait_op()
   return self.state:transition_op(WaitForZero)
-end
-
-function CountdownLatch:state_op()
-  return self.state:read_op():map(function(st)
-    return copy_state(st)
-  end)
 end
 
 return CountdownLatch

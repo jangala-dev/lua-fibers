@@ -59,7 +59,7 @@ local function family_completion(query, family, level)
   if family ~= 'inet4' and family ~= 'inet6' then
     error('resolver family must be inet4 or inet6', level or 3)
   end
-  return query.family_completions[family]
+  return query._family_completions[family]
 end
 
 function Query:family_addresses_op(family)
@@ -125,7 +125,7 @@ local function combine_family_states(query, families)
       'name resolved to no usable addresses',
       'EAI_NONAME',
       nil,
-      { endpoint = query.endpoint }
+      { endpoint = query._endpoint }
     )
 end
 
@@ -153,26 +153,16 @@ function Query:failed_op()
   end))
 end
 
-function Query:state_op()
-  return self:_families_op():map(function(families)
-    local addresses, err = combine_family_states(self, families)
-    if addresses then
-      return { kind = 'succeeded', value = addresses, families = families }
-    end
-    return { kind = 'failed', error = err, families = families }
-  end)
-end
-
 function Query:close_op(reason)
   reason = reason or 'resolver query closed'
-  local cancel = self.driver and self.driver:request_cancel_op(reason) or Op.always(true)
+  local cancel = self._driver and self._driver:request_cancel_op(reason) or Op.always(true)
   local err = IOError.closed('resolver', 'resolve', {
     reason = reason,
-    endpoint = self.endpoint,
+    _endpoint = self._endpoint,
   })
   local publishes = {}
   for i = 1, #FAMILIES do
-    publishes[#publishes + 1] = self.family_completions[FAMILIES[i]]:publish_cancelled_op(err)
+    publishes[#publishes + 1] = self._family_completions[FAMILIES[i]]:publish_cancelled_op(err)
   end
   return cancel:and_then(Op.each(publishes):map(function()
       return true
@@ -183,7 +173,7 @@ function Query:closed_op()
   local terminal = self:_families_op():map(function()
     return true
   end)
-  return IO.closed_after_driver_op(self.driver, terminal)
+  return IO.closed_after_driver_op(self._driver, terminal)
 end
 
 local function normalise_addresses(values, endpoint, allow_empty, expected_family)
@@ -259,12 +249,12 @@ local function select_backend(rt, host, opts)
     return DNSResolver.new(dns_options(opts, host))
   end
 
-  local capabilities = host and host.capabilities or {}
+  local function feature(name) return host and type(host.feature) == 'function' and host:feature(name) end
   if
     opts.dns ~= false
-    and capabilities.resolver_blocking == true
-    and capabilities.datagram == true
-    and capabilities.socket == true
+    and feature('resolver_blocking') == true
+    and feature('datagram') == true
+    and feature('socket') == true
   then
     if not rt._fibers_dns_resolver or rt._fibers_dns_resolver.host ~= host then
       rt._fibers_dns_resolver = DNSResolver.new(dns_options(opts, host))
@@ -283,13 +273,13 @@ end
 
 local function family_error(query, family, message, code)
   return IOError.system('resolver', 'resolve', message, code or 'EAI_NODATA', nil, {
-    endpoint = query.endpoint,
+    _endpoint = query._endpoint,
     family = family,
   })
 end
 
 local function publish_family(rt, query, family, addresses, err)
-  local completion = query.family_completions[family]
+  local completion = query._family_completions[family]
   if addresses then
     IO.masked_perform(rt, completion:publish_success_op(addresses))
   else
@@ -298,7 +288,7 @@ local function publish_family(rt, query, family, addresses, err)
       completion:publish_failure_op(IOError.normalise(err, {
         domain = 'resolver',
         action = 'resolve',
-        endpoint = query.endpoint,
+        endpoint = query._endpoint,
         family = family,
       }))
     )
@@ -308,11 +298,11 @@ end
 local function publish_cancelled(rt, query, reason)
   local err = IOError.closed('resolver', 'resolve', {
     reason = reason,
-    endpoint = query.endpoint,
+    _endpoint = query._endpoint,
   })
   for i = 1, #FAMILIES do
-    local completion = query.family_completions[FAMILIES[i]]
-    if completion:is_pending() then
+    local completion = query._family_completions[FAMILIES[i]]
+    if completion:_is_pending() then
       IO.masked_perform(rt, completion:publish_cancelled_op(err))
     end
   end
@@ -357,7 +347,7 @@ local function split_families(addresses)
 end
 
 local function drive_combined(query, opts, rt, resolve_fn)
-  local requested = requested_families(query.endpoint, opts)
+  local requested = requested_families(query._endpoint, opts)
   mark_unrequested(rt, query, requested)
   local addresses, err = resolve_fn()
   if not addresses then
@@ -366,7 +356,7 @@ local function drive_combined(query, opts, rt, resolve_fn)
     end
     return nil, err
   end
-  local normalised, normalise_err = normalise_addresses(addresses, query.endpoint)
+  local normalised, normalise_err = normalise_addresses(addresses, query._endpoint)
   if not normalised then
     for i = 1, #requested do
       publish_family(rt, query, requested[i], nil, normalise_err)
@@ -400,7 +390,7 @@ end
 
 local function drive_dns(query, backend, opts, rt)
   local scope = Runtime.current_scope()
-  local requested = requested_families(query.endpoint, opts)
+  local requested = requested_families(query._endpoint, opts)
   mark_unrequested(rt, query, requested)
 
   for i = 1, #requested do
@@ -408,20 +398,20 @@ local function drive_dns(query, backend, opts, rt)
     scope:spawn(function()
       local ok, addresses, err = Protected.pcall(function()
         local backend_opts = DNSResolver.is(backend) and DNSResolver.project_query_options(opts) or opts
-        return backend:resolve_family(query.endpoint, family, backend_opts)
+        return backend:resolve_family(query._endpoint, family, backend_opts)
       end)
       if not ok then
         if Runtime.is_cancelled(addresses) then
           error(addresses, 0)
         end
         err = IO.protocol_error('resolver', 'resolve_family', addresses, {
-          endpoint = query.endpoint,
+          endpoint = query._endpoint,
           family = family,
         })
         addresses = nil
       end
       if addresses then
-        local normalised, normalise_err = normalise_addresses(addresses, query.endpoint, true, family)
+        local normalised, normalise_err = normalise_addresses(addresses, query._endpoint, true, family)
         addresses, err = normalised, normalise_err
       end
       publish_family(rt, query, family, addresses, err)
@@ -445,21 +435,21 @@ local function drive(query, opts)
     end
     if backend then
       return drive_combined(query, opts, rt, function()
-        return backend:resolve(query.endpoint, opts)
+        return backend:resolve(query._endpoint, opts)
       end)
     end
     return drive_combined(query, opts, rt, function()
-      return host_resolve(host, query.endpoint, opts)
+      return host_resolve(host, query._endpoint, opts)
     end)
   end)
   if not ok then
     if Runtime.is_cancelled(addresses) then
       error(addresses, 0)
     end
-    local failure = IO.protocol_error('resolver', 'resolve', addresses, { endpoint = query.endpoint })
+    local failure = IO.protocol_error('resolver', 'resolve', addresses, { endpoint = query._endpoint })
     for i = 1, #FAMILIES do
-      local completion = query.family_completions[FAMILIES[i]]
-      if completion:is_pending() then
+      local completion = query._family_completions[FAMILIES[i]]
+      if completion:_is_pending() then
         IO.masked_perform(rt, completion:publish_failure_op(failure))
       end
     end
@@ -481,14 +471,14 @@ function Module.resolve_op(endpoint, opts)
   local query = Label.attach(setmetatable({
     kind = 'resolver_query',
     _fibers_id = id,
-    endpoint = endpoint,
-    family_completions = {
+    _endpoint = endpoint,
+    _family_completions = {
       inet6 = Completion.new(),
       inet4 = Completion.new(),
     },
   }, Query), opts.label)
-  Label.child(query.family_completions.inet6, query, 'inet6')
-  Label.child(query.family_completions.inet4, query, 'inet4')
+  Label.child(query._family_completions.inet6, query, 'inet6')
+  Label.child(query._family_completions.inet4, query, 'inet4')
 
   return IO.admit_driven_lifetime_op(scope, query, {
     operation = 'socket.resolve_op',
@@ -496,8 +486,8 @@ function Module.resolve_op(endpoint, opts)
     role = 'resolver_query',
     closure = query_closure(query),
     causal_states = {
-      query.family_completions.inet6.state,
-      query.family_completions.inet4.state,
+      query._family_completions.inet6.state,
+      query._family_completions.inet4.state,
     },
     run = function()
       local ok, err = Protected.pcall(drive, query, opts)

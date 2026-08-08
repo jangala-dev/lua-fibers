@@ -1,12 +1,9 @@
 local Op = require('fibers.op')
 local Facility = require('fibers.resource.authoring')
+local perform = require('fibers.perform')
 
 local Calendar = {}
-Calendar.__index = function(self, key)
-  if key == '_state' then return self._location and self._location.value end
-  if key == 'version' then return self._location and self._location.version or 0 end
-  return Calendar[key]
-end
+Calendar.__index = Calendar
 local Kind = { name = 'calendar' }
 local next_calendar_id = 0
 
@@ -400,12 +397,6 @@ function Calendar:reservations_op()
     })
   )
 end
-function Calendar:reservations()
-  local out = {}
-  each(self._state.root, function(r)
-    out[r.id] = clone_record(r)
-  end)
-  return out
-end
+function Calendar:reservations() return perform(self:reservations_op()) end
 Calendar.Kind = Kind
 return Calendar

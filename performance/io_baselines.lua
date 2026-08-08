@@ -192,7 +192,7 @@ add('idle-reactor-registration', 'registrations', function()
     end
 
     local runtime = Runtime.current()
-    registrations = runtime.host_reactor and runtime.host_reactor:registration_count() or 0
+    registrations = runtime.host_reactor and runtime.host_reactor:_registration_count() or 0
     assert(registrations == count * 2)
 
     for i = 1, #endpoints do

@@ -289,7 +289,7 @@ local function file_closure(file)
     finish_result = function(ok, err)
       -- A failed open owns no host file; its terminal error is the acquisition
       -- result, not a second closure failure.
-      if not ok and file.backend ~= nil then
+      if not ok and file._backend ~= nil then
         error(err or 'file closure failed', 0)
       end
       return true
@@ -298,28 +298,28 @@ local function file_closure(file)
 end
 
 function RegularFile:ready_op()
-  return self.ready_completion:result_op()
+  return self._ready_completion:result_op()
 end
 function RegularFile:is_file()
   return true
 end
 function RegularFile:filename()
-  return self.path
+  return self._path
 end
 function RegularFile:closed_op()
   -- Host closure may be published before the private driver Scope has retired
   -- every child. A successful File close therefore joins both conditions.
-  return IO.closed_after_driver_op(self.driver, self.closed_completion:result_op(), {
+  return IO.closed_after_driver_op(self._driver, self._closed_completion:result_op(), {
     require_returned = true,
   })
 end
 
 local function enqueue(file, kind, args)
-  if not file.closed_completion:is_pending() then
-    return Op.always(nil, IOError.closed('file', kind, { path = file.path }))
+  if not file._closed_completion:_is_pending() then
+    return Op.always(nil, IOError.closed('file', kind, { path = file._path }))
   end
   local request = new_request(kind, args)
-  return file.tx:send_op(request):map(function()
+  return file._tx:send_op(request):map(function()
     return request
   end), request
 end
@@ -409,13 +409,13 @@ function RegularFile:sync_op(opts)
 end
 
 function RegularFile:close_op(reason)
-  if not self.closed_completion:is_pending() then
+  if not self._closed_completion:_is_pending() then
     return self:closed_op()
   end
   local request = new_request('close', { reason = reason })
-  return self.tx
+  return self._tx
     :send_op(request)
-    :and_then(self.tx:close_op(reason or 'file close requested'))
+    :and_then(self._tx:close_op(reason or 'file close requested'))
     :wrap(function()
       return self:closed()
     end)
@@ -472,14 +472,14 @@ local function execute_request(file, provider, backend, request)
   elseif kind == 'read_exactly' then
     return Algorithms.read_exactly(function(count)
       return backend:read(count)
-    end, args.count, { path = file.path })
+    end, args.count, { path = file._path })
   elseif kind == 'read_all' then
     return Algorithms.read_all(function(count)
       return backend:read(count)
     end, {
       max = args.max,
       chunk_size = args.chunk_size,
-      path = file.path,
+      path = file._path,
       restore_probe = function()
         return backend:seek('cur', -1)
       end,
@@ -495,33 +495,33 @@ local function execute_request(file, provider, backend, request)
   elseif kind == 'write_all' then
     return Algorithms.write_all(function(part)
       return backend:write(part)
-    end, args.bytes, { path = file.path })
+    end, args.bytes, { path = file._path })
   elseif kind == 'seek' then
     return backend:seek(args.whence, args.offset)
   elseif kind == 'flush' then
     return backend:flush()
   elseif kind == 'sync' then
     if type(backend.sync) ~= 'function' then
-      return nil, IOError.unsupported('file', 'sync', { path = file.path })
+      return nil, IOError.unsupported('file', 'sync', { path = file._path })
     end
     return backend:sync(args.data_only)
   elseif kind == 'rename' then
-    local ok, err = provider:rename(file.path, args.path, file.provider_opts or {})
+    local ok, err = provider:rename(file._path, args.path, file._provider_opts or {})
     if ok then
-      file.path = args.path
+      file._path = args.path
       backend.path = args.path
-      file.auto_unlink = false
+      file._auto_unlink = false
     end
     return ok, err
   elseif kind == 'close' then
     local unlink_err
-    if file.auto_unlink then
+    if file._auto_unlink then
       -- Unlink while the descriptor is still open. Besides matching POSIX
       -- temporary-file semantics, this keeps completion-backed providers such
       -- as io_uring alive until the final path operation has completed.
-      local unlinked, err = provider:unlink(file.path, file.provider_opts or {})
+      local unlinked, err = provider:unlink(file._path, file._provider_opts or {})
       if unlinked or (IOError.is(err, 'system') and err.code == 'ENOENT') then
-        file.auto_unlink = false
+        file._auto_unlink = false
       else
         unlink_err = err
       end
@@ -542,21 +542,21 @@ local function drive_file(file, opts)
   local rt = Runtime.current()
   local provider, provider_err = Provider.for_runtime(rt, opts)
   if not provider then
-    publish(rt, file.ready_completion, false, provider_err)
-    IO.masked_perform(rt, file.tx:close_op(provider_err))
-    publish(rt, file.closed_completion, false, provider_err)
+    publish(rt, file._ready_completion, false, provider_err)
+    IO.masked_perform(rt, file._tx:close_op(provider_err))
+    publish(rt, file._closed_completion, false, provider_err)
     return
   end
   local backend, open_err
-  if file.temporary then
+  if file._temporary then
     local attempts = opts.attempts or 64
     for _ = 1, attempts do
       local candidate = temp_candidate(opts)
       local open_opts = { exclusive = true, permissions = opts.permissions or 384 }
       backend, open_err = provider:open(candidate, 'w+b', open_opts)
       if backend then
-        file.path = candidate
-        file.auto_unlink = true
+        file._path = candidate
+        file._auto_unlink = true
         break
       end
       if not (IOError.is(open_err, 'system') and open_err.code == 'EEXIST') then
@@ -564,19 +564,19 @@ local function drive_file(file, opts)
       end
     end
   else
-    backend, open_err = provider:open(file.path, file.mode, provider_open_options(opts))
+    backend, open_err = provider:open(file._path, file._mode, provider_open_options(opts))
   end
   if not backend then
-    local failure = IOError.normalise(open_err, { domain = 'file', action = 'open', path = file.path })
-    publish(rt, file.ready_completion, false, failure)
-    IO.masked_perform(rt, file.tx:close_op(failure))
-    publish(rt, file.closed_completion, false, failure)
+    local failure = IOError.normalise(open_err, { domain = 'file', action = 'open', path = file._path })
+    publish(rt, file._ready_completion, false, failure)
+    IO.masked_perform(rt, file._tx:close_op(failure))
+    publish(rt, file._closed_completion, false, failure)
     return
   end
-  file.backend = backend
-  publish(rt, file.ready_completion, true, true)
+  file._backend = backend
+  publish(rt, file._ready_completion, true, true)
   while true do
-    local request = file.rx:recv()
+    local request = file._rx:recv()
     if not request then
       break
     end
@@ -586,7 +586,7 @@ local function drive_file(file, opts)
         rt,
         request.completion,
         false,
-        IO.protocol_error('file', request.kind, value, { path = file.path })
+        IO.protocol_error('file', request.kind, value, { path = file._path })
       )
     elseif value == READ_LINE_EOF then
       publish(rt, request.completion, true, nil)
@@ -595,7 +595,7 @@ local function drive_file(file, opts)
         rt,
         request.completion,
         false,
-        IOError.normalise(err, { domain = 'file', action = request.kind, path = file.path })
+        IOError.normalise(err, { domain = 'file', action = request.kind, path = file._path })
       )
     else
       publish(rt, request.completion, true, value, err)
@@ -603,7 +603,7 @@ local function drive_file(file, opts)
     if request.kind == 'close' then
       publish(
         rt,
-        file.closed_completion,
+        file._closed_completion,
         value ~= nil and value ~= false,
         value ~= nil and value ~= false and true or err
       )
@@ -611,14 +611,14 @@ local function drive_file(file, opts)
     end
   end
   local ok, err = backend:close('file request queue closed')
-  if ok and file.auto_unlink then
-    local unlinked, unlink_err = provider:unlink(file.path)
+  if ok and file._auto_unlink then
+    local unlinked, unlink_err = provider:unlink(file._path)
     if not unlinked and not (IOError.is(unlink_err, 'system') and unlink_err.code == 'ENOENT') then
       ok, err = nil, unlink_err
     end
-    file.auto_unlink = false
+    file._auto_unlink = false
   end
-  publish(rt, file.closed_completion, ok ~= nil and ok ~= false, ok ~= nil and ok ~= false and true or err)
+  publish(rt, file._closed_completion, ok ~= nil and ok ~= false, ok ~= nil and ok ~= false and true or err)
 end
 
 local function new_file_op(path, mode, opts, operation, temporary)
@@ -629,21 +629,21 @@ local function new_file_op(path, mode, opts, operation, temporary)
   local file = Label.attach(setmetatable({
     kind = 'regular_file',
     _fibers_id = 'file-' .. tostring(next_file),
-    path = path,
-    mode = mode,
-    tx = tx,
-    rx = rx,
-    ready_completion = Completion.new(),
-    closed_completion = Completion.new(),
-    backend = nil,
-    driver = nil,
-    provider_opts = opts,
-    temporary = temporary == true,
-    auto_unlink = false,
+    _path = path,
+    _mode = mode,
+    _tx = tx,
+    _rx = rx,
+    _ready_completion = Completion.new(),
+    _closed_completion = Completion.new(),
+    _backend = nil,
+    _driver = nil,
+    _provider_opts = opts,
+    _temporary = temporary == true,
+    _auto_unlink = false,
   }, RegularFile), opts.label)
-  Label.child(file.tx, file, 'requests')
-  Label.child(file.ready_completion, file, 'ready')
-  Label.child(file.closed_completion, file, 'closed')
+  Label.child(file._tx, file, 'requests')
+  Label.child(file._ready_completion, file, 'ready')
+  Label.child(file._closed_completion, file, 'closed')
   local admission = IO.admit_driven_lifetime_op(scope, file, {
     operation = operation,
     label = Label.get(file),
@@ -654,17 +654,17 @@ local function new_file_op(path, mode, opts, operation, temporary)
       if ok then return end
       local rt = Runtime.current()
       local failure = Runtime.is_cancelled(err)
-          and IOError.closed('file', 'driver', { path = file.path, reason = err.reason or 'file driver cancelled' })
-        or IO.protocol_error('file', 'driver', err, { path = file.path })
+          and IOError.closed('file', 'driver', { path = file._path, reason = err.reason or 'file driver cancelled' })
+        or IO.protocol_error('file', 'driver', err, { path = file._path })
       local cleanup_errors = {}
-      if file.backend then
-        IOError.capture_cleanup(cleanup_errors, 'file', 'driver_backend_close', nil, file.backend.close, file.backend, failure)
+      if file._backend then
+        IOError.capture_cleanup(cleanup_errors, 'file', 'driver_backend_close', nil, file._backend.close, file._backend, failure)
       end
-      if file.auto_unlink then
+      if file._auto_unlink then
         IOError.capture_cleanup(cleanup_errors, 'file', 'driver_auto_unlink', nil, function()
           local provider, provider_err = Provider.for_runtime(rt, opts)
           if not provider then return nil, provider_err end
-          local unlinked, unlink_err = provider:unlink(file.path)
+          local unlinked, unlink_err = provider:unlink(file._path)
           if not unlinked and not (IOError.is(unlink_err, 'system') and unlink_err.code == 'ENOENT') then
             return nil, unlink_err
           end
@@ -673,9 +673,9 @@ local function new_file_op(path, mode, opts, operation, temporary)
       end
       failure = IOError.with_cleanup(failure, 'file', 'driver_cleanup',
         'file driver and cleanup both failed', cleanup_errors, { path = failure and failure.path or nil })
-      if file.ready_completion:is_pending() then publish(rt, file.ready_completion, false, failure) end
-      IO.masked_perform(rt, file.tx:close_op(failure))
-      if file.closed_completion:is_pending() then publish(rt, file.closed_completion, false, failure) end
+      if file._ready_completion:_is_pending() then publish(rt, file._ready_completion, false, failure) end
+      IO.masked_perform(rt, file._tx:close_op(failure))
+      if file._closed_completion:_is_pending() then publish(rt, file._closed_completion, false, failure) end
       if not Runtime.is_cancelled(err) then error(failure, 0) end
     end,
   })
@@ -718,7 +718,7 @@ function File.tmpfile_op(opts)
 end
 
 function Job:result_op()
-  return self.driver:await_op()
+  return self._driver:await_op()
 end
 
 local function path_job_op(action, fn, opts)

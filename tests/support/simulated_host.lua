@@ -314,7 +314,7 @@ function Binding.net.query(raw, peer)
   return copy(peer and raw.peer or raw.address)
 end
 function Binding.net.prime(handle)
-  local raw = handle.handle
+  local raw = handle._handle
   if raw.rx then
     update(raw.rx)
   end
@@ -413,41 +413,48 @@ Binding.resolver = {
 local function manual_process(Fd)
   local ProcessCore = require('fibers.io.process').core
   local signals = ProcessCore.signals()
-  local Class = ProcessCore.class({
-    signals = signals,
-    bind = function(self, runtime)
-      for _, handle in pairs(self.child_endpoints or {}) do
-        if handle then
-          handle:bind_runtime(runtime)
-        end
-      end
-    end,
-    open_exit = function(self)
-      return Op.always(self)
-    end,
-    exit = function(self)
-      return self.exit_completion:result_op()
-    end,
-    signal = function(self, number, target)
-      self.signals[#self.signals + 1] = { signal = number, target = target }
-      if self.on_signal then
-        return self.on_signal(self, number, target)
-      end
-      if number == signals.numbers.kill or number == signals.numbers.term then
-        self:complete(ProcessCore.signalled(signals, number))
-      end
-      return true
-    end,
-    close = function(self, reason)
-      for _, handle in pairs(self.child_endpoints or {}) do
-        if handle then
-          handle:close(reason)
-        end
-      end
-      self.host.processes[self._pid] = nil
-      return true
-    end,
-  })
+  local Class = {}
+  Class.__index = Class
+
+  function Class:bind_runtime(runtime)
+    self.runtime = runtime
+    IOAudit.bind(self, runtime)
+    for _, handle in pairs(self.child_endpoints or {}) do
+      if handle then handle:bind_runtime(runtime) end
+    end
+    return self
+  end
+
+  function Class:pid() return self._pid end
+  function Class:open_exit_op() return Op.always(self) end
+  function Class:exit_op() return self.exit_completion:result_op() end
+
+  function Class:signal(value, target)
+    if self.reaped then
+      return nil, HostError.closed('process', 'signal', { pid = self._pid })
+    end
+    local number, err = signals.normalise(value)
+    if not number then return nil, err end
+    self.signals[#self.signals + 1] = { signal = number, target = target }
+    if self.on_signal then return self.on_signal(self, number, target) end
+    if number == signals.numbers.kill or number == signals.numbers.term then
+      self:complete(ProcessCore.signalled(signals, number))
+    end
+    return true
+  end
+
+  function Class:close(reason)
+    if self.closed then return true end
+    self.closed = true
+    IOAudit.closing(self, reason)
+    for _, handle in pairs(self.child_endpoints or {}) do
+      if handle then handle:close(reason) end
+    end
+    self.host.processes[self._pid] = nil
+    IOAudit.closed(self, true, nil, reason)
+    return true
+  end
+
 
   function Class:complete_op(status)
     status = status or ProcessCore.exited(0)
@@ -522,7 +529,7 @@ local function manual_process(Fd)
 end
 Binding.process = manual_process
 
-Binding.capabilities = { datagram_truncation = true }
+Binding.features = { datagram_truncation = true }
 Binding.time = {
   now = function() return 0 end,
   sleep = function() return true end,
@@ -570,20 +577,21 @@ function Simulated.new(opts)
   local processes = opts.processes == true or opts.exec == true or host.process_factory ~= nil
   local resolver = opts.resolver ~= false
 
-  host.capabilities = { time = true, readiness = true, file = true, file_backend = 'memory' }
-  if pipes then host.capabilities.pipe = true end
+  local features = { time = true, readiness = true, file = true, file_backend = 'memory' }
+  host._features = features
+  if pipes then features.pipe = true end
   if sockets then
-    host.capabilities.socket = true
-    host.capabilities.socket_ipv4 = true
-    host.capabilities.socket_ipv6 = true
-    host.capabilities.socket_unix = true
+    features.socket = true
+    features.socket_ipv4 = true
+    features.socket_ipv6 = true
+    features.socket_unix = true
   end
   if datagrams then
-    host.capabilities.datagram = true
-    host.capabilities.datagram_truncation = true
+    features.datagram = true
+    features.datagram_truncation = true
   end
-  if resolver then host.capabilities.resolver = true end
-  if processes then host.capabilities.process = true end
+  if resolver then features.resolver = true end
+  if processes then features.process = true end
 
   host.file_storage = require('fibers.file.memory_provider').new({
     files = opts.files,
@@ -707,7 +715,7 @@ function Simulated.new(opts)
     for i = 1, #ranked do out[i] = ranked[i].address end
     return out
   end
-  host.capabilities.happy_eyeballs_destination_ordering = 'simulated'
+  features.happy_eyeballs_destination_ordering = 'simulated'
 
   host.start_process = processes and function(self, spec)
     if self.process_factory then return self.process_factory(self, spec) end
@@ -719,7 +727,7 @@ function Simulated.new(opts)
   end
 
   function host:block(runtime, waits, _status, options)
-    if self.closed then error('simulated host is closed', 2) end
+    if self._closed then error('simulated host is closed', 2) end
     local set, delivered = WaitSet.build(waits), false
     for i = 1, #set.records do
       local record = set.records[i]

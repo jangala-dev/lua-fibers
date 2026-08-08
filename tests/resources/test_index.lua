@@ -15,6 +15,8 @@ package.path = table.concat({
 local Op = require('fibers.op')
 local Index = require('fibers.resource.index')
 local Runtime = require('fibers.runtime')
+local State = require('tests.support.resource_state')
+local entries = State.index_entries
 
 local function fail(msg)
   error(msg, 2)
@@ -74,9 +76,9 @@ local function test_two_parallel_pop_first_claims_get_distinct_concrete_values()
   assert_eq(rows[1][2], 'A')
   assert_eq(rows[2][1], 'b')
   assert_eq(rows[2][2], 'B')
-  assert_nil(ix.entries.a, 'first entry should be removed once')
-  assert_nil(ix.entries.b, 'second entry should be removed once')
-  assert_eq(ix.entries.c.value, 'C')
+  assert_nil(entries(ix).a, 'first entry should be removed once')
+  assert_nil(entries(ix).b, 'second entry should be removed once')
+  assert_eq(entries(ix).c.value, 'C')
 end
 
 local function test_parallel_pop_last_claims_get_distinct_tail_values()
@@ -98,9 +100,9 @@ local function test_parallel_pop_last_claims_get_distinct_tail_values()
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], 'c')
   assert_eq(rows[2][1], 'b')
-  assert_nil(ix.entries.c)
-  assert_nil(ix.entries.b)
-  assert_eq(ix.entries.a.value, 'A')
+  assert_nil(entries(ix).c)
+  assert_nil(entries(ix).b)
+  assert_eq(entries(ix).a.value, 'A')
 end
 
 local function test_remove_plus_pop_skips_removed_head()
@@ -120,9 +122,9 @@ local function test_remove_plus_pop_skips_removed_head()
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
   assert_eq(rows[2][1], 'b')
-  assert_nil(ix.entries.a)
-  assert_nil(ix.entries.b)
-  assert_eq(ix.entries.c.value, 'C')
+  assert_nil(entries(ix).a)
+  assert_nil(entries(ix).b)
+  assert_eq(entries(ix).c.value, 'C')
 end
 
 local function test_pop_first_and_then_receives_concrete_lua_entry()
@@ -158,7 +160,7 @@ local function test_pop_then_reinsert_same_key_is_sequential_replacement()
   assert_status(rt:run(), 'found')
   assert_eq(out, 'a')
   assert_eq(
-    ix.entries.a.value,
+    entries(ix).a.value,
     'A2',
     'later insert in continuation should follow selected remove sequentially'
   )
@@ -195,7 +197,7 @@ local function test_insert_plus_pop_first_consumes_same_world_insert()
   assert_eq(rows[1][1], true)
   assert_eq(rows[2][1], 'z')
   assert_eq(rows[2][2], 'Z')
-  assert_nil(ix.entries.z, 'same-world inserted entry should be consumed by pop')
+  assert_nil(entries(ix).z, 'same-world inserted entry should be consumed by pop')
 end
 
 local function test_insert_plus_pop_first_uses_projected_order()
@@ -214,8 +216,8 @@ local function test_insert_plus_pop_first_uses_projected_order()
 
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'z')
-  assert_nil(ix.entries.z)
-  assert_eq(ix.entries.a.value, 'A', 'existing head should remain because inserted z was first')
+  assert_nil(entries(ix).z)
+  assert_eq(entries(ix).a.value, 'A', 'existing head should remain because inserted z was first')
 end
 
 local function test_insert_plus_two_pops_allocates_insert_then_existing()
@@ -238,9 +240,9 @@ local function test_insert_plus_two_pops_allocates_insert_then_existing()
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'z')
   assert_eq(rows[3][1], 'a')
-  assert_nil(ix.entries.z)
-  assert_nil(ix.entries.a)
-  assert_eq(ix.entries.b.value, 'B')
+  assert_nil(entries(ix).z)
+  assert_nil(entries(ix).a)
+  assert_eq(entries(ix).b.value, 'B')
 end
 
 local function test_absence_sees_projected_insert()
@@ -258,7 +260,7 @@ local function test_absence_sees_projected_insert()
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
   assert_eq(rows[2][1].key, 'z')
-  assert_nil(ix.entries.z)
+  assert_nil(entries(ix).z)
 end
 
 local function test_pop_first_and_pop_last_fail_as_one_world_with_one_entry()
@@ -277,7 +279,7 @@ local function test_pop_first_and_pop_last_fail_as_one_world_with_one_entry()
   if status and status.tag == 'found' then
     fail('two consuming selections from one entry should not commit')
   end
-  assert_eq(ix.entries.a.value, 'A', 'failed together should leave entry intact')
+  assert_eq(entries(ix).a.value, 'A', 'failed together should leave entry intact')
 end
 
 local function test_each_insert_does_not_supply_pop_but_commits_insert()
@@ -295,7 +297,7 @@ local function test_each_insert_does_not_supply_pop_but_commits_insert()
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
   assert_eq(rows[2][1], 'empty')
-  assert_eq(ix.entries.z.value, 'Z', 'each sibling insert should remain committed')
+  assert_eq(entries(ix).z.value, 'Z', 'each sibling insert should remain committed')
 end
 
 local function test_together_insert_supplies_pop_and_consumes_insert()
@@ -313,7 +315,7 @@ local function test_together_insert_supplies_pop_and_consumes_insert()
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
   assert_eq(rows[2][1].key, 'z')
-  assert_nil(ix.entries.z, 'together sibling insert may be consumed as handoff')
+  assert_nil(entries(ix).z, 'together sibling insert may be consumed as handoff')
 end
 
 local function test_each_parallel_pops_allocate_shared_committed_stock()
@@ -335,9 +337,9 @@ local function test_each_parallel_pops_allocate_shared_committed_stock()
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], 'a')
   assert_eq(rows[2][1], 'b')
-  assert_nil(ix.entries.a)
-  assert_nil(ix.entries.b)
-  assert_eq(ix.entries.c.value, 'C')
+  assert_nil(entries(ix).a)
+  assert_nil(entries(ix).b)
+  assert_eq(entries(ix).c.value, 'C')
 end
 
 local function test_each_remove_constrains_sibling_pop_without_supplying()
@@ -357,9 +359,9 @@ local function test_each_remove_constrains_sibling_pop_without_supplying()
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
   assert_eq(rows[2][1], 'b')
-  assert_nil(ix.entries.a)
-  assert_nil(ix.entries.b)
-  assert_eq(ix.entries.c.value, 'C')
+  assert_nil(entries(ix).a)
+  assert_nil(entries(ix).b)
+  assert_eq(entries(ix).c.value, 'C')
 end
 
 

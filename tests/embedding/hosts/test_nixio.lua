@@ -28,11 +28,11 @@ if type(nixio.pipe) ~= 'function' then
 end
 
 local capability_host = NixioHost.new()
-if capability_host.capabilities.process then
-  assert(capability_host.capabilities.process_exec_proof == nil)
-  assert(capability_host.capabilities.process_pass_fds == nil)
-  assert(capability_host.capabilities.process_close_fds == 'known')
-  assert(capability_host.capabilities.process_groups == 'session')
+if capability_host:feature('process') then
+  assert(capability_host:feature('process_exec_proof') == nil)
+  assert(capability_host:feature('process_pass_fds') == nil)
+  assert(capability_host:feature('process_close_fds') == 'known')
+  assert(capability_host:feature('process_groups') == 'session')
 end
 capability_host:close()
 
@@ -93,10 +93,10 @@ with_host_pipe('nixio:readiness-beats-timeout', Common.readiness_beats_timeout_s
 with_host_pipe('nixio:timeout-beats-unready', Common.timeout_beats_unready_smoke)
 
 local datagram_host = NixioHost.new()
-if datagram_host.capabilities.datagram then
+if datagram_host:feature('datagram') then
   Common.native_datagram_smoke('nixio', datagram_host)
 end
-if datagram_host.capabilities.resolver then
+if datagram_host:feature('resolver') then
   require('tests.support.resolver_provider_contract').exercise('nixio', datagram_host)
 end
 datagram_host:close()

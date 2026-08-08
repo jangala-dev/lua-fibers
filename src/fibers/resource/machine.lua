@@ -4,13 +4,7 @@ local Cell = require('fibers.resource.cell')
 local unpack_ = table.unpack or unpack
 
 local Machine = {}
-Machine.__index = function(self, key)
-  if key == 'value' then
-    return self._location.value
-  end
-  if key == 'version' then
-    return self._location.version
-  end
+Machine.__index = function(_, key)
   return Machine[key] or Cell[key]
 end
 

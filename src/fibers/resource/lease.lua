@@ -5,6 +5,16 @@ local Direct = require('fibers.internal.direct')
 local Lease = {}
 local Kind = Facility.kind('lease')
 
+local function copy_compat(source)
+  local out = {}
+  for mode, peers in pairs(source or { lease = {} }) do
+    local row = {}
+    for peer, allowed in pairs(peers) do row[peer] = allowed end
+    out[mode] = row
+  end
+  return out
+end
+
 local function copy_map(values)
   local out = {}
   for key, value in pairs(values or {}) do
@@ -13,17 +23,10 @@ local function copy_map(values)
   return out
 end
 
-Lease.__index = function(self, key)
-  if key == 'version' then return self._space:version() end
-  if key == 'holders' then
-    return self._space:snapshot(copy_map, function(value) return type(value) == 'table' and next(value) ~= nil end)
-  end
-  if key == 'versions' then return self._space:versions_snapshot() end
-  return Lease[key]
-end
+Lease.__index = Lease
 
 function Lease.new(compat)
-  local lease = Facility.identity(setmetatable({ compat = compat or { lease = {} } }, Lease), Kind)
+  local lease = Facility.identity(setmetatable({ _compat = copy_compat(compat) }, Lease), Kind)
   lease._space = Keyspace.new(lease, {
     algebra = 'finite_map',
     domain = 'finite_map',
@@ -57,8 +60,8 @@ function Lease:acquire_op(subject, mode, holder)
       step = function(holders)
         for other, held_mode in pairs(holders or {}) do
           if other ~= holder then
-            local forward = self.compat[mode] and self.compat[mode][held_mode] == true
-            local reverse = self.compat[held_mode] and self.compat[held_mode][mode] == true
+            local forward = self._compat[mode] and self._compat[mode][held_mode] == true
+            local reverse = self._compat[held_mode] and self._compat[held_mode][mode] == true
             if not (mode == held_mode or forward and reverse) then return nil end
           end
         end

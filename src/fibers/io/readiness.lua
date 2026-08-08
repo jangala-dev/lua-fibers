@@ -6,12 +6,7 @@ local ExternalFeed = External.Feed
 local Label = require('fibers.internal.label')
 
 local Readiness = {}
-Readiness.__index = function(self, key)
-  if key == 'version' then
-    return self._location.version
-  end
-  return Readiness[key]
-end
+Readiness.__index = Readiness
 local Kind = Facility.kind('readiness')
 
 local function mode(x, level)
@@ -32,7 +27,7 @@ local function deliver(current, r, ...)
     selected, value = mode(first, 3), select(2, ...)
     if n <= 1 then value = true end
   else
-    selected, value = mode(r.mode, 3), first
+    selected, value = mode(r._mode, 3), first
     if n == 0 then value = true end
   end
   local state = clone_state(current)
@@ -53,8 +48,8 @@ end
 function Readiness.new(key, initial_mode)
   local r = Facility.identity(
     setmetatable({
-      key = key,
-      mode = mode(initial_mode or 'read', 3),
+      _key = key,
+      _mode = mode(initial_mode or 'read', 3),
     }, Readiness),
     Kind
   )
@@ -70,12 +65,12 @@ function Readiness.new(key, initial_mode)
 end
 
 function Readiness:readiness_op(selected)
-  selected = mode(selected or self.mode, 3)
+  selected = mode(selected or self._mode, 3)
   local field = selected == 'read' and '_read_op' or '_write_op'
   if self[field] ~= false then
     return self[field]
   end
-  local r, key = self, self.key
+  local r, key = self, self._key
   local transition = StateMachine.isolated_query(Label.describe(self, self._fibers_id or 'readiness') .. ':' .. selected, function(state)
     if not state[selected] then
       return StateMachine.Wait
@@ -96,7 +91,7 @@ function Readiness:readiness_op(selected)
   return option
 end
 function Readiness:wait_op()
-  return self:readiness_op(self.mode)
+  return self:readiness_op(self._mode)
 end
 function Readiness:readable_op()
   return self:readiness_op('read')

@@ -46,10 +46,10 @@ with_host_pipe('luaposix:readiness-beats-timeout', Common.readiness_beats_timeou
 with_host_pipe('luaposix:timeout-beats-unready', Common.timeout_beats_unready_smoke)
 
 local datagram_host = PosixHost.new()
-if datagram_host.capabilities.datagram then
+if datagram_host:feature('datagram') then
   Common.native_datagram_smoke('luaposix', datagram_host)
 end
-if datagram_host.capabilities.resolver then
+if datagram_host:feature('resolver') then
   require('tests.support.resolver_provider_contract').exercise('luaposix', datagram_host)
 end
 datagram_host:close()

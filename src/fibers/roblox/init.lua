@@ -208,6 +208,7 @@ function Roblox.bind_to_close(scope_or_opts, maybe_opts)
     error('Roblox.bind_to_close requires DataModel:BindToClose', 2)
   end
 
+  local application = runtime._fibers_roblox_application
   local reason = opts.reason or 'Roblox server closing'
   local deadline = opts.deadline == nil and 25 or opts.deadline
   local shutdown_events, shutdown_feed = External.events(runtime)
@@ -222,7 +223,7 @@ function Roblox.bind_to_close(scope_or_opts, maybe_opts)
     host:deliver(shutdown_feed, reason)
     local settled, wait_reason = host:wait_done(deadline)
     if not settled and type(opts.on_timeout) == 'function' then
-      opts.on_timeout(wait_reason, scope, host.application)
+      opts.on_timeout(wait_reason, scope, application)
     end
   end)
 
@@ -231,7 +232,7 @@ function Roblox.bind_to_close(scope_or_opts, maybe_opts)
     events = shutdown_events,
     reason = reason,
     deadline = deadline,
-    application = host.application,
+    application = application,
   }
 end
 

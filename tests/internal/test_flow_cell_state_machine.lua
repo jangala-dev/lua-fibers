@@ -19,6 +19,7 @@ local Flow = FibersFlow
 local FlowErrors = require('fibers.resource.flow.errors')
 local Runtime = require('fibers.runtime')
 local Inspect = require('tests.support.flow_inspect')
+local State = require('tests.support.resource_state')
 
 local function fail(msg)
   error(msg, 2)
@@ -58,7 +59,7 @@ local function test_cell_select_together_supply_but_each_non_handoff()
   end):label('root')
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 1)
-  assert_eq(s.value, 0)
+  assert_eq(State.value(s), 0)
 
   local s2 = StateMachine.new(0):label('select-each')
   local rt2 = new_runtime()
@@ -71,7 +72,7 @@ local function test_cell_select_together_supply_but_each_non_handoff()
   end):label('root')
   assert_status(rt2:run(), 'found')
   assert_eq(rows2[2][1], 'empty')
-  assert_eq(s2.value, 1)
+  assert_eq(State.value(s2), 1)
 end
 
 local function test_flow_sequential_write_read()

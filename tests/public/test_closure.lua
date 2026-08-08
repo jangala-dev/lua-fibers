@@ -102,13 +102,13 @@ do
   assert_eq(r.reason, 'body_error')
   assert_truthy(tostring(r.primary):match('body failed'))
 
-  local state
+  local exit
   local st = fibers.try_run(function()
-    state = fibers.perform(child:state_op())
+    exit = fibers.perform(child:body_result_op())
   end).runtime_status
-  assert_status(st, 'found', 'status after inspecting cancelled child')
+  assert_status(st, 'found', 'status after awaiting cancelled child body')
   assert_truthy(
-    state.body_result.tag == 'cancelled' or state.body_result.tag == 'failed',
+    exit.tag == 'cancelled' or exit.tag == 'failed',
     'child should be cancelled or report scope failure under body failure'
   )
 end

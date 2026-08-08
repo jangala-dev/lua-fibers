@@ -17,11 +17,15 @@ local function run(fn)
   fibers.run(fn, { quiet_deadlock = true })
 end
 
+local function reservations(calendar)
+  local value
+  run(function() value = calendar:reservations() end)
+  return value
+end
+
 local function reservation_count(calendar)
   local n = 0
-  for _ in pairs(calendar:reservations()) do
-    n = n + 1
-  end
+  for _ in pairs(reservations(calendar)) do n = n + 1 end
   return n
 end
 
@@ -90,7 +94,7 @@ do
     rows = fibers.perform(Op.together({ cal:cancel_op(1), cal:reserve_at_op({ 'room' }, 0, 5) }))
   end)
   assert(rows[1][1].id == 1 and rows[2][1].start == 0)
-  assert(reservation_count(cal) == 1 and cal:reservations()[1] == nil)
+  assert(reservation_count(cal) == 1 and reservations(cal)[1] == nil)
 end
 
 do
@@ -102,7 +106,7 @@ do
     )
   end)
   assert(result == 'fallback')
-  assert(reservation_count(cal) == 1 and cal:reservations()[1] ~= nil)
+  assert(reservation_count(cal) == 1 and reservations(cal)[1] ~= nil)
 end
 
 -- Earliest-slot search uses interval boundaries as a finite complete witness set.

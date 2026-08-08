@@ -146,7 +146,7 @@ end
 local function recovery_claim_op(failure)
   local recovery = recovery_state(failure)
   local token = recovery and recovery.token or nil
-  if not token or not recovery.authority or recovery.authority.value ~= RECOVERY_AVAILABLE then
+  if not token or not recovery.authority or recovery.authority._location.value ~= RECOVERY_AVAILABLE then
     error('Closure failure no longer has recovery authority', 3)
   end
   if not token.context then error('Closure recovery context is unavailable', 3) end
@@ -345,9 +345,9 @@ function Closure.running()
     if reason == Lifetime.CloseReason.NORMAL then
       return Op.always(true)
     end
-    return record.lifetime:request_cancel_op(reason)
+    return record.node:request_cancel_op(reason)
   end, function(_ctx, record)
-    return record.lifetime:outcome_op():map(function()
+    return record.node:outcome_op():map(function()
       return true
     end)
   end, { name = 'running_lifetime' })
@@ -369,7 +369,7 @@ local function ensure_progress(token)
       _fibers_value = true,
       index = i,
       item = record.item,
-      node = record.node or record.lifetime,
+      node = record.node,
       record = record,
       request_state = 'pending',
       force_state = 'pending',
@@ -377,7 +377,7 @@ local function ensure_progress(token)
       state = 'not_requested',
     }
     progress[i] = entry
-    by_item[record.node or record.lifetime] = entry
+    by_item[record.node] = entry
   end
   token.progress = progress
   token.progress_by_item = by_item
@@ -552,24 +552,8 @@ local function resolve_finish_op(ctx, token)
 end
 
 local function containment_description(blocker)
-  local message = 'closure retained ' .. tostring(blocker.count or 0) .. ' unresolved descendant(s)'
-  local descendants = blocker.descendants or {}
-  if #descendants > 0 then
-    local shown = {}
-    for i = 1, math.min(#descendants, 3) do
-      local entry = descendants[i]
-      shown[#shown + 1] = tostring(entry.path or item_label(entry.item))
-        .. ' [' .. tostring(entry.closure_phase or entry.custody_phase or 'unknown') .. ']'
-    end
-    message = message .. ': ' .. table.concat(shown, ', ')
-    if #descendants > #shown then
-      message = message .. ' (and ' .. tostring(#descendants - #shown) .. ' more)'
-    end
-  end
-  if (blocker.host_hold_count or 0) > 0 then
-    message = message .. '; ' .. tostring(blocker.host_hold_count) .. ' host hold(s) remain'
-  end
-  return message
+  return 'closure retained ' .. tostring(blocker.count or 0) .. ' unresolved descendant(s) beneath '
+    .. item_label(blocker.item or blocker.node)
 end
 
 local function containment_failures(blockers)

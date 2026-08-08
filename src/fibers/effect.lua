@@ -188,10 +188,10 @@ SpawnKind = EffectKind.new({
         error('owned spawn effect requires a Task owner', 0)
       end
       local life = owner._lifetime
-      if type(life) ~= 'table' or type(life.body) ~= 'function' then
+      if type(life) ~= 'table' or type(life._body) ~= 'function' then
         error('owned spawn effect requires a dormant task body', 0)
       end
-      if life.runtime ~= nil and life.runtime ~= rt then
+      if life._runtime ~= nil and life._runtime ~= rt then
         error('spawn Task belongs to another runtime', 0)
       end
     elseif type(payload.fn) ~= 'function' then

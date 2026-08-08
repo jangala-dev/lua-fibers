@@ -90,7 +90,7 @@ function Fake.new(opts)
   return self
 end
 
-function Fake:bind_runtime(runtime)
+function Fake:_bind_runtime(runtime)
   Handle.bind_runtime(self, runtime)
   read_ready(self)
   write_ready(self)

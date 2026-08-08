@@ -22,8 +22,8 @@ local function host_stream(label, opts)
     mode = opts.read and opts.write and 'duplex' or (opts.read and 'reader' or 'writer'),
     kind = 'host_stream',
   })
-  stream.handle, stream.reactor = opts.handle, opts.reactor
-  stream.read_chunk_size, stream.write_chunk_size = opts.read_chunk_size, opts.write_chunk_size
+  stream._handle, stream._reactor = opts.handle, opts.reactor
+  stream._read_chunk_size, stream._write_chunk_size = opts.read_chunk_size, opts.write_chunk_size
   return stream
 end
 
@@ -41,11 +41,11 @@ local function attach_direction(stream, side, reactor, handle, registrations, ch
     label = Label.describe(stream, stream._fibers_id or 'stream') .. ':' .. side,
     mode = side,
     stream = stream,
-    flow = ep.flow,
+    flow = ep._flow,
     handle = handle,
-    chunk_size = side == 'read' and stream.read_chunk_size or stream.write_chunk_size,
+    chunk_size = side == 'read' and stream._read_chunk_size or stream._write_chunk_size,
   })
-  stream[side .. '_registration'] = registration
+  stream['_' .. side .. '_registration'] = registration
   children[#children + 1] = registration
   registrations[side .. '_registration'] = registration:register_op()
 end

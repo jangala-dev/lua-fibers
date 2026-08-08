@@ -132,7 +132,7 @@ local ok, err = pcall(function()
 
   local raw = file()
   local managed = assert(Fd.new(raw, { nonblocking = false }))
-  assert(managed.handle == raw)
+  assert(managed._handle == raw)
   assert(managed:close())
 
   pipe_payloads[#pipe_payloads + 1] = 'pid 321\nexited 0\n'

@@ -4,11 +4,13 @@
 ---The queue is drained only from `Application:advance`, while the Runtime is at
 ---its external-driver boundary.
 
+local Base = require('fibers.internal.host.base')
 local Label = require('fibers.internal.label')
 local Contract = require('fibers.internal.contract')
 
 local Queue = {}
 Queue.__index = Queue
+setmetatable(Queue, { __index = Base })
 
 local unpack_ = table.unpack or unpack
 local next_queue = 0
@@ -25,11 +27,18 @@ local QUEUE_OPTIONS = {
   now = Contract.func,
   kind = Contract.non_empty_string,
   family = Contract.non_empty_string,
-  capabilities = Contract.table,
+  features = Contract.table,
   on_external_error = Contract.func,
   on_done = Contract.func,
   label = Contract.non_empty_string,
 }
+
+local function close_queue(self)
+  self._wake_callback = nil
+  self._queue = {}
+  self._queue_head, self._queue_tail = 1, 0
+  return true
+end
 
 function Queue.new(opts)
   opts = Contract.record(opts, QUEUE_OPTIONS, 'Queue.new options', 2)
@@ -37,9 +46,7 @@ function Queue.new(opts)
   next_queue = next_queue + 1
   local self = Label.attach(setmetatable({
     _fibers_id = 'embedded-host-' .. tostring(next_queue),
-    kind = opts.kind or 'embedded',
-    family = opts.family or opts.kind or 'embedded',
-    capabilities = opts.capabilities or { time = true, external = true },
+    kind = opts.kind or 'embedded', family = opts.family or opts.kind or 'embedded',
     _now = now,
     _queue = {},
     _queue_head = 1,
@@ -49,13 +56,11 @@ function Queue.new(opts)
     _wake_callback = nil,
     _done = false,
     _done_value = nil,
-    _closed = false,
-    on_external_error = opts.on_external_error,
-    on_done = opts.on_done,
+    _on_external_error = opts.on_external_error,
+    _on_done = opts.on_done,
   }, Queue), opts.label)
-  self.now = function()
-    return now()
-  end
+  Base.init(self, opts.features or { time = true, external = true }, close_queue)
+  self.now = function() return now() end
   return self
 end
 
@@ -70,18 +75,18 @@ function Queue:set_wake_callback(callback)
   return self
 end
 
-function Queue:has_pending_wake()
+function Queue:_has_pending_wake()
   return self._wake_pending == true
 end
 
-function Queue:consume_wake(fallback)
+function Queue:_consume_wake(fallback)
   local reason = self._wake_reason or fallback or 'external'
   self._wake_pending = false
   self._wake_reason = nil
   return reason
 end
 
-function Queue:has_external()
+function Queue:_has_external()
   return self._queue_head <= self._queue_tail
 end
 
@@ -123,8 +128,8 @@ function Queue:_drain_external(limit)
       count = count + 1
       local ok, err = pcall(item.fn, unpack_(item.args, 1, item.args.n))
       if not ok then
-        if self.on_external_error then
-          self.on_external_error(err)
+        if self._on_external_error then
+          self._on_external_error(err)
         end
         error(err, 0)
       end
@@ -147,8 +152,8 @@ function Queue:wake(reason)
   if callback and not already_pending then
     local ok, err = pcall(callback, self._wake_reason)
     if not ok then
-      if self.on_external_error then
-        self.on_external_error(err)
+      if self._on_external_error then
+        self._on_external_error(err)
       else
         error(err, 0)
       end
@@ -161,15 +166,15 @@ function Queue:mark_done(value)
   if self._done then return value end
   self._done = true
   self._done_value = value
-  if type(self.on_done) == 'function' then
-    self.on_done(value)
+  if type(self._on_done) == 'function' then
+    self._on_done(value)
   end
   return value
 end
 
 function Queue:supports_interest(interest)
   local kind = interest and interest.external_kind
-  local capability = kind and self.capabilities and self.capabilities[kind]
+  local capability = kind and self:feature(kind)
   if capability == false then
     return false, 'unsupported-' .. tostring(kind)
   end
@@ -180,13 +185,5 @@ function Queue:block()
   return nil, 'embedded-host-does-not-block'
 end
 
-function Queue:close()
-  if self._closed then return true end
-  self._closed = true
-  self._wake_callback = nil
-  self._queue = {}
-  self._queue_head, self._queue_tail = 1, 0
-  return true
-end
 
 return Queue

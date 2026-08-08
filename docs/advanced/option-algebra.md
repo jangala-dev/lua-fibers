@@ -307,7 +307,7 @@ or_else is not an optional try-once probe
 primary:or_else(fallback) is not commutative
 ```
 
-`or_else` is proof-directed immediate fallback. For a primitive with a complete revalidatable negative fact—such as a managed readiness level, signal, queue absence or state predicate—it also acts as a validated transactional snapshot probe.
+`or_else` is proof-directed immediate fallback. For a primitive with a complete revalidatable negative fact—such as a managed readiness level, signal, queue absence or state predicate—it also acts as a validated proof of present availability or absence.
 
 Together, `choice` and `or_else` form priority tiers:
 
@@ -447,7 +447,6 @@ serial machine transition
 witnessed transition
 version wait
 linear exchange
-snapshot
 ```
 
 Each leaf contains the immutable behaviour needed for its primitive operation. The current perform/session owns all mutable activation, frontier and rollback state. The kernel owns:

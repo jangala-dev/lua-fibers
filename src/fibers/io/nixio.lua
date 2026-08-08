@@ -109,7 +109,7 @@ end
 local binding = {
   name = 'nixio',
   family = 'nixio',
-  capabilities = {
+  features = {
     process_close_fds = 'known',
     process_groups = 'session',
   },

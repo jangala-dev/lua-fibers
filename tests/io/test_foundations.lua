@@ -17,6 +17,7 @@ local Address = require('fibers.net.address')
 local Completion = require('fibers.resource.completion')
 local HostHold = require('fibers.io.internal.host_hold')
 local Connection = require('fibers.socket.connection')
+local State = require('tests.support.resource_state')
 
 local function assert_eq(a, b, msg)
   if a ~= b then
@@ -61,7 +62,7 @@ do
   assert_eq(tostring(err), 'connection refused')
   assert_truthy(HostError.is_would_block(HostError.would_block('fd', 'read')))
   assert_truthy(HostError.is_eof(HostError.eof('fd', 'read')))
-  assert_truthy(SimulatedHost.new({ pipes = true }).capabilities.pipe == true)
+  assert_truthy(SimulatedHost.new({ pipes = true }):supports('pipe'))
 end
 
 -- Public Unix endpoints require a pathname, while native queries may report
@@ -90,7 +91,7 @@ do
   end)
   assert_eq(observed[1], 'done')
   assert_eq(second, 'completion_already_terminal')
-  assert_eq(completion:state_value().kind, 'succeeded')
+  assert_eq(State.completion(completion).kind, 'succeeded')
 end
 
 -- An admitted internal host hold closes an unreleased host value during Lifetime Closure.

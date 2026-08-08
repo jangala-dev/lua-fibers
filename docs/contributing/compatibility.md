@@ -117,7 +117,7 @@ pass and return structured unsupported errors for the remainder.
 
 ## Evented file capabilities
 
-`capabilities.file` means the public regular-file surface can run without
+`features.file` means the public regular-file surface can run without
 issuing filesystem calls on the runtime thread. `file_backend` identifies the
 selected complete mechanism:
 

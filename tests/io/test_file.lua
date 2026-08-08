@@ -417,7 +417,7 @@ end
 
 function tests.worker_file_provider_is_evented()
   local host = AutoIO.default()
-  if not (host.capabilities and host.capabilities.process) then
+  if not (host:supports('process')) then
     if host.close then
       host:close()
     end
@@ -450,7 +450,7 @@ end
 
 function tests.native_evented_file_provider_when_available()
   local host = AutoIO.default()
-  if not (host.capabilities and host.capabilities.file) then
+  if not (host:supports('file')) then
     if host.close then
       host:close()
     end

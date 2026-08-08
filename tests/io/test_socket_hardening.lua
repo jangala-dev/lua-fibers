@@ -15,6 +15,8 @@ local SimulatedHost = require('tests.support.simulated_host')
 local HostError = require('fibers.io.error')
 local socket = require('fibers.socket')
 local Lifetime = require('fibers.lifetime')
+local Lifetimes = require('tests.support.lifetimes')
+local State = require('tests.support.resource_state')
 
 local function assert_eq(a, b, msg)
   if a ~= b then
@@ -35,8 +37,8 @@ local function yield_turns(n)
 end
 
 local function wait_for_queue(listener, count)
-  while listener.offers._queue:length() < count do yield_turns(1) end
-  local state = listener.offers._queue._location.value
+  while State.event_queue_length(listener._offers._queue) < count do yield_turns(1) end
+  local state = listener._offers._queue._location.value
   local rows, node = {}, state.front
   while node do
     rows[#rows + 1] = { value = node.value[1] }
@@ -64,19 +66,19 @@ do
 
     fibers.scope({ label = 'connection-handler' }, function(handler)
       accepted = listener:accept()
-      assert_eq(Lifetime.of(accepted):current_state().custodian, handler:lifetime(), 'accepted Stream should move into handler scope')
+      assert_eq(Lifetimes.state(accepted).custodian, handler:lifetime(), 'accepted Stream should move into handler scope')
       assert_truthy(
-        Lifetime.of(accepted:reader()):current_state().custodian == handler:lifetime(),
+        Lifetimes.state(accepted:reader()).custodian == handler:lifetime(),
         'reader child should move with Stream subtree'
       )
       assert_truthy(
-        Lifetime.of(accepted:writer()):current_state().custodian == handler:lifetime(),
+        Lifetimes.state(accepted:writer()).custodian == handler:lifetime(),
         'writer child should move with Stream subtree'
       )
     end)
 
-    assert_eq(Lifetime.of(accepted):current_state().custodian, nil, 'handler Closure should release the accepted Stream')
-    assert_truthy(accepted.handle.closed, 'handler Closure should close the accepted host handle')
+    assert_eq(Lifetimes.state(accepted).custodian, nil, 'handler Closure should release the accepted Stream')
+    assert_truthy(accepted._handle._closed, 'handler Closure should close the accepted host handle')
     client:close('custody test complete')
     listener:close('custody test complete')
     listener:closed()
@@ -116,13 +118,13 @@ do
     fibers.scope({ label = 'listener-origin' }, function(origin)
       listener = socket.listen_inet('127.0.0.1', 0, { label = 'moved-listener' })
       assert_eq(Lifetime.of(listener), listener:lifetime())
-      assert_eq(listener:lifetime().has_body, false, 'Listener Lifetime should not carry a ceremonial driver body')
-      local listener_roots = fibers.perform(origin:children_op())
+      assert_eq(listener:lifetime()._has_body, false, 'Listener Lifetime should not carry a ceremonial driver body')
+      local listener_roots = Lifetimes.roots(origin)
       assert_eq(#listener_roots, 1, "Listener should be the one root in its caller\'s custody")
       assert_eq(listener_roots[1], listener)
       fibers.perform(origin:move_op(listener, root))
-      assert_eq(Lifetime.of(listener):current_state().custodian, root:lifetime())
-      assert_eq(Lifetime.of(listener):current_state().custodian, root:lifetime(), 'Listener move should reparent one Lifetime root')
+      assert_eq(Lifetimes.state(listener).custodian, root:lifetime())
+      assert_eq(Lifetimes.state(listener).custodian, root:lifetime(), 'Listener move should reparent one Lifetime root')
     end)
 
     local address = listener:local_address()
@@ -130,13 +132,13 @@ do
     fibers.scope({ label = 'dial-origin' }, function(origin)
       dial = socket.dial(socket.inet_address(address.host, address.port), { label = 'moved-dial' })
       assert_eq(Lifetime.of(dial), dial:lifetime())
-      assert_truthy(dial:lifetime().has_body, 'Dial Lifetime should carry its running body')
-      local dial_roots = fibers.perform(origin:children_op())
+      assert_truthy(dial:lifetime()._has_body, 'Dial Lifetime should carry its running body')
+      local dial_roots = Lifetimes.roots(origin)
       assert_eq(#dial_roots, 1, "Dial should be the one root in its caller\'s custody")
       assert_eq(dial_roots[1], dial)
       fibers.perform(origin:move_op(dial, root))
-      assert_eq(Lifetime.of(dial):current_state().custodian, root:lifetime())
-      assert_eq(Lifetime.of(dial):current_state().custodian, root:lifetime(), 'Dial move should reparent one Lifetime root')
+      assert_eq(Lifetimes.state(dial).custodian, root:lifetime())
+      assert_eq(Lifetimes.state(dial).custodian, root:lifetime(), 'Dial move should reparent one Lifetime root')
     end)
 
     local client = dial:result()
@@ -166,7 +168,7 @@ do
 
     assert_eq(listener:close('queue-full shutdown'), true)
     assert_eq(listener:closed(), true)
-    assert_truthy(rows[1].value.handle.closed, 'queued connection should close with driver scope')
+    assert_truthy(rows[1].value.handle._closed, 'queued connection should close with driver scope')
 
     c1:close('queue-full test complete')
     c2:close('queue-full test complete')
@@ -182,13 +184,13 @@ do
     local client = socket.dial(socket.inet_address(address.host, address.port), { label = 'close-race-client' }):result()
     wait_for_queue(listener, 1)
 
-    fibers.perform(listener.lifecycle:request_stop_op('simulated terminal listener'))
+    fibers.perform(listener._lifecycle:request_stop_op('simulated terminal listener'))
     local accepted = listener:accept()
     assert_truthy(accepted, 'queued accept should beat terminal listener fallback')
-    assert_eq(Lifetime.of(accepted):current_state().custodian, fibers.current_scope():lifetime())
+    assert_eq(Lifetimes.state(accepted).custodian, fibers.current_scope():lifetime())
 
     accepted:close('accepted during close')
-    listener:host_handle():close('simultaneous close')
+    State.host_handle(listener):close('simultaneous close')
     fibers.perform(listener:lifetime():request_cancel_op('simultaneous close'))
     listener:closed()
     client:close('close-race test complete')
@@ -207,15 +209,15 @@ do
     fibers.scope({ label = 'untaken-dial-scope' }, function()
       dial_ref = socket.dial(socket.inet_address(address.host, address.port), { label = 'untaken-dial' })
       fibers.perform(dial_ref:report_op())
-      local connected_state = dial_ref:state_value()
+      local connected_state = State.lifecycle(dial_ref)
       connection_ref = connected_state.connection
       assert_truthy(connection_ref, 'dial should have a successful untaken connection')
-      assert_eq(Lifetime.of(connection_ref):current_state().custodian, connected_state.source_scope:lifetime())
+      assert_eq(Lifetimes.state(connection_ref).custodian, connected_state.source_scope:lifetime())
       assert_eq(fibers.perform(Op.always('not taken'):or_else(dial_ref:connected_op(fibers.current_scope()))), 'not taken')
     end)
 
-    assert_eq(Lifetime.of(connection_ref):current_state().custodian, nil, 'Dial Closure should close an untaken connection')
-    assert_truthy(connection_ref.handle.closed, 'Dial Closure should close untaken connection')
+    assert_eq(Lifetimes.state(connection_ref).custodian, nil, 'Dial Closure should close an untaken connection')
+    assert_truthy(connection_ref._handle._closed, 'Dial Closure should close untaken connection')
     listener:close('untaken test complete')
     listener:closed()
   end, { host = host })
@@ -232,7 +234,7 @@ do
 
     fibers.scope({ label = 'dial-target' }, function(target)
       local connection = dial:result()
-      assert_eq(Lifetime.of(connection):current_state().custodian, target:lifetime(), 'Dial result should move connection into caller scope')
+      assert_eq(Lifetimes.state(connection).custodian, target:lifetime(), 'Dial result should move connection into caller scope')
       assert_eq(dial:closed(), true, 'Dial driver should finish after custody transfer')
     end)
 
@@ -316,8 +318,8 @@ do
     -- Return without closing the listener.
   end, { host = host })
 
-  assert_truthy(listener_ref:host_handle().closed, 'Scope Closure should close listener handle')
-  assert_truthy(queued_ref.handle.closed, 'Scope Closure should close queued connection')
+  assert_truthy(State.host_handle(listener_ref)._closed, 'Scope Closure should close listener handle')
+  assert_truthy(queued_ref.handle._closed, 'Scope Closure should close queued connection')
 end
 
 -- Listener closure remains idempotent.
@@ -436,8 +438,8 @@ do
 
     local listener = fibers.perform(listen)
     assert_eq(listener:label(), 'snapshotted-listener')
-    assert_eq(listener.address.host, '127.0.0.1')
-    assert_eq(listener.offers.capacity, 1)
+    assert_eq(listener:local_address().host, '127.0.0.1')
+    assert_eq(listener._offers._capacity, 1)
     listener:close('snapshot test complete')
     listener:closed()
   end, { host = host })

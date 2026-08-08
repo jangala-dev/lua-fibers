@@ -107,9 +107,15 @@ do
   assert_truthy(type(manual._fibers_id) == 'string')
   assert_eq(manual.family, 'manual')
   assert_truthy(
-    manual.capabilities and manual.capabilities.readiness,
-    'manual host should describe capabilities'
+    manual:supports('readiness'),
+    'manual host should describe features'
   )
+  assert_eq(manual.capabilities, nil)
+  assert_eq(manual.features, nil)
+  assert_eq(manual.providers, nil)
+  assert_eq(manual.application, nil)
+  assert_eq(manual.wait_domain, nil)
+  assert_eq(manual.auto_advance_time, nil)
 
   local pure = PureHost.new({
     now = function()
@@ -122,6 +128,9 @@ do
   assert_eq(pure.kind, 'pure')
   assert_truthy(type(pure._fibers_id) == 'string')
   assert_eq(pure.family, 'pure')
+  assert_eq(pure.capabilities, nil)
+  assert_eq(pure.features, nil)
+  assert_eq(pure.application, nil)
 
   local available = AutoIO.available()
   assert_truthy(type(available) == 'table' and #available > 0, 'AutoIO.available should list native I/O backends')
@@ -133,7 +142,7 @@ do
       return opts and opts.label
     end,
   })
-  assert_eq(injected.capabilities.pipe, true)
+  assert_eq(injected:feature('pipe'), true)
   assert_eq(injected:create_pipe({ label = 'injected-pipe' }), 'injected-pipe')
 end
 

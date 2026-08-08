@@ -14,6 +14,7 @@ local Runtime = require('fibers.runtime')
 local Stream = require('fibers.io.stream')
 local Scope = require('fibers.scope')
 local UnsafeExternalMutation = require('fibers.embed.unsafe_external_mutation')
+local State = require('tests.support.resource_state')
 require('fibers.diagnostics.io').install(require('fibers.diagnostics.io_observer'))
 
 local function fail(msg)
@@ -55,7 +56,7 @@ do
     }))
   end):label('root')
   assert_eq(rt:run().tag, 'found')
-  local entry = stream.read_registration
+  local entry = stream._read_registration
   UnsafeExternalMutation.deliver(
     rt.host_reactor.ready,
     entry._fibers_id,
@@ -84,7 +85,7 @@ do
   for i = 1, 5000 do
     UnsafeExternalMutation.deliver(q, i)
   end
-  assert_eq(q:length(), 5000)
+  assert_eq(State.event_queue_length(q), 5000)
   rt:spawn_raw(function()
     for i = 1, 5000 do
       local value = rt:perform(q:next_op())
@@ -94,7 +95,7 @@ do
   end):label('poller-burst-consumer')
   assert_eq(rt:run().tag, 'found')
   assert_eq(consumed, 5000)
-  assert_eq(q:length(), 0)
+  assert_eq(State.event_queue_length(q), 0)
 
   -- A drain must include an existing front item and later arrivals held in the
   -- persistent back list. This is the shape used by scope lifetime events.
@@ -110,7 +111,7 @@ do
   assert_eq(drained[1][1], 'first')
   assert_eq(drained[2][1], 'second')
   assert_eq(drained[3][1], 'third')
-  assert_eq(q:length(), 0)
+  assert_eq(State.event_queue_length(q), 0)
 end
 
 -- Stateless hosts share one plan for readiness resources and indexed poller registrations.

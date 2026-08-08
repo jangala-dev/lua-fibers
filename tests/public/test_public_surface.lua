@@ -181,7 +181,7 @@ do
       'none', 'running', 'nursery', 'supervisor', 'protocol', 'propagation',
       'combine', 'request_then_wait', 'require_ok', 'is_failure',
     } },
-    { 'Grant', FibersGrant, { 'is', 'closed', 'closed_op', 'has_right', 'inspect' } },
+    { 'Grant', FibersGrant, { 'is', 'closed', 'closed_op', 'has_right' } },
     { 'Channel', FibersChannel, { 'new' } },
     { 'Mailbox', FibersMailbox, { 'new', 'reject_newest', 'drop_oldest' } },
     { 'Pulse', FibersPulse, { 'new' } },
@@ -209,7 +209,7 @@ do
   local scope = FibersScope.new():label('public-scope-surface')
   assert_functions('Scope', scope, {
     'spawn_op', 'move_op', 'offer_op', 'accept_op', 'grant_op', 'can_op',
-    'custody_op', 'subtree_op',
+    'has_custody_op',
   })
 end
 

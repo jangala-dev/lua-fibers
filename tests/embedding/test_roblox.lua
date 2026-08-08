@@ -24,6 +24,7 @@ local FakeTask = require('tests.support.roblox.fake_task')
 local FakeEvent = require('tests.support.roblox.fake_event')
 local FakeSignal = require('tests.support.roblox.fake_signal')
 local FakeGame = require('tests.support.roblox.fake_game')
+local State = require('tests.support.resource_state')
 
 local function fail(message)
   error(message, 2)
@@ -128,6 +129,8 @@ end
 do
   local scheduler = FakeTask.new()
   local host = new_host(scheduler)
+  assert_truthy(host:supports('time'))
+  assert_eq(host:supports('readiness'), false)
   local wakes = 0
   host:set_wake_callback(function()
     wakes = wakes + 1
@@ -135,7 +138,7 @@ do
   host:wake('first')
   host:wake('second')
   assert_eq(wakes, 1, 'pending wakes should be coalesced')
-  assert_eq(host:consume_wake(), 'first')
+  assert_eq(host:_consume_wake(), 'first')
   host:wake('third')
   assert_eq(wakes, 2)
   host:close()
@@ -191,7 +194,7 @@ do
   assert_eq(first.state, 'pending')
   assert_eq(first.reason, 'turn-budget')
   assert_truthy(first.needs_immediate_resume)
-  assert_truthy(not app:is_settled())
+  assert_truthy(app:result() == nil)
 
   local final = advance_until_settled(app)
   assert_eq(final.state, 'settled')
@@ -221,7 +224,7 @@ do
   local first = app:advance()
   assert_eq(first.state, 'pending')
   assert_truthy(first.needs_immediate_resume)
-  assert_truthy(not app:is_settled(), 'ready work must prevent premature quiescent completion')
+  assert_truthy(app:result() == nil, 'ready work must prevent premature quiescent completion')
 
   for _ = 1, 4 do
     if side_fiber_ran then
@@ -487,7 +490,7 @@ do
         signal:Fire(35)
       end)
       fibers.perform(Sleep.sleep_op(3))
-      pending = latest:length()
+      pending = State.event_queue_length(latest._resource)
       newest = latest:next()
     end, { host = host, owns_host = false })
   end)
@@ -553,10 +556,10 @@ do
       end)
       assert_truthy(not ok, 'first disconnect should fail')
       assert_truthy(tostring(err):match('fake disconnect failure'))
-      assert_truthy(subscription:is_connected(), 'failed disconnect should retain the live connection')
-      assert_truthy(not subscription:is_closed(), 'failed disconnect should remain unsettled')
+      assert_truthy(subscription._connection ~= nil, 'failed disconnect should retain the live connection')
+      assert_truthy(not subscription._closed, 'failed disconnect should remain unsettled')
       subscription:_disconnect()
-      assert_truthy(subscription:is_closed(), 'retry should close the subscription')
+      assert_truthy(subscription._closed, 'retry should close the subscription')
       assert_eq(signal:connection_count(), 0)
     end, { host = host, owns_host = false })
   end)
@@ -585,17 +588,17 @@ do
   -- The first selected phase admits the root and its subscription.
   heartbeat:Fire(1 / 60)
   scheduler:run_until_idle()
-  assert_truthy(not app:is_settled())
+  assert_truthy(app:result() == nil)
   assert_eq(action:connection_count(), 1)
 
   action:Fire('dodge')
   scheduler:run_until_idle()
-  assert_truthy(not app:is_settled(), 'ordinary engine callbacks must not run the solver')
+  assert_truthy(app:result() == nil, 'ordinary engine callbacks must not run the solver')
 
   heartbeat:Fire(1 / 60)
   assert_truthy(
     scheduler:run_until(function()
-      return app:is_settled()
+      return app:result() ~= nil
     end),
     'phase-driven application did not settle'
   )

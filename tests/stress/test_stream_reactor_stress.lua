@@ -61,7 +61,7 @@ local report = fibers.try_run(function(scope)
   local reactor = rt and rt.host_reactor
   assert_truthy(reactor, 'stress should have created a runtime reactor')
   fibers.perform(Sleep.sleep_op(0))
-  assert(reactor:registration_count() == 0, 'all stress registrations should retire')
+  assert(reactor:_registration_count() == 0, 'all stress registrations should retire')
 end, {
   host = SimulatedHost.new({ pipes = true, auto_advance_time = true }),
   max_iterations = 20000,

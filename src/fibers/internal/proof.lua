@@ -66,26 +66,17 @@ function M.collect_interests(proofs)
   return out
 end
 
--- Preserve only the proof's participant-membership frontier. These facts
--- invalidate when a new compatible pending root appears, but do not keep a
--- discarded preferred branch registered as a live state or external wait.
+-- Preserve only participant-membership dependencies from a discarded
+-- preferred branch. They invalidate on new compatible roots without retaining
+-- the branch's state or external waits.
 function M.merge_latent_frontier(dst, src)
   dst = dst or M.new()
   for i = 1, #(src or {}) do
     local fact = src[i]
-    local latent_kind
-    if fact.kind == 'frontier-exchange' then
-      latent_kind = 'latent-frontier-exchange'
-    elseif fact.kind == 'frontier-location' then
-      latent_kind = 'latent-frontier-location'
-    elseif fact.kind == 'frontier-resource' then
-      latent_kind = 'latent-frontier-resource'
-    end
-    if latent_kind then
+    if fact.kind == 'dependency' and not fact.latent then
       local copy = {}
       for key, value in pairs(fact) do copy[key] = value end
-      copy.kind = latent_kind
-      copy.identity = identity(fact)
+      copy.latent, copy.identity = true, identity(fact)
       add_unique(dst, copy)
     end
   end
@@ -111,34 +102,31 @@ end
 -- admitting another fiber; exchange, location and resource frontiers can.
 function M.mark_absence_gate_frontier(certificate)
   for i = 1, #(certificate or {}) do
-    local kind = certificate[i].kind
-    if kind == 'frontier-exchange' or kind == 'frontier-location' or kind == 'frontier-resource' then
+    local fact = certificate[i]
+    if fact.kind == 'dependency' and not fact.latent then
       certificate.membership_sensitive = true
       break
     end
   end
 end
 
+local function add_dependency(certificate, intent, class, object, qualifier, version)
+  M.add(certificate, 'dependency', {
+    identity = intent, request = intent.request, class = class, object = object,
+    qualifier = qualifier, version = version,
+  })
+end
+
 local function add_intent(certificate, activation, intent)
   if intent.kind == 'exchange' then
-    M.add(certificate, 'frontier-exchange', {
-      identity = intent,
-      request = intent.request, resource = intent.resource, role = intent.role, name = intent.name,
-    })
+    add_dependency(certificate, intent, 'exchange', intent.resource, intent.role)
   elseif intent.spec and intent.spec.location then
     local location = intent.spec.location
-    M.add(certificate, 'frontier-location', {
-      identity = intent,
-      request = intent.request, location = location, name = intent.name,
-      version = intent.observed_version or location.version or 0,
-    })
+    add_dependency(certificate, intent, 'location', location, nil, intent.observed_version or location.version or 0)
   end
   local resource = intent.resource or (intent.spec and intent.spec.resource)
   if resource and intent.kind ~= 'exchange' then
-    M.add(certificate, 'frontier-resource', {
-      identity = intent,
-      request = intent.request, resource = resource, name = intent.name, version = resource.version or 0,
-    })
+    add_dependency(certificate, intent, 'resource', resource, nil, resource.version or 0)
   end
   if intent.interest then
     M.add(certificate, 'interest', { identity = intent.interest, value = intent.interest })
@@ -171,31 +159,27 @@ function M.from_intents(intents)
   return finish_activation(certificate, activation)
 end
 
+local function dependencies()
+  return { exchanges = {}, locations = {}, resources = {} }
+end
+
+local function observe(deps, class, object, qualifier, version)
+  if class == 'exchange' then
+    local roles = deps.exchanges[object]
+    if not roles then roles = {}; deps.exchanges[object] = roles end
+    roles[qualifier] = true
+  else
+    local set = deps[class == 'location' and 'locations' or 'resources']
+    if set[object] == nil then set[object] = version or object.version or true end
+  end
+end
+
 function M.frontiers(intents, roots, inherited)
   local frontiers, activations = {}, {}
   for request, root in pairs(roots or {}) do
     if root and not root.done then
-      frontiers[request] = {
-        exchanges = {}, locations = {}, resources = {},
-        latent_exchanges = {}, latent_locations = {}, latent_resources = {},
-        complete = true, certificate = M.new(),
-      }
+      frontiers[request] = { dependencies = dependencies(), latent = dependencies(), complete = true, certificate = M.new() }
       activations[request] = {}
-    end
-  end
-
-  local function observe(frontier, kind, object, qualifier, version)
-    if kind == 'exchange' then
-      local roles = frontier.exchanges[object]
-      if not roles then roles = {}; frontier.exchanges[object] = roles end
-      if roles[qualifier] then return end
-      roles[qualifier] = true
-    elseif kind == 'location' then
-      if frontier.locations[object] ~= nil then return end
-      frontier.locations[object] = version or object.version or 0
-    else
-      if frontier.resources[object] ~= nil then return end
-      frontier.resources[object] = version or object.version or 0
     end
   end
 
@@ -205,32 +189,21 @@ function M.frontiers(intents, roots, inherited)
     if frontier then
       add_intent(frontier.certificate, activations[intent.request], intent)
       if intent.kind == 'exchange' then
-        observe(frontier, 'exchange', intent.resource, intent.role)
+        observe(frontier.dependencies, 'exchange', intent.resource, intent.role)
       elseif intent.kind == 'choice' or intent.kind == 'witness' or intent.kind == 'transition' then
         frontier.complete = false
       end
       local leaf = intent.spec
-      if leaf and leaf.location then observe(frontier, 'location', leaf.location, nil, intent.observed_version) end
+      if leaf and leaf.location then observe(frontier.dependencies, 'location', leaf.location, nil, intent.observed_version) end
       local resource = intent.resource or (leaf and leaf.resource)
-      if resource and intent.kind ~= 'exchange' then observe(frontier, 'resource', resource) end
+      if resource and intent.kind ~= 'exchange' then observe(frontier.dependencies, 'resource', resource) end
     end
   end
 
   for i = 1, #(inherited or {}) do
     local fact = inherited[i]
-    local frontier = frontiers[fact.request]
-    if frontier then
-      if fact.kind == 'frontier-exchange' then observe(frontier, 'exchange', fact.resource, fact.role)
-      elseif fact.kind == 'frontier-location' then observe(frontier, 'location', fact.location, nil, fact.version)
-      elseif fact.kind == 'frontier-resource' then observe(frontier, 'resource', fact.resource, nil, fact.version)
-      elseif fact.kind == 'latent-frontier-exchange' then
-        local roles = frontier.latent_exchanges[fact.resource]
-        if not roles then roles = {}; frontier.latent_exchanges[fact.resource] = roles end
-        roles[fact.role] = true
-      elseif fact.kind == 'latent-frontier-location' then frontier.latent_locations[fact.location] = true
-      elseif fact.kind == 'latent-frontier-resource' then frontier.latent_resources[fact.resource] = true
-      end
-    end
+    local frontier = fact.kind == 'dependency' and frontiers[fact.request]
+    if frontier then observe(fact.latent and frontier.latent or frontier.dependencies, fact.class, fact.object, fact.qualifier, fact.version) end
   end
 
   for request, frontier in pairs(frontiers) do
@@ -392,24 +365,25 @@ local function same_set_map(left, right)
   return true
 end
 
-local function same_frontier(left, right)
-  return left ~= nil
-    and left.complete == right.complete
-    and same_set_map(left.exchanges, right.exchanges)
+local function same_dependencies(left, right)
+  return same_set_map(left.exchanges, right.exchanges)
     and same_set_map(left.locations, right.locations)
     and same_set_map(left.resources, right.resources)
-    and same_set_map(left.latent_exchanges, right.latent_exchanges)
-    and same_set_map(left.latent_locations, right.latent_locations)
-    and same_set_map(left.latent_resources, right.latent_resources)
+end
+
+local function same_frontier(left, right)
+  return left ~= nil and left.complete == right.complete
+    and same_dependencies(left.dependencies, right.dependencies)
+    and same_dependencies(left.latent, right.latent)
 end
 
 local function index_exact(value, request, frontier)
-  local memberships = {}
-  for resource, roles in pairs(frontier.exchanges or EMPTY) do
+  local memberships, deps = {}, frontier.dependencies
+  for resource, roles in pairs(deps.exchanges or EMPTY) do
     for role in pairs(roles) do add_membership(memberships, bucket2(value.exact_exchange, resource, role), request) end
   end
-  for location in pairs(frontier.locations or EMPTY) do add_membership(memberships, bucket1(value.exact_location, location), request) end
-  for resource in pairs(frontier.resources or EMPTY) do add_membership(memberships, bucket1(value.exact_resource, resource), request) end
+  for location in pairs(deps.locations or EMPTY) do add_membership(memberships, bucket1(value.exact_location, location), request) end
+  for resource in pairs(deps.resources or EMPTY) do add_membership(memberships, bucket1(value.exact_resource, resource), request) end
   return memberships
 end
 
@@ -446,9 +420,9 @@ end
 
 local function row_description(request)
   local frontier = request and request._proof
-  if frontier and frontier.complete then return frontier, false end
+  if frontier and frontier.complete then return frontier.dependencies, false end
   local shape, lifetime = potential_shape(request)
-  return shape or frontier or { exchanges = {}, locations = {}, resources = {}, dynamic = true }, true, lifetime
+  return shape or (frontier and frontier.dependencies) or { exchanges = {}, locations = {}, resources = {}, dynamic = true }, true, lifetime
 end
 
 function M.component(engine, focus)
@@ -531,20 +505,18 @@ function M.capture(engine, state, certificate, frontiers)
     add_bucket(snapshot, possible and possible[opposite(role)])
   end
   local function add_fact(fact)
-    local kind = fact.kind
-    if kind == 'frontier-exchange' or kind == 'latent-frontier-exchange' then
-      add_exchange(fact.resource, fact.role)
-    elseif kind == 'frontier-location' then
-      add_location(snapshot, fact.location, fact.version); add_bucket(snapshot, value.potential_location[fact.location])
-    elseif kind == 'frontier-resource' then
-      add_bucket(snapshot, value.potential_resource[fact.resource])
-    elseif kind == 'latent-frontier-location' then
-      add_bucket(snapshot, value.potential_location[fact.location])
-    elseif kind == 'latent-frontier-resource' then
-      add_bucket(snapshot, value.potential_resource[fact.resource])
-    elseif kind == 'check' and fact.value then
+    if fact.kind == 'dependency' then
+      if fact.class == 'exchange' then
+        add_exchange(fact.object, fact.qualifier)
+      elseif fact.class == 'location' then
+        if not fact.latent then add_location(snapshot, fact.object, fact.version) end
+        add_bucket(snapshot, value.potential_location[fact.object])
+      else
+        add_bucket(snapshot, value.potential_resource[fact.object])
+      end
+    elseif fact.kind == 'check' and fact.value then
       snapshot.checks[#snapshot.checks + 1] = fact.value
-    elseif kind == 'interest' then
+    elseif fact.kind == 'interest' then
       local interest = fact.value
       if interest and interest.kind == 'timer' and type(interest.deadline) == 'number' then snapshot.timers[#snapshot.timers + 1] = interest.deadline end
     end

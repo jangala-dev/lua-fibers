@@ -13,6 +13,7 @@ local fibers = require('fibers')
 local FakeHandle = require('tests.support.fake_handle')
 local FibersRuntime = require('fibers.runtime')
 local Lifetime = require('fibers.lifetime')
+local Lifetimes = require('tests.support.lifetimes')
 local FibersScope = require('fibers.scope')
 local FibersFlow = require('fibers.resource.flow')
 local FibersStream = require('fibers.io.stream')
@@ -150,8 +151,7 @@ do
   )
 end
 
--- inspect_op exposes sealed boundary facts while root closure is in
--- progress, without depending on a lifecycle phase enum.
+-- Test-only store inspection confirms sealing while root Closure is in progress.
 do
   local rt = FibersRuntime.new()
   local settled, feed = External.signal(rt)
@@ -178,18 +178,9 @@ do
       break
     end
   end
-  rt:spawn_raw(function()
-    state = rt:perform(scope:inspect_op())
-  end):label('hardening-settling-monitor')
-  for _ = 1, 20 do
-    st = rt:run()
-    if state then
-      break
-    end
-  end
-  assert_truthy(state, 'monitor should read scope state')
-  assert_eq(state.sealed, true, 'scope should expose sealed boundary fact')
-  assert_eq(state.done, false, 'scope should not be done while Closure waits')
+  state = Lifetimes.state(scope)
+  assert_eq(state.sealed, true, 'scope should be sealed while Closure waits')
+  assert_truthy(state.closure_phase ~= 'closed', 'scope should not be closed while Closure waits')
   feed:set(true)
   rt:run()
 end

@@ -273,11 +273,11 @@ do
   assert_status(st, 'pending')
   assert_truthy(stream, 'stream should open')
   assert_eq(
-    Inspect.first_lease_bytes(stream:writer().flow),
+    Inspect.first_lease_bytes(stream:writer()._flow),
     nil,
     'reactor should not lease before host writability'
   )
-  assert_eq(Inspect.data(stream:writer().flow), 'hello')
+  assert_eq(Inspect.data(stream:writer()._flow), 'hello')
   assert_eq(handle:written(), '')
   handle.write_blocked = false
   host:writable(handle.key)

@@ -66,10 +66,6 @@ function Lifecycle:state_op()
   return self.state:read_op()
 end
 
-function Lifecycle:state_value()
-  return self.state.value
-end
-
 function Lifecycle:set_state_op(value)
   return self.state:write_op(value)
 end
@@ -85,14 +81,6 @@ function Lifecycle:close_requested_op()
     end
     return false
   end)
-end
-
-function Lifecycle:is_close_requested()
-  return self.close_request.value.requested == true
-end
-
-function Lifecycle:close_reason()
-  return self.close_request.value.reason
 end
 
 local Module = {}
@@ -131,56 +119,58 @@ function Process:lifetime()
   return self._lifetime
 end
 
-function Process:pid()
-  return self._pid
+local function after_launch(proc, field)
+  return proc._launch_completion:result_op():map(function(launched, err)
+    if launched == nil then return nil, err end
+    return proc[field]
+  end)
+end
+
+function Process:pid_op()
+  return after_launch(self, '_pid')
 end
 
 function Process:argv()
-  return copy_list(self.command._spec.argv)
+  return copy_list(self._command._spec.argv)
 end
 
-function Process:state_value()
-  return self.lifecycle:state_value()
+function Process:stdin_op()
+  return after_launch(self, '_stdin_stream')
 end
-
-function Process:stdin()
-  return self.stdin_stream
+function Process:stdout_op()
+  return after_launch(self, '_stdout_stream')
 end
-function Process:stdout()
-  return self.stdout_stream
-end
-function Process:stderr()
-  return self.stderr_stream
+function Process:stderr_op()
+  return after_launch(self, '_stderr_stream')
 end
 
 function Process:launch_succeeded_op()
-  return self.launch_completion:success_op()
+  return self._launch_completion:success_op()
 end
 
 function Process:launch_failed_op()
-  return self.launch_completion:failure_op()
+  return self._launch_completion:failure_op()
 end
 
 function Process:launch_result_op()
-  return self.launch_completion:result_op()
+  return self._launch_completion:result_op()
 end
 
 function Process:result_op()
-  return self.exit_completion:result_op()
+  return self._exit_completion:result_op()
 end
 
 function Process:request_close_op(reason)
-  return self.lifecycle:request_close_op(reason)
+  return self._lifecycle:request_close_op(reason)
 end
 
 function Process:closed_op()
-  return IO.closed_after_driver_op(self._task, self.closed_completion:result_op(), {
+  return IO.closed_after_driver_op(self._task, self._closed_completion:result_op(), {
     require_returned = true,
   })
 end
 
-local function process_not_running(proc, action)
-  local state = proc:state_value()
+local function process_not_running(proc, action, state)
   return IOError.closed('process', action, {
     pid = proc._pid,
     state = state and state.kind,
@@ -188,13 +178,13 @@ local function process_not_running(proc, action)
 end
 
 function Process:signal_op(signal, target)
-  target = target or self.command._spec.shutdown.target or 'process'
-  return self.lifecycle:state_op():and_then(Op.guard(function(state)
+  target = target or self._command._spec.shutdown.target or 'process'
+  return self._lifecycle:state_op():and_then(Op.guard(function(state)
     if state.kind ~= 'running' and state.kind ~= 'closing' then
-      return Op.always(nil, process_not_running(self, 'signal'))
+      return Op.always(nil, process_not_running(self, 'signal', state))
     end
     return Op.always(true):wrap(function()
-      local handle = self.host_process
+      local handle = self._host_process
       if not handle or type(handle.signal) ~= 'function' then
         return nil, IOError.unsupported('host', 'process_signal', { pid = self._pid })
       end
@@ -215,10 +205,10 @@ function Process:signal_op(signal, target)
 end
 
 function Process:terminate_op()
-  return self:signal_op(self.command._spec.shutdown.signal)
+  return self:signal_op(self._command._spec.shutdown.signal)
 end
 function Process:kill_op()
-  return self:signal_op(self.command._spec.shutdown.kill_signal)
+  return self:signal_op(self._command._spec.shutdown.kill_signal)
 end
 
 function Process:communicate(opts)
@@ -256,7 +246,7 @@ function Process:communicate(opts)
     return nil, err
   end
 
-  local stdin_stream = self:stdin()
+  local stdin_stream = self._stdin_stream
   if not stdin_stream then
     if opts.input ~= nil and opts.input ~= '' then
       return fail(
@@ -295,8 +285,8 @@ function Process:communicate(opts)
     end
   end
 
-  local stdout_stream = self:stdout()
-  local stderr_stream = self:stderr()
+  local stdout_stream = self._stdout_stream
+  local stderr_stream = self._stderr_stream
   if stderr_stream == stdout_stream then
     stderr_stream = nil
   end
@@ -410,41 +400,41 @@ local function open_parent_stream(rt, scope, handle, which, opts)
 end
 
 local function publish_state(rt, proc, state)
-  return IO.masked_perform(rt, proc.lifecycle:set_state_op(state))
+  return IO.masked_perform(rt, proc._lifecycle:set_state_op(state))
 end
 
 local function publish_launch_failure(rt, proc, err)
   Protected.pcall(function()
-    if proc.stdin_pipe_stream then
-      proc.stdin_pipe_stream:abort(err)
+    if proc._stdin_pipe_stream then
+      proc._stdin_pipe_stream:abort(err)
     end
-    if proc.stdout_pipe_stream then
-      proc.stdout_pipe_stream:abort(err)
+    if proc._stdout_pipe_stream then
+      proc._stdout_pipe_stream:abort(err)
     end
-    if proc.stderr_pipe_stream and proc.stderr_pipe_stream ~= proc.stdout_pipe_stream then
-      proc.stderr_pipe_stream:abort(err)
+    if proc._stderr_pipe_stream and proc._stderr_pipe_stream ~= proc._stdout_pipe_stream then
+      proc._stderr_pipe_stream:abort(err)
     end
-    if proc.host_hold then
-      proc.host_hold:close(err)
+    if proc._host_hold then
+      proc._host_hold:close(err)
     end
-    if proc.host_process then
-      proc.host_process:close(err)
+    if proc._host_process then
+      proc._host_process:close(err)
     end
   end)
   publish_state(rt, proc, { kind = 'failed', error = err })
-  IO.masked_perform(rt, proc.launch_completion:publish_failure_op(err))
-  IO.masked_perform(rt, proc.exit_completion:publish_failure_op(err))
-  IO.masked_perform(rt, proc.closed_completion:publish_success_op(true))
+  IO.masked_perform(rt, proc._launch_completion:publish_failure_op(err))
+  IO.masked_perform(rt, proc._exit_completion:publish_failure_op(err))
+  IO.masked_perform(rt, proc._closed_completion:publish_success_op(true))
 end
 
 local function publish_exit(rt, proc, status)
   proc._status = status
   publish_state(rt, proc, { kind = 'exited', status = status, pid = proc._pid })
-  IO.masked_perform(rt, proc.exit_completion:publish_success_op(status))
+  IO.masked_perform(rt, proc._exit_completion:publish_success_op(status))
 end
 
 local function wait_exit_until(proc, deadline)
-  return perform(proc.host_process:exit_op():or_else(Sleep.sleep_until_op(deadline):map(function()
+  return perform(proc._host_process:exit_op():or_else(Sleep.sleep_until_op(deadline):map(function()
     return nil, 'timeout'
   end)))
 end
@@ -468,20 +458,20 @@ local function finish_close(proc, reason)
     end
   end
   record_close_error('stdin', function()
-    return close_stream(proc.stdin_pipe_stream or proc.stdin_stream, reason, true)
+    return close_stream(proc._stdin_pipe_stream or proc._stdin_stream, reason, true)
   end)
   record_close_error('stdout', function()
-    return close_stream(proc.stdout_pipe_stream or proc.stdout_stream, reason, true)
+    return close_stream(proc._stdout_pipe_stream or proc._stdout_stream, reason, true)
   end)
-  local stderr_to_close = proc.stderr_pipe_stream or proc.stderr_stream
-  local stdout_to_close = proc.stdout_pipe_stream or proc.stdout_stream
+  local stderr_to_close = proc._stderr_pipe_stream or proc._stderr_stream
+  local stdout_to_close = proc._stdout_pipe_stream or proc._stdout_stream
   if stderr_to_close and stderr_to_close ~= stdout_to_close then
     record_close_error('stderr', function()
       return close_stream(stderr_to_close, reason, true)
     end)
   end
   record_close_error('host_process', function()
-    return proc.host_process and proc.host_process:close(reason) or true
+    return proc._host_process and proc._host_process:close(reason) or true
   end)
   if #errors > 0 then
     return nil,
@@ -495,8 +485,8 @@ end
 
 local function supervise(proc, driver_scope, opts)
   local rt = Runtime.current()
-  local host_hold = proc.host_hold
-  local spec = copy_spec(proc.command._spec)
+  local host_hold = proc._host_hold
+  local spec = copy_spec(proc._command._spec)
   local stdin_mode, stdin_source, stdin_redirect = endpoint_opts(spec, 'stdin')
   local stdout_mode, stdout_destination, stdout_redirect = endpoint_opts(spec, 'stdout')
   local stderr_mode, stderr_destination, stderr_redirect = endpoint_opts(spec, 'stderr')
@@ -540,7 +530,7 @@ local function supervise(proc, driver_scope, opts)
   else
     IOAudit.bind(host_process, rt)
   end
-  proc.host_process = host_process
+  proc._host_process = host_process
   proc._pid = type(host_process.pid) == 'function' and host_process:pid() or host_process.pid
   IOAudit.transfer(host_process, proc, { kind = 'process_handle', role = 'process' })
   host_hold:release('process', host_process)
@@ -586,45 +576,45 @@ local function supervise(proc, driver_scope, opts)
         )
         return
       end
-      proc[which .. '_pipe_stream'] = stream_or_err
+      proc['_' .. which .. '_pipe_stream'] = stream_or_err
       host_hold:release(which, handle)
     end
   end
 
   if stdin_source then
     driver_scope:spawn(function()
-      return stream_bridge(stdin_source, proc.stdin_pipe_stream, {
+      return stream_bridge(stdin_source, proc._stdin_pipe_stream, {
         flush = stdin_redirect.flush,
         close_destination = true,
       })
     end, { label = process_label(proc) .. ':stdin-bridge' })
-    proc.stdin_stream = nil
+    proc._stdin_stream = nil
   else
-    proc.stdin_stream = proc.stdin_pipe_stream
+    proc._stdin_stream = proc._stdin_pipe_stream
   end
   if stdout_destination then
     driver_scope:spawn(function()
-      return stream_bridge(proc.stdout_pipe_stream, stdout_destination, {
+      return stream_bridge(proc._stdout_pipe_stream, stdout_destination, {
         flush = stdout_redirect.flush,
         close_destination = stdout_redirect.close,
       })
     end, { label = process_label(proc) .. ':stdout-bridge' })
-    proc.stdout_stream = nil
+    proc._stdout_stream = nil
   else
-    proc.stdout_stream = proc.stdout_pipe_stream
+    proc._stdout_stream = proc._stdout_pipe_stream
   end
   if stderr_destination then
     driver_scope:spawn(function()
-      return stream_bridge(proc.stderr_pipe_stream, stderr_destination, {
+      return stream_bridge(proc._stderr_pipe_stream, stderr_destination, {
         flush = stderr_redirect.flush,
         close_destination = stderr_redirect.close,
       })
     end, { label = process_label(proc) .. ':stderr-bridge' })
-    proc.stderr_stream = nil
+    proc._stderr_stream = nil
   elseif stderr_mode == 'stdout' then
-    proc.stderr_stream = proc.stdout_stream
+    proc._stderr_stream = proc._stdout_stream
   else
-    proc.stderr_stream = proc.stderr_pipe_stream
+    proc._stderr_stream = proc._stderr_pipe_stream
   end
 
   if type(host_process.start) == 'function' then
@@ -644,28 +634,28 @@ local function supervise(proc, driver_scope, opts)
   end
 
   publish_state(rt, proc, { kind = 'running', pid = proc._pid })
-  IO.masked_perform(rt, proc.launch_completion:publish_success_op(proc))
+  IO.masked_perform(rt, proc._launch_completion:publish_success_op(proc))
 
   local status
-  if not proc.lifecycle:is_close_requested() then
+  if not proc._lifecycle.close_request._location.value.requested == true then
     local event, value, err = perform(Op.named_choice({
-      exit = proc.host_process:exit_op(),
-      close = proc.lifecycle:close_requested_op(),
+      exit = proc._host_process:exit_op(),
+      close = proc._lifecycle:close_requested_op(),
     }))
     if event == 'exit' then
       status = value
       if not status then
-        IO.masked_perform(rt, proc.exit_completion:publish_failure_op(err))
+        IO.masked_perform(rt, proc._exit_completion:publish_failure_op(err))
       end
     end
   end
 
-  if not status and proc.lifecycle:is_close_requested() then
-    local reason = proc.lifecycle:close_reason() or 'process closed'
+  if not status and proc._lifecycle.close_request._location.value.requested == true then
+    local reason = proc._lifecycle.close_request._location.value.reason or 'process closed'
     publish_state(rt, proc, { kind = 'closing', pid = proc._pid, reason = reason })
-    if proc.stdin_pipe_stream then
+    if proc._stdin_pipe_stream then
       Protected.pcall(function()
-        proc.stdin_pipe_stream:abort(reason)
+        proc._stdin_pipe_stream:abort(reason)
       end)
     end
     local signal_ok, signal_err = host_process:signal(spec.shutdown.signal, spec.shutdown.target)
@@ -681,10 +671,10 @@ local function supervise(proc, driver_scope, opts)
     status, exit_err = wait_exit_until(proc, deadline)
     if not status and exit_err == 'timeout' then
       host_process:signal(spec.shutdown.kill_signal, spec.shutdown.target)
-      status, exit_err = perform(proc.host_process:exit_op())
+      status, exit_err = perform(proc._host_process:exit_op())
     end
     if not status then
-      IO.masked_perform(rt, proc.exit_completion:publish_failure_op(exit_err))
+      IO.masked_perform(rt, proc._exit_completion:publish_failure_op(exit_err))
       proc._close_error = proc._close_error or exit_err
     end
   end
@@ -693,19 +683,19 @@ local function supervise(proc, driver_scope, opts)
     publish_exit(rt, proc, status)
   end
 
-  if not proc.lifecycle:is_close_requested() then
-    perform(proc.lifecycle:close_requested_op())
+  if not proc._lifecycle.close_request._location.value.requested == true then
+    perform(proc._lifecycle:close_requested_op())
   end
-  local reason = proc.lifecycle:close_reason() or 'process closed'
+  local reason = proc._lifecycle.close_request._location.value.reason or 'process closed'
   publish_state(rt, proc, { kind = 'closing', pid = proc._pid, reason = reason, status = status })
   local closed, close_err = finish_close(proc, reason)
   proc._close_error = proc._close_error or close_err
   if closed and not proc._close_error then
     publish_state(rt, proc, { kind = 'closed', pid = proc._pid, status = status })
-    IO.masked_perform(rt, proc.closed_completion:publish_success_op(true))
+    IO.masked_perform(rt, proc._closed_completion:publish_success_op(true))
   else
     publish_state(rt, proc, { kind = 'closed', pid = proc._pid, status = status, error = proc._close_error })
-    IO.masked_perform(rt, proc.closed_completion:publish_failure_op(proc._close_error))
+    IO.masked_perform(rt, proc._closed_completion:publish_failure_op(proc._close_error))
   end
 end
 
@@ -718,16 +708,16 @@ local function driver_body(proc, driver_scope, opts)
   local failure = IOError.is(err) and err
     or IO.protocol_error('process', 'supervisor', err, {
       pid = proc._pid,
-      argv = proc.command._spec.argv,
+      argv = proc._command._spec.argv,
     })
-  if proc.launch_completion:is_pending() then
+  if proc._launch_completion:_is_pending() then
     publish_launch_failure(rt, proc, failure)
-  elseif proc.exit_completion:is_pending() then
-    IO.masked_perform(rt, proc.exit_completion:publish_failure_op(failure))
+  elseif proc._exit_completion:_is_pending() then
+    IO.masked_perform(rt, proc._exit_completion:publish_failure_op(failure))
   end
   proc._close_error = failure
-  if proc.closed_completion:is_pending() then
-    IO.masked_perform(rt, proc.closed_completion:publish_failure_op(failure))
+  if proc._closed_completion:_is_pending() then
+    IO.masked_perform(rt, proc._closed_completion:publish_failure_op(failure))
   end
 end
 
@@ -757,31 +747,31 @@ function Command:launch_op(opts)
     local proc = Label.attach(setmetatable({
       kind = 'process',
       _fibers_id = id,
-      command = command,
-      lifecycle = Lifecycle.new(),
-      launch_completion = Completion.new(),
-      exit_completion = Completion.new(),
-      closed_completion = Completion.new(),
+      _command = command,
+      _lifecycle = Lifecycle.new(),
+      _launch_completion = Completion.new(),
+      _exit_completion = Completion.new(),
+      _closed_completion = Completion.new(),
       _communicating = false,
-      host_hold = HostHold.new(),
-      host_process = nil,
-      stdin_stream = nil,
-      stdout_stream = nil,
-      stderr_stream = nil,
+      _host_hold = HostHold.new(),
+      _host_process = nil,
+      _stdin_stream = nil,
+      _stdout_stream = nil,
+      _stderr_stream = nil,
       _pid = nil,
       _status = nil,
       _close_error = nil,
     }, Process), opts.label)
-    Label.child(proc.lifecycle, proc, 'lifecycle')
-    Label.child(proc.launch_completion, proc, 'launch')
-    Label.child(proc.exit_completion, proc, 'exit')
-    Label.child(proc.closed_completion, proc, 'closed')
-    Label.child(proc.host_hold, proc, 'host-hold')
+    Label.child(proc._lifecycle, proc, 'lifecycle')
+    Label.child(proc._launch_completion, proc, 'launch')
+    Label.child(proc._exit_completion, proc, 'exit')
+    Label.child(proc._closed_completion, proc, 'closed')
+    Label.child(proc._host_hold, proc, 'host-hold')
     Lifetime.define(proc, {
       label = opts.label,
       role = 'process',
       closure = process_closure(proc),
-      children = { proc.host_hold },
+      children = { proc._host_hold },
     })
     local private_scope = Scope.for_lifetime(proc._lifetime)
     proc._task = Task._new(function()
@@ -790,7 +780,7 @@ function Command:launch_op(opts)
       end)
     end, parent_scope, {
       lifetime = proc._lifetime,
-      closure = parent_scope.closure,
+      closure = parent_scope._lifetime._closure,
       label = opts.label,
     })
 
@@ -845,6 +835,6 @@ Module.Process = Process
 Module.Error = IOError
 
 Direct.install(Command, { 'launch' })
-Direct.install(Process, { 'launch_succeeded', 'launch_failed', 'launch_result', 'result', 'signal', 'terminate', 'kill', 'request_close', 'closed' })
+Direct.install(Process, { 'pid', 'stdin', 'stdout', 'stderr', 'launch_succeeded', 'launch_failed', 'launch_result', 'result', 'signal', 'terminate', 'kill', 'request_close', 'closed' })
 
 return Module

@@ -32,18 +32,18 @@ package.loaded['fibers.diagnostics.io'] = saved_io_diagnostics_after_runtime
 
 local saved_stream = package.loaded['fibers.stream']
 local saved_io_stream = package.loaded['fibers.io.stream']
-local saved_reactor = package.loaded['fibers.io.reactor']
+local saved_reactor = package.loaded['fibers.io._reactor']
 package.loaded['fibers.stream'] = nil
 package.loaded['fibers.io.stream'] = nil
-package.loaded['fibers.io.reactor'] = nil
+package.loaded['fibers.io._reactor'] = nil
 local PortableStream = require('fibers.stream')
 assert(type(PortableStream.memory_pair) == 'function')
 assert(PortableStream.open_op == nil, 'portable Stream must not retain the host-backed open delegate')
 assert(package.loaded['fibers.io.stream'] == nil, 'portable Stream must not load host-backed Stream support')
-assert(package.loaded['fibers.io.reactor'] == nil, 'portable Stream must not load the host reactor')
+assert(package.loaded['fibers.io._reactor'] == nil, 'portable Stream must not load the host reactor')
 package.loaded['fibers.stream'] = saved_stream or PortableStream
 package.loaded['fibers.io.stream'] = saved_io_stream
-package.loaded['fibers.io.reactor'] = saved_reactor
+package.loaded['fibers.io._reactor'] = saved_reactor
 
 local saved_roblox = package.loaded['fibers.roblox']
 package.loaded['fibers.roblox'] = nil

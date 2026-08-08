@@ -10,6 +10,8 @@ package.path = table.concat({
 local Op = require('fibers.op')
 local Lease = require('fibers.resource.lease')
 local Runtime = require('fibers.runtime')
+local State = require('tests.support.resource_state')
+local holders = State.lease_holders
 local function fail(msg)
   error(msg, 2)
 end
@@ -50,8 +52,8 @@ local function test_readers_merge_and_writer_conflicts()
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
   assert_eq(rows[2][1], true)
-  assert_eq(c.holders.s.a, 'read')
-  assert_eq(c.holders.s.b, 'read')
+  assert_eq(holders(c, 's').a, 'read')
+  assert_eq(holders(c, 's').b, 'read')
   local rt2 = new_runtime({ quiet_deadlock = true })
   rt2:spawn_raw(function()
     rt2:perform(c:acquire_op('s', 'write', 'w'))
@@ -74,7 +76,7 @@ local function test_release_supply_law()
   end)
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'blocked')
-  assert_nil((c.holders.s or {}).writer)
+  assert_nil((holders(c, 's') or {}).writer)
 
   seed_lease(c, 's', { writer = 'write' })
   local rt2, rows2 = new_runtime()
@@ -83,8 +85,8 @@ local function test_release_supply_law()
   end)
   assert_status(rt2:run(), 'found')
   assert_eq(rows2[2][1], true)
-  assert_eq(c.holders.s.reader, 'read')
-  assert_nil((c.holders.s or {}).writer)
+  assert_eq(holders(c, 's').reader, 'read')
+  assert_nil((holders(c, 's') or {}).writer)
 end
 
 local function test_incompatible_acquires_do_not_jointly_commit()
@@ -97,7 +99,7 @@ local function test_incompatible_acquires_do_not_jointly_commit()
   if st and st.tag == 'found' then
     fail('incompatible acquisitions committed')
   end
-  assert_eq(c.holders.s, nil)
+  assert_eq(holders(c, 's'), nil)
 end
 
 local function test_release_one_blocker_not_enough()
@@ -112,32 +114,15 @@ local function test_release_one_blocker_not_enough()
   end)
   assert_status(rt:run(), 'found')
   assert_eq(rows[2][1], 'blocked')
-  assert_nil((c.holders.s or {}).w1)
-  assert_eq(c.holders.s.w2, 'write')
+  assert_nil((holders(c, 's') or {}).w1)
+  assert_eq(holders(c, 's').w2, 'write')
 end
-
-local function test_inspection_snapshots_are_detached()
-  local c = Lease.new({ read = { read = true }, write = {} }):label('lease-snapshots')
-  seed_lease(c, 's', { reader = 'read' })
-
-  local holders = c.holders
-  local versions = c.versions
-  local version = c.version
-  holders.s.reader = 'write'
-  versions.s = versions.s + 100
-
-  assert_eq(c.holders.s.reader, 'read', 'holder snapshot must not mutate managed state')
-  assert_eq(c.versions.s + 100, versions.s, 'version snapshot must be detached')
-  assert_eq(c.version, version, 'snapshot mutation must not change aggregate version')
-end
-
 
 for _, t in ipairs({
   test_readers_merge_and_writer_conflicts,
   test_release_supply_law,
   test_incompatible_acquires_do_not_jointly_commit,
   test_release_one_blocker_not_enough,
-  test_inspection_snapshots_are_detached,
 }) do
   t()
 end

@@ -7,10 +7,7 @@ local External = require('fibers.embed.external')
 local Direct = require('fibers.internal.direct')
 
 local EventQueue = {}
-EventQueue.__index = function(self, key)
-  if key == 'version' then return self._location.version end
-  return EventQueue[key]
-end
+EventQueue.__index = EventQueue
 
 local Kind = Facility.kind('event_queue')
 local unpack_ = table.unpack or unpack
@@ -126,9 +123,6 @@ function EventQueue:_drain_op()
   return self._drain_cached_op
 end
 
-function EventQueue:length()
-  return self._location.value.count
-end
 
 Direct.install(EventQueue, { 'next' })
 

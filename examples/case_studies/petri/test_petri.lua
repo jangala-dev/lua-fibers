@@ -17,6 +17,12 @@ local function run(fn)
   fibers.run(fn, { quiet_deadlock = true })
 end
 
+local function marking(net)
+  local value
+  run(function() value = net:marking() end)
+  return value
+end
+
 local function count(marking, place)
   return #(marking[place] or {})
 end
@@ -50,7 +56,7 @@ do
     job, worker = fibers.perform(net:fire_op(start))
   end)
   assert(job == 'b' and worker == 'w1')
-  local m = net:marking()
+  local m = marking(net)
   assert(count(m, 'jobs') == 1 and m.jobs[1].id == 'a')
   assert(count(m, 'workers') == 0 and count(m, 'running') == 1)
 end
@@ -63,7 +69,7 @@ do
     rows = fibers.perform(Op.together({ net:put_op('p', 'x'), net:take_op('p') }))
   end)
   assert(rows[1][1] == true and rows[2][1] == 'x')
-  assert(count(net:marking(), 'p') == 0)
+  assert(count(marking(net), 'p') == 0)
 end
 
 do
@@ -73,7 +79,7 @@ do
     result = fibers.perform(Op.each({ net:put_op('p', 'x'), net:take_op('p') }):or_else(Op.always('fallback')))
   end)
   assert(result == 'fallback')
-  assert(count(net:marking(), 'p') == 0)
+  assert(count(marking(net), 'p') == 0)
 end
 
 -- Witness alternatives participate in global backtracking.  The first lane
@@ -106,7 +112,7 @@ do
     rows = fibers.perform(Op.each({ net:fire_op(any), net:fire_op(red) }))
   end)
   assert(rows[1][1] == 'blue' and rows[2][1] == 'red')
-  assert(count(net:marking(), 'p') == 0)
+  assert(count(marking(net), 'p') == 0)
 end
 
 -- A single token remains linear across independent claims.
@@ -117,7 +123,7 @@ do
     result = fibers.perform(Op.each({ net:take_op('p'), net:take_op('p') }):or_else(Op.always('fallback')))
   end)
   assert(result == 'fallback')
-  assert(count(net:marking(), 'p') == 1)
+  assert(count(marking(net), 'p') == 1)
 end
 
 -- Multi-place firing is one atomic rewrite.
@@ -137,7 +143,7 @@ do
     value = fibers.perform(net:fire_op(add))
   end)
   assert(value == 5)
-  local m = net:marking()
+  local m = marking(net)
   assert(count(m, 'left') == 0 and count(m, 'right') == 0 and m.sum[1] == 5)
 end
 
@@ -159,7 +165,7 @@ do
   run(function()
     result = fibers.perform(net:fire_op(impossible):or_else(Op.always('none')))
   end)
-  assert(result == 'none' and count(net:marking(), 'p') == 2)
+  assert(result == 'none' and count(marking(net), 'p') == 2)
 end
 
 print('examples/case_studies/petri/test_petri.lua: ok')

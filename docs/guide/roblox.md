@@ -601,43 +601,6 @@ Roblox's current Parallel Luau model and Actor APIs are documented at
 <https://create.roblox.com/docs/scripting/multithreading> and
 <https://create.roblox.com/docs/reference/engine/classes/Actor>.
 
-## 15. Make Studio show the hidden world
-
-Fibers has enough semantic structure to support a useful Studio inspector. A
-first tool could display:
-
-```text
-opening-cinematic
-├── camera-track             running
-├── dialogue                 cancelled: player skipped
-├── npc-blocking             settled
-└── camera-handle            moved → player-gameplay
-
-selected world
-├── branch                   skipped
-├── reason                   player pressed Skip
-└── defeated occurrence      completed
-```
-
-For AI, show:
-
-```text
-attack                       Retry: target not visible
-or_else take cover           Hit
-or_else patrol               not entered
-```
-
-For a transaction, show provisional and committed changes:
-
-```text
-silver keys                  1 → 0
-Moon Gate                    locked → open
-world                         committed
-```
-
-This is not merely debugging decoration. It exposes the same natural-language
-structure which made the mechanic readable in source.
-
 ## 16. Suggested Roblox integration milestones
 
 The first host slice is now present:
@@ -658,9 +621,8 @@ The next disciplined milestones are:
 3. add a polished scene using real camera, animation, subtitle and input APIs;
 4. model player-session and match resources in a substantial prototype;
 5. add promise/callback adapters for DataStore, HTTP and asset loading;
-6. add a small Studio inspector for scopes, tasks and selected worlds;
-7. evaluate the API with gameplay developers who did not design Fibers;
-8. add Actor integration only after the single-world host is settled.
+6. evaluate the API with gameplay developers who did not design Fibers;
+7. add Actor integration only after the single-world host is settled.
 
 Roblox's `task` library already schedules functions and coroutines through the
 engine scheduler: <https://create.roblox.com/docs/reference/engine/libraries/task>.

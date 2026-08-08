@@ -865,38 +865,18 @@ socket.address_with_port(address, port)
 The host capability matrix is explicit:
 
 ```lua
-host.capabilities.socket
-host.capabilities.socket_ipv4
-host.capabilities.socket_ipv6
-host.capabilities.socket_unix
+host:feature('socket')
+host:feature('socket_ipv4')
+host:feature('socket_ipv6')
+host:feature('socket_unix')
 ```
 
 A disabled family returns a structured `unsupported` error. A provider which
 enables a family is expected to pass the same listener, Dial, transfer, address
 metadata and Closure contract as `ManualHost`.
 
-## I/O qualification and diagnostics
+## I/O qualification
 
-Resource qualification can assert that every handle and readiness registration
-has closed:
+The public I/O model exposes domain operations rather than a second live-state inspection system. Provider and reactor invariants are qualified by the executable conformance and lifecycle tests under `tests/io`, `tests/embedding` and `tests/internal`. Internal audit instrumentation may be enabled by those tests, but it is not part of the v1 application surface.
 
-```lua
-local result = fibers.try_run(main, { host = host })
-assert(result.ok, result:tostring())
-local IO = require('fibers.diagnostics.io')
-IO.enable()
-IO.assert_clean(result.runtime, { label = 'application shutdown' })
-```
-
-For diagnostics:
-
-```lua
-local IO = require('fibers.diagnostics.io')
-local audit = IO.report(fibers.current_runtime(), {
-  include_history = true,
-})
-```
-
-The audit reports live handle custody, registration generations, close
-failures, stale readiness deliveries and lifecycle violations. See
-[I/O design](../design/io.md).
+A host provider which claims a capability is expected to pass the same operation, Closure, custody and stale-readiness laws as the built-in providers.

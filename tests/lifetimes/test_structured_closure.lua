@@ -49,12 +49,11 @@ do
   assert_truthy(body_cancelled, 'nursery should interrupt a blocked body promptly')
   assert_truthy(r.report and #r.report.child_failures == 1, 'child failure should be retained')
 
-  local state
+  local exit
   fibers.run(function()
-    state = fibers.perform(sibling:state_op())
+    exit = fibers.perform(sibling:body_result_op())
   end)
-  assert_truthy(state.body_exited, 'sibling should be joined')
-  assert_eq(state.body_result.tag, 'cancelled', 'sibling should be cancelled by nursery failure')
+  assert_eq(exit.tag, 'cancelled', 'sibling should be cancelled by nursery failure')
 end
 
 -- Supervisor failure does not interrupt the body or cancel successful siblings.
@@ -129,13 +128,13 @@ do
   assert_eq(r.ok, false)
   assert_eq(r.reason, 'child_failed')
 
-  local child_state, grandchild_state
+  local child_exit, grandchild_exit
   fibers.run(function()
-    child_state = fibers.perform(child:state_op())
-    grandchild_state = fibers.perform(grandchild:state_op())
+    child_exit = fibers.perform(child:body_result_op())
+    grandchild_exit = fibers.perform(grandchild:body_result_op())
   end)
-  assert_eq(child_state.body_result.tag, 'cancelled')
-  assert_eq(grandchild_state.body_result.tag, 'cancelled')
+  assert_eq(child_exit.tag, 'cancelled')
+  assert_eq(grandchild_exit.tag, 'cancelled')
 end
 
 -- A strict Closure rule can prohibit custody escape.

@@ -30,12 +30,8 @@ function Completion.new()
   return completion
 end
 
-function Completion:is_pending()
-  return self.state.value.kind == 'pending'
-end
-
-function Completion:state_value()
-  return self.state.value
+function Completion:_is_pending()
+  return self.state._location.value.kind == 'pending'
 end
 
 function Completion:publish_success_op(...)

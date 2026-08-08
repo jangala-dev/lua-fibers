@@ -18,6 +18,7 @@ local fibers = require('fibers')
 local Op = require('fibers.op')
 local FibersRuntime = require('fibers.runtime')
 local Lifetime = require('fibers.lifetime')
+local Lifetimes = require('tests.support.lifetimes')
 local FibersScope = require('fibers.scope')
 local FibersFlow = require('fibers.resource.flow')
 
@@ -54,7 +55,7 @@ do
   end).runtime_status
   assert_status(st, 'found')
   assert_eq(got, 'fallback')
-  assert_eq(Lifetime.of(item):current_state().custodian, nil)
+  assert_eq(Lifetimes.state(item).custodian, nil)
 end
 
 -- A concurrent admission may commit before authority fallback. The authority
@@ -77,10 +78,8 @@ do
   assert_status(st, 'found')
   assert_eq(admitted, item)
   assert_eq(got, 'primary')
-  assert_eq(Lifetime.of(item):current_state().custodian, scope:lifetime())
-  local record
-  rt:spawn_raw(function() record = rt:perform(scope:custody_op(item)) end):label('inspect-custody')
-  rt:run()
+  assert_eq(Lifetimes.state(item).custodian, scope:lifetime())
+  local record = Lifetimes.record(scope, item)
   assert_truthy(record and record.phase == 'live', 'admission should establish live custody')
 end
 

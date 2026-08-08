@@ -9,7 +9,8 @@ local Runtime = require('fibers.runtime')
 local Context = require('fibers.internal.context')
 local Protected = require('fibers.protected')
 local Exit = require('fibers.task').Exit
-local ScopeResult = require('fibers.scope.outcome').Result
+local ScopeOutcome = require('fibers.scope.outcome')
+local ScopeResult = ScopeOutcome.Result
 local Lifetime = require('fibers.lifetime')
 local Op = require('fibers.op')
 local Effect = require('fibers.effect')
@@ -68,7 +69,7 @@ local function same_cancellation(a, b)
 end
 
 local function perform_masked(scope, op)
-  local rt = scope.runtime or Runtime.current()
+  local rt = scope._lifetime._runtime or Runtime.current()
   if not rt then
     error('masked scope option requires a current runtime', 2)
   end
@@ -104,7 +105,7 @@ local function state_for(scope)
   if not lifetime then
     error('scope Closure requires a Scope Lifetime', 3)
   end
-  return lifetime.closure_state
+  return lifetime._closure_state
 end
 
 local function record_entry(state, child, exit)
@@ -161,7 +162,7 @@ function Driver.record_child_outcome(scope, child, exit, opts)
     return false
   end
   -- Custody at closure decides which Lifetime receives the consequence.
-  local custodian = scope:_store():current_custodian(child)
+  local custodian = scope:_store():_custodian(child)
   if custodian ~= scope._lifetime then return false end
   local state = state_for(scope)
   local entry, fresh = record_entry(state, child, exit)
@@ -171,7 +172,7 @@ end
 
 function Driver.request_cancel_op(scope, reason)
   local state = state_for(scope)
-  local decision = call_closure(scope.closure, 'on_cancel_requested', scope._lifetime, state, reason)
+  local decision = call_closure(scope._lifetime._closure, 'on_cancel_requested', scope._lifetime, state, reason)
     or { seal = true, cancel_children = true, reason = reason }
   local close_op
   if decision.seal or decision.cancel_children then
@@ -199,7 +200,7 @@ end
 local function retire_roots(scope, reason)
   local first_bad
   while true do
-    local roots = perform_masked(scope, scope:children_op())
+    local roots = perform_masked(scope, scope:_store():roots_op(scope))
     if #roots == 0 then
       break
     end
@@ -207,10 +208,10 @@ local function retire_roots(scope, reason)
     for i = 1, #roots do
       local item = roots[i]
       if perform_masked(scope, scope:has_custody_op(item)) then
-        local rec = perform_masked(scope, scope:custody_op(item))
+        local rec = perform_masked(scope, scope:_store():record_op(scope, item))
         local phase = rec and rec.phase
         if not rec then
-          -- Custody changed between children_op and custody_op; take another pass.
+          -- Custody changed between root discovery and record lookup; take another pass.
         elseif phase ~= 'live' then
           local err = rec.closure_error or ('cannot retire non-live root in phase ' .. tostring(phase))
           if not first_bad then
@@ -253,35 +254,6 @@ local function report_for(scope, primary, secondaries, fields)
   return scope:_make_report(primary, secondaries or {}, fields or {})
 end
 
-local FAILURE_LIST_FIELDS = { 'closure_failures', 'secondaries' }
-local FAILURE_VALUE_FIELDS = { 'report', 'primary', 'cause' }
-
-local function append_closure_failures(out, value, seen)
-  if type(value) ~= 'table' then
-    return
-  end
-  seen = seen or {}
-  if seen[value] then
-    return
-  end
-  seen[value] = true
-
-  if value._fibers_closure_failure == true then
-    out[#out + 1] = value
-    return
-  end
-
-  for _, field in ipairs(FAILURE_LIST_FIELDS) do
-    local values = value[field]
-    if type(values) == 'table' then
-      for i = 1, #values do append_closure_failures(out, values[i], seen) end
-    end
-  end
-  for _, field in ipairs(FAILURE_VALUE_FIELDS) do
-    append_closure_failures(out, value[field], seen)
-  end
-end
-
 local function failed_result(scope, reason, primary, secondaries, fields, closure_failures)
   return ScopeResult.fail({
     reason = reason,
@@ -312,10 +284,10 @@ local function default_result(scope, state, body_ok, body_results, closure_failu
   closure_failures = filter_duplicate_cancellation(primary, closure_failures)
   local retained_closure_failures = {}
   local seen_closure_failures = {}
-  append_closure_failures(retained_closure_failures, body_primary, seen_closure_failures)
-  append_closure_failures(retained_closure_failures, child_primary, seen_closure_failures)
+  ScopeOutcome.closure_failures(body_primary, retained_closure_failures, seen_closure_failures)
+  ScopeOutcome.closure_failures(child_primary, retained_closure_failures, seen_closure_failures)
   for i = 1, #closure_failures do
-    append_closure_failures(retained_closure_failures, closure_failures[i], seen_closure_failures)
+    ScopeOutcome.closure_failures(closure_failures[i], retained_closure_failures, seen_closure_failures)
   end
 
   local secondaries = {}
@@ -341,7 +313,7 @@ local function default_result(scope, state, body_ok, body_results, closure_failu
     child_exits = state.child_exits,
     child_failures = state.child_failures,
     cause = state.first_child_failure,
-    body_exit = { ok = body_ok, primary = body_primary },
+    body_exit = ScopeOutcome.protected_exit(Exit, body_results),
     closure_failures = retained_closure_failures,
   }
 
@@ -372,19 +344,19 @@ local function result_exit(result)
 end
 
 local function completed_exit(node)
-  if not node or not node.has_body then return nil end
-  local boundary = node.outcome and node.outcome.value
+  if not node or not node._has_body then return nil end
+  local boundary = node._outcome and node._outcome._location.value
   if type(boundary) == 'table' and boundary.status == 'done' then
     return result_exit(boundary.result)
   end
-  local body = node.body_result and node.body_result.value
+  local body = node._body_result and node._body_result._location.value
   return type(body) == 'table' and body.status == 'done' and Exit.is(body.result) and body.result or nil
 end
 
 local function account_existing_children(scope, state)
-  local roots = scope:_store():current_records(scope, true)
+  local roots = scope:_store():_roots(scope)
   for i = 1, #roots do
-    local node = roots[i].node or roots[i].lifetime
+    local node = roots[i]
     local exit = completed_exit(node)
     if exit then
       local entry = record_entry(state, node, exit)
@@ -395,7 +367,7 @@ local function account_existing_children(scope, state)
 end
 
 local function stage_custodian_outcome(scope, result)
-  local custodian = scope:_store():current_custodian(scope._lifetime)
+  local custodian = scope:_store():_custodian(scope._lifetime)
   if not custodian or custodian == scope._lifetime then return nil end
   local parent = require('fibers.scope').for_lifetime(custodian)
   local fresh, entry = Driver.record_child_outcome(
@@ -417,12 +389,12 @@ function Driver.run(scope, fn, closure, on_body_exit)
   if type(fn) ~= 'function' then
     error('Scope:run expects a function', 2)
   end
-  local rt = scope.runtime or Runtime.current()
+  local rt = scope._lifetime._runtime or Runtime.current()
   if not rt then
     error('Scope:run requires a current runtime', 2)
   end
-  scope._lifetime:bind_runtime(rt)
-  scope._lifetime.closure = closure
+  scope._lifetime:_bind_runtime(rt)
+  scope._lifetime._closure = closure
 
   local state = state_for(scope)
   state.active = true
@@ -524,7 +496,7 @@ function Driver.run(scope, fn, closure, on_body_exit)
 end
 
 function Driver.try_run(scope, fn)
-  return Driver.run(scope, fn, scope.closure or {})
+  return Driver.run(scope, fn, scope._lifetime._closure or {})
 end
 
 function Driver.run_raising(scope, fn)

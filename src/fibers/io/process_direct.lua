@@ -6,9 +6,6 @@
 local IOError = require('fibers.io.error')
 local IOAudit = require('fibers.internal.io_audit')
 local Process = require('fibers.io.process')
-local Op = require('fibers.op')
-local HostOffer = require('fibers.io.offer')
-local Label = require('fibers.internal.label')
 
 local Direct = {}
 
@@ -79,21 +76,9 @@ function Direct.new(spec)
     end
   end
 
-  local function wait_blocking(pid)
-    while true do
-      local result, errno, message = spec.wait(pid, false)
-      if result then
-        return result
-      end
-      if not spec.interrupted(errno) then
-        return nil, errno, message
-      end
-    end
-  end
-
   local function kill_and_reap(pid)
     pcall(spec.kill, pid, signals.numbers.kill)
-    wait_blocking(pid)
+    Core.wait(spec, pid, false)
   end
 
   local function reap_process(self)
@@ -123,45 +108,11 @@ function Direct.new(spec)
     return status
   end
 
-  local function signal_process(self, number, target)
-    local destination = target == 'group' and -math.abs(self.group_id or self._pid) or self._pid
-    local ok, errno, message = spec.kill(destination, number)
-    if not ok then
-      return nil,
-        error_value(spec, 'signal', errno, message, { pid = self._pid, signal = number, target = target })
-    end
-    return true
-  end
-
   local ProcessClass = Core.class({
     signals = signals,
-    open_exit = function(self, scope)
-      if not self.exit_source then
-        self.exit_source = HostOffer.new({
-          label = Label.describe(self, self._fibers_id or 'process') .. ':exit',
-          domain = 'process',
-          action = 'reap',
-          role = 'process_exit_completion',
-          one_shot = true,
-          capacity = 1,
-          handle = self.pidfd,
-          mode = self.pidfd and 'read' or 'poll',
-          poll_interval = self.poll_interval,
-          pull = function()
-            return reap_process(self)
-          end,
-        })
-      end
-      return self.exit_source:open_op(scope)
-    end,
-    exit = function(self)
-      if self.reaped and self.status then return Op.always(self.status) end
-      if not self.exit_source then
-        return Op.always(nil, IOError.protocol('process', 'exit', 'process exit source is not open', { pid = self._pid }))
-      end
-      return self.exit_source:result_op()
-    end,
-    signal = signal_process,
+    reap = reap_process,
+    exit_handle = function(self) return self.pidfd end,
+    kill = spec.kill, message = spec.message, name_of = spec.name_of,
     close = function(self, reason)
       if self.pidfd then
         self.pidfd:close(reason or 'process closed')
@@ -171,14 +122,7 @@ function Direct.new(spec)
     end,
   })
 
-  local Provider = {}
-  function Provider.is_supported()
-    return spec.supported()
-  end
-  function Provider.support_reason()
-    local ok, reason = spec.supported()
-    return ok and nil or reason
-  end
+  local Provider = Core.provider(spec)
 
   function Provider.start_process(host, process_spec)
     local supported, reason = spec.supported()
@@ -287,7 +231,7 @@ function Direct.new(spec)
       return nil, nil, error_value(spec, 'exec_handshake', read_errno, read_message)
     end
     if handshake ~= '' then
-      wait_blocking(pid)
+      Core.wait(spec, pid, false)
       for _, value in pairs(parents) do
         close(value)
       end
@@ -338,18 +282,11 @@ function Direct.new(spec)
       end
     end
 
-    local process = Label.attach(setmetatable({
-      _fibers_id = 'host-process-' .. tostring(pid),
-      _pid = pid,
+    local process = Core.handle(ProcessClass, pid, process_spec, {
       pidfd = pidfd,
       group_id = process_spec.process_group == 'new' and pid
         or (type(process_spec.process_group) == 'number' and process_spec.process_group or nil),
-      poll_interval = process_spec.poll_interval or 0.025,
-      status = nil,
-      reaped = false,
-      closed = false,
-    }, ProcessClass), process_spec.label)
-    IOAudit.created(process, { kind = 'process_handle' })
+    })
     if pidfd then
       IOAudit.transfer(pidfd, process, { kind = 'host_handle', role = 'pidfd' })
     end

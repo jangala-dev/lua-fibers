@@ -16,6 +16,18 @@ local Process = require('fibers.process')
 local DNSResolver = require('fibers.dns.resolver')
 local Cell = require('fibers.resource.cell')
 local Counter = require('fibers.resource.counter')
+local Lifetime = require('fibers.lifetime')
+local Machine = require('fibers.resource.machine')
+local Index = require('fibers.resource.index')
+local Lease = require('fibers.resource.lease')
+local Signal = require('fibers.resource.signal')
+local EventQueue = require('fibers.resource.event_queue')
+local Readiness = require('fibers.io.readiness')
+local Grant = require('fibers.grant')
+local Scope = require('fibers.scope')
+local Task = require('fibers.task')
+local Flow = require('fibers.resource.flow')
+local HostHandle = require('fibers.io.handle')
 
 local function rejects(label, fn)
   local ok = pcall(fn)
@@ -65,15 +77,121 @@ do
   end
 
   local counter = Counter.new(1)
-  if counter.value ~= nil or counter.version ~= nil or counter.changed_op ~= nil or counter.changed ~= nil then
+  if counter.value ~= nil or counter.version ~= nil or counter.changed_op ~= nil or counter.changed ~= nil
+      or counter.min ~= nil or counter.max ~= nil then
     error('v1 Counter must expose state only through algebraic operations', 2)
   end
+
+  local machine = Machine.new('sealed')
+  if machine.value ~= nil or machine.version ~= nil then
+    error('v1 Machine must expose state only through algebraic operations', 2)
+  end
+
+  local index = Index.new()
+  if index.entries ~= nil or index.version ~= nil or index.changed_op ~= nil or index.changed ~= nil then
+    error('v1 Index must expose state only through algebraic operations', 2)
+  end
+
+  local lease = Lease.new()
+  if lease.holders ~= nil or lease.versions ~= nil or lease.version ~= nil or lease.compat ~= nil then
+    error('v1 Lease must expose state only through algebraic operations', 2)
+  end
+
+  local signal = Signal.new()
+  if signal.version ~= nil then
+    error('v1 Signal must not expose its internal epoch', 2)
+  end
+
+  local events = EventQueue.new()
+  if events.version ~= nil or events.length ~= nil then
+    error('v1 EventQueue must expose queued events only through algebraic operations', 2)
+  end
+
+  local readiness = Readiness.new('strict-v1')
+  if readiness.version ~= nil or readiness.key ~= nil or readiness.mode ~= nil then
+    error('v1 Readiness must not expose its internal epoch', 2)
+  end
+
+  local flow = Flow.new(8)
+  if flow.capacity ~= nil or flow:inlet().flow ~= nil or flow:outlet().flow ~= nil then
+    error('v1 Flow must not expose authoritative capacity or endpoint back-references', 2)
+  end
+
+  local handle = HostHandle.new({ close = function() return true end })
+  for _, name in ipairs({ 'key', 'handle', 'host', 'readiness', 'feed', 'runtime', 'stream', 'closed', 'close_error' }) do
+    if handle[name] ~= nil then
+      error('v1 HostHandle must not expose mutable host state: ' .. name, 2)
+    end
+  end
+
+  local life = Lifetime.new()
+  for _, name in ipairs({
+    'current_state', 'inspect_op', 'cancellation_op',
+    'runtime', 'closure', 'body', 'has_body', 'role', 'rights', 'meta', 'value', 'standalone_boundary',
+    'bind_runtime', 'record_map', 'assert_runtime_compatible',
+  }) do
+    if life[name] ~= nil then
+      error('v1 Lifetime must not expose generic live-state observation: ' .. name, 2)
+    end
+  end
+  for _, name in ipairs({ 'runtime', 'closure', 'offers', 'interrupt', 'cancellation', 'mask_depth' }) do
+    if Scope.new()[name] ~= nil then
+      error('v1 Scope must not proxy Lifetime internals: ' .. name, 2)
+    end
+  end
+  for _, name in ipairs({ 'inspect_op', 'children_op', 'custody_op', 'subtree_op', 'running_children_op', 'cancellation_op' }) do
+    if Scope[name] ~= nil then
+      error('v1 Scope must not expose generic live-state observation: ' .. name, 2)
+    end
+  end
+  if Task.state_op ~= nil then
+    error('v1 Task must expose body/outcome facts, not a generic state snapshot', 2)
+  end
+  if Grant.inspect ~= nil or Grant.inspect_op ~= nil then
+    error('v1 Grant must expose immutable authority queries, not custody snapshots', 2)
+  end
+
+  local ProcessClass = Process.Process
+  for _, name in ipairs({ 'state_op', 'state_value', 'host_handle' }) do
+    if ProcessClass[name] ~= nil then
+      error('v1 Process must expose focused lifecycle facts rather than generic live state: ' .. name, 2)
+    end
+  end
+  for _, name in ipairs({ 'pid', 'stdin', 'stdout', 'stderr' }) do
+    if type(ProcessClass[name .. '_op']) ~= 'function' or type(ProcessClass[name]) ~= 'function' then
+      error('v1 Process focused fact must provide an Option and performing twin: ' .. name, 2)
+    end
+  end
+
+  for label, class in pairs({
+    Listener = socket.Listener,
+    Dial = socket.Dial,
+    Query = socket.Query,
+    DatagramSocket = socket.DatagramSocket,
+  }) do
+    for _, name in ipairs({ 'state_op', 'state_value', 'host_handle', 'inspect_op' }) do
+      if class[name] ~= nil then
+        error('v1 ' .. label .. ' must not expose generic live-state observation: ' .. name, 2)
+      end
+    end
+  end
+  for _, class in ipairs({ socket.Listener, socket.DatagramSocket }) do
+    if type(class.local_address_op) ~= 'function' or type(class.local_address) ~= 'function' then
+      error('v1 bound-address facts must be Options with performing twins', 2)
+    end
+  end
+
 end
 
 -- Lua-file compatibility reads are deliberately absent from the v1 Stream surface.
 local left = Stream.memory_pair()
 if left.read ~= nil or left.read_op ~= nil then
   error('v1 Stream must not expose Lua-file read compatibility methods', 2)
+end
+for _, name in ipairs({ 'close_state', 'state_op', 'state_value', 'inspect_op' }) do
+  if left[name] ~= nil then
+    error('v1 Stream must not expose generic live-state observation: ' .. name, 2)
+  end
 end
 
 return true

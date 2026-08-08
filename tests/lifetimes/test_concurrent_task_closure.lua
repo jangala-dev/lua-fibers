@@ -86,13 +86,12 @@ do
     'failing sibling should be reported'
   )
 
-  local waiter_state
+  local waiter_exit
   fibers.run(function()
-    waiter_state = fibers.perform(waiter:state_op())
+    waiter_exit = fibers.perform(waiter:body_result_op())
   end)
-  assert_truthy(waiter_state and waiter_state.body_exited, 'pending sibling should be cancelled and settled')
   assert_truthy(
-    waiter_state.body_result.tag == 'cancelled' or waiter_state.body_result.tag == 'failed',
+    waiter_exit.tag == 'cancelled' or waiter_exit.tag == 'failed',
     'pending sibling should not remain pending'
   )
 end

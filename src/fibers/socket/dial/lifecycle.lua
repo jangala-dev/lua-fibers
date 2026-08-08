@@ -137,13 +137,6 @@ function Dial.new(address)
   return value
 end
 
-function Dial:state_value()
-  return self.state.value
-end
-
-function Dial:state_op()
-  return self.state:read_op()
-end
 
 function Dial:publish_connected_op(connection, source_scope, report)
   return self.state:transition_op(Connected, {

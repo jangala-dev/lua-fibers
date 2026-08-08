@@ -28,10 +28,10 @@ local function compose(opts)
     mode = opts.mode or 'composed',
     _reader = opts.reader,
     _writer = opts.writer,
-    handle = opts.handle,
-    reactor = opts.reactor,
-    read_registration = nil,
-    write_registration = nil,
+    _handle = opts.handle,
+    _reactor = opts.reactor,
+    _read_registration = nil,
+    _write_registration = nil,
     _reactor_live = 0,
     _handle_closed = false,
   }, Duplex), opts.label)
@@ -99,15 +99,7 @@ function Duplex:_set_addresses(local_address, peer_address)
   self._local_address, self._peer_address = local_address, peer_address
   return self
 end
-function Duplex:close_state()
-  return {
-    handle_closed = self._handle_closed == true,
-    reactor_live = self._reactor_live or 0,
-    close_error = self._close_error,
-    readable = self:is_readable(),
-    writable = self:is_writable(),
-  }
-end
+
 
 local function side_endpoint(self, side)
   if side == 'read' then
@@ -177,7 +169,7 @@ end
 
 
 local function flow_of(value)
-  return value and value.flow
+  return value and value._flow
 end
 
 
@@ -187,7 +179,7 @@ local function retire_direction(self, side, reason, policy, abort)
     return Op.always(true)
   end
   local request = abort and flow_of(ep):abort_op(reason) or ep:close_op(reason)
-  local registration = self[side .. '_registration']
+  local registration = self['_' .. side .. '_registration']
   if registration then
     request = Op.together({ request, registration:retire_op(reason, policy) }):map(function()
       return true
@@ -259,11 +251,11 @@ function Duplex:closed_op()
   if self._writer then
     operations[#operations + 1] = self._writer:closed_op()
   end
-  if self.read_registration then
-    operations[#operations + 1] = self.read_registration:retired_op()
+  if self._read_registration then
+    operations[#operations + 1] = self._read_registration:retired_op()
   end
-  if self.write_registration then
-    operations[#operations + 1] = self.write_registration:retired_op()
+  if self._write_registration then
+    operations[#operations + 1] = self._write_registration:retired_op()
   end
   return Op.each(operations):map(function()
     if self._close_error then

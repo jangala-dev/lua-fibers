@@ -36,7 +36,7 @@ local OFFER_SPEC = {
 
 local function source_error(source, state)
   if state and state.kind == 'failed' then return state.error end
-  return source.error or IOError.closed(source.domain, source.action, {
+  return source._error or IOError.closed(source._domain, source._action, {
     reason = state and state.reason or source.reason or 'offer source completed',
   })
 end
@@ -49,7 +49,7 @@ local function aggregate_error(source, message, ...)
   end
   if #compact == 0 then return nil end
   if #compact == 1 then return compact[1] end
-  return IOError.protocol(source.domain, source.action, message, { errors = compact })
+  return IOError.protocol(source._domain, source._action, message, { errors = compact })
 end
 
 local function source_closure(source)
@@ -84,12 +84,12 @@ function Offer.new(spec)
   local source = Label.attach(setmetatable({
     kind = 'host_offer_source',
     _fibers_id = id,
-    domain = spec.domain or 'host',
-    action = spec.action or 'offer',
-    role = spec.role or 'host_offer_source',
-    mode = mode,
-    poll_interval = spec.poll_interval,
-    capacity = capacity,
+    _domain = spec.domain or 'host',
+    _action = spec.action or 'offer',
+    _role = spec.role or 'host_offer_source',
+    _mode = mode,
+    _poll_interval = spec.poll_interval,
+    _capacity = capacity,
     _one_shot = spec.one_shot or false,
     _handle_provider = spec.handle,
     _pull = spec.pull,
@@ -106,7 +106,7 @@ function Offer.new(spec)
 
   Lifetime.define(source, {
     label = label,
-    role = source.role,
+    role = source._role,
     closure = source_closure(source),
     children = spec.children,
   })
@@ -116,10 +116,10 @@ function Offer.new(spec)
   local reactor = Reactor.for_runtime(rt)
   source._entry = reactor:offer({
     label = Label.describe(source, source._fibers_id),
-    mode = source.mode,
+    mode = source._mode,
     source = source,
-    handle = source.mode == 'poll' and nil or function() return source:_handle() end,
-    poll_interval = source.poll_interval,
+    handle = source._mode == 'poll' and nil or function() return source:_handle() end,
+    poll_interval = source._poll_interval,
   })
   return source
 end
@@ -157,7 +157,7 @@ function Offer:terminal_op()
     if state.kind == 'failed' or state.kind == 'cancelled' then
       return nil, source_error(self, state)
     end
-    return true, self.error
+    return true, self._error
   end)
 end
 
@@ -173,7 +173,7 @@ function Offer:_publish_terminal(state)
   if self.state then return false end
   self.state = state
   self.reason = state.reason or self.reason
-  if state.error then self.error = state.error end
+  if state.error then self._error = state.error end
   UnsafeExternalMutation.deliver(self._terminal, state)
   return true
 end
@@ -181,7 +181,7 @@ end
 function Offer:_drain_unclaimed(rt, reason)
   local errors = {}
   local packed = {}
-  local count = self._queue:length()
+  local count = self._queue._location.value.count
 
   if count > 0 then
     local drained, values = Protected.pcall(rt._perform_current, rt, self._queue:_drain_op(), nil, true)
@@ -197,7 +197,7 @@ function Offer:_drain_unclaimed(rt, reason)
       local values = packed[i]
       local disposed, dispose_err = Protected.pcall(self._dispose, unpack_(values, 1, values.n), reason)
       if not disposed then
-        errors[#errors + 1] = IOError.protocol(self.domain, self.action, 'unclaimed offer disposal raised', {
+        errors[#errors + 1] = IOError.protocol(self._domain, self._action, 'unclaimed offer disposal raised', {
           index = i,
           cause = dispose_err,
         })
@@ -237,11 +237,11 @@ function Offer:_reactor_retired(rt, state, preserve_offers)
   if type(self._retired) == 'function' then
     local called, ok, err = Protected.pcall(self._retired, rt, terminal_state)
     if not called then
-      retired_error = IOError.protocol(self.domain, self.action, 'offer retirement callback raised', {
+      retired_error = IOError.protocol(self._domain, self._action, 'offer retirement callback raised', {
         cause = ok,
       })
     elseif ok == nil or ok == false then
-      retired_error = err or IOError.protocol(self.domain, self.action, 'offer retirement callback failed')
+      retired_error = err or IOError.protocol(self._domain, self._action, 'offer retirement callback failed')
     end
   end
   if retired_error then

@@ -28,17 +28,18 @@ Lifetime.define(handle, {
   }),
 })
 
-local finished
+local finished, lifetime_closed
 local result = fibers.try_run(function(scope)
   fibers.perform(scope:admit_op(handle))
   fibers.perform(Closure.close_op(scope, handle, 'done'))
   finished = fibers.perform(closed:read_op())
+  lifetime_closed = fibers.perform(Lifetime.of(handle):closed_op()) == Lifetime.of(handle)
 end)
 
 assert(result.runtime_status.tag == 'found')
 assert(finished.closed == true)
 assert(finished.resource == handle)
 assert(finished.reason == 'done')
-assert(Lifetime.of(handle):current_state().closure_phase == 'closed')
+assert(lifetime_closed)
 
 print('examples/lifetimes/resource_closure.lua: ok')

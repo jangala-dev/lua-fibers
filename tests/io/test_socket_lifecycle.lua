@@ -20,6 +20,7 @@ local ListenerLifecycle = Lifecycle.define({
   closed_reason = 'listener closed',
 })
 local DialLifecycle = require('fibers.socket.dial.lifecycle')
+local State = require('tests.support.resource_state')
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then
@@ -43,7 +44,7 @@ do
     local handle = { name = 'listener-handle' }
     local lifecycle = ListenerLifecycle.new(address):label('listener-law')
 
-    assert_eq(lifecycle:state_value().kind, 'starting')
+    assert_eq(State.lifecycle(lifecycle).kind, 'starting')
     assert_eq(fibers.perform(lifecycle:unavailable_op():or_else(Op.always('available'))), 'available')
 
     local activated, active = fibers.perform(lifecycle:activate_op(handle, address))
@@ -98,7 +99,7 @@ do
     local connection = { name = 'connection' }
     local source = { name = 'source-scope' }
 
-    assert_eq(lifecycle:state_value().kind, 'starting')
+    assert_eq(State.lifecycle(lifecycle).kind, 'starting')
     local published, connected = fibers.perform(lifecycle:publish_connected_op(connection, source))
     assert_eq(published, true)
     assert_eq(connected.kind, 'connected')
@@ -109,7 +110,7 @@ do
     local taken_connection, taken_source = fibers.perform(lifecycle:take_op())
     assert_eq(taken_connection, connection)
     assert_eq(taken_source, source)
-    assert_eq(lifecycle:state_value().kind, 'taken')
+    assert_eq(State.lifecycle(lifecycle).kind, 'taken')
 
     local second = fibers.perform(lifecycle:take_op():or_else(Op.always('already taken')))
     assert_eq(second, 'already taken')
@@ -143,7 +144,7 @@ do
     assert_eq(failed_state.kind, 'failed')
     assert_eq(fibers.perform(failed:failure_op()), failure)
     assert_eq(fibers.perform(failed:publish_connected_op({}, {})), false)
-    assert_eq(failed:state_value().kind, 'failed')
+    assert_eq(State.lifecycle(failed).kind, 'failed')
   end)
 end
 

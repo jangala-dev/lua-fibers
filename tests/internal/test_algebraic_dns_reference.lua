@@ -18,6 +18,7 @@ local Completion = require('fibers.resource.completion')
 local DialLifecycle = require('fibers.socket.dial.lifecycle')
 local DialState = require('fibers.socket.dial.named.state')
 local clock = Clock.default()
+local State = require('tests.support.resource_state')
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then
@@ -98,8 +99,8 @@ do
     assert_eq(addresses[1].kind, 'inet4')
     assert_eq(families.inet6.kind, 'succeeded')
     assert_eq(families.inet4.kind, 'succeeded')
-    local state = query.state_op and fibers.perform(query:state_op()) or nil
-    assert_truthy(state and state.kind == 'succeeded')
+    local addresses2, err2 = query:result()
+    assert_truthy(addresses2 and not err2)
   end, { host = host })
   assert_truthy(result.ok, result:tostring())
 end
@@ -126,15 +127,15 @@ do
       Address.ipv6('2001:db8::1', 443),
       Address.ipv6('2001:db8::2', 443),
     }))
-    fibers.perform(race:publish_family_op('inet6', v6:state_value(), 0))
-    local first = race.state.value
+    fibers.perform(race:publish_family_op('inet6', State.completion(v6), 0))
+    local first = State.value(race.state)
     assert_eq(#first.unattempted, 1, 'one slot remains reserved for the unfinished family')
     assert_eq(first.candidates_dropped, 1)
 
     local v4 = Completion.new():label('reference-v4')
     fibers.perform(v4:publish_success_op({ Address.ipv4('192.0.2.20', 443) }))
-    fibers.perform(race:publish_family_op('inet4', v4:state_value(), 0.010))
-    local second = race.state.value
+    fibers.perform(race:publish_family_op('inet4', State.completion(v4), 0.010))
+    local second = State.value(race.state)
     assert_eq(#second.unattempted, 2)
     assert_eq(second.unattempted[1].kind, 'inet6')
     assert_eq(second.unattempted[2].kind, 'inet4')

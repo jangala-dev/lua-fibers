@@ -12,7 +12,8 @@ local Effect = require('fibers.effect')
 local Protected = require('fibers.protected')
 local Lifetime = require('fibers.lifetime')
 local Closure = require('fibers.closure')
-local ScopeResult = require('fibers.scope.outcome').Result
+local ScopeOutcome = require('fibers.scope.outcome')
+local ScopeResult = ScopeOutcome.Result
 local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
 local Contract = require('fibers.internal.contract')
@@ -100,19 +101,19 @@ function Task._new(fn, parent_scope, opts)
   if not life then
     life = Lifetime.task(fn, {
       label = opts.label,
-      closure = Closure.running(Closure.propagation(opts.closure or (parent_scope and parent_scope.closure))),
+      closure = Closure.running(Closure.propagation(opts.closure or (parent_scope and parent_scope._lifetime._closure))),
     })
   else
-    if life.has_body or life.body ~= nil then
+    if life._has_body or life._body ~= nil then
       error('Lifetime already has a body', 2)
     end
-    life.body = fn
-    life.has_body = true
-    local propagation = opts.closure or (parent_scope and parent_scope.closure)
-    if not life.closure or life.closure.name == 'none' then
-      life.closure = Closure.running(Closure.propagation(propagation))
+    life._body = fn
+    life._has_body = true
+    local propagation = opts.closure or (parent_scope and parent_scope._lifetime._closure)
+    if not life._closure or life._closure.name == 'none' then
+      life._closure = Closure.running(Closure.propagation(propagation))
     else
-      life.closure = Closure.combine(life.closure, Closure.propagation(propagation))
+      life._closure = Closure.combine(life._closure, Closure.propagation(propagation))
     end
   end
   return setmetatable({
@@ -143,16 +144,6 @@ function Task:diagnostic_label()
 end
 
 
-local function exit_from_protected(results)
-  if results[1] then
-    return Exit.returned(unpack_(results, 2, results.n))
-  end
-  local err = results[2]
-  if Runtime.is_cancelled and Runtime.is_cancelled(err) then
-    return Exit.cancelled(err.reason, err.token)
-  end
-  return Exit.failed(err)
-end
 
 -- Publish the execution result at the point where the user's Task body exits,
 -- not after the Scope sharing this Lifetime has retired its descendants.
@@ -161,7 +152,7 @@ end
 function Task:_publish_protected_body_result(results, runtime)
   local rt = runtime or Runtime.current()
   if not rt then error('task body result published without a current runtime', 2) end
-  local exit = exit_from_protected(results)
+  local exit = ScopeOutcome.protected_exit(Exit, results)
   rt:perform(self._lifetime:publish_body_result_op(exit), { masked = true })
   return exit
 end
@@ -176,7 +167,7 @@ function Task:_spawn_body(fn)
     if task._body_result_owner == 'task' then
       task:_publish_protected_body_result(results, rt)
     else
-      local state = rt:perform(task._lifetime.body_result:read_op(), { masked = true })
+      local state = rt:perform(task._lifetime._body_result:read_op(), { masked = true })
       if type(state) ~= 'table' or state.status ~= 'done' then
         error('Scope-backed Task returned without publishing its body result', 0)
       end
@@ -194,15 +185,15 @@ end
 
 function Task:_take_spawn_body(runtime)
   local life = self._lifetime
-  if runtime ~= nil and life.runtime ~= runtime then
+  if runtime ~= nil and life._runtime ~= runtime then
     error('committed spawn Task belongs to another Runtime', 2)
   end
-  local fn = life.body
+  local fn = life._body
   if type(fn) ~= 'function' then
     error('committed spawn Task has no dormant body', 2)
   end
   local runnable = self:_spawn_body(fn)
-  life.body = nil
+  life._body = nil
   return runnable
 end
 
@@ -243,23 +234,7 @@ function Task:cancel_requested_op()
   return self._lifetime:cancel_requested_op()
 end
 
-function Task:state_op()
-  local task = self
-  return self._lifetime:inspect_op():map(function(state)
-    local body = state.body_result
-    local cancel = state.cancellation
-    return {
-      body_exited = type(body) == 'table' and body.status == 'done',
-      body_result = type(body) == 'table' and body.result or body,
-      closed = type(state.outcome) == 'table' and state.outcome.status == 'done',
-      outcome = type(state.outcome) == 'table' and state.outcome.result or state.outcome,
-      cancel_requested = type(cancel) == 'table' and (cancel.cancelled or cancel.requested) or false,
-      cancel_reason = type(cancel) == 'table' and cancel.reason or nil,
-      phase = state.phase,
-      lifetime = task._lifetime,
-    }
-  end)
-end
+
 
 
 

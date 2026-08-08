@@ -132,10 +132,9 @@ scope:accept_op(filter)
 scope:close_op(resource, reason)
 
 scope:has_custody_op(resource)
-scope:children_op()
-scope:custody_op(resource)
-scope:subtree_op(resource)
 ```
+
+The focused predicate is the only public custody observation. Fibers does not expose generic children, subtree or custodian snapshots; topology is changed through custody operations rather than mirrored as an observational API.
 
 ### Atomic movement
 
@@ -210,7 +209,7 @@ source:grant_op(resource, worker, { read = true, observe = true })
 ```
 
 Sparse arrays, duplicate rights and mixed array/map forms are rejected. Rights,
-the subject and transfer terms are snapshotted privately when the Grant is
+the subject and transfer terms are copied privately when the Grant is
 constructed. Mutating the returned Lua table or an `inspect()` result cannot add
 authority or make a Grant transferable.
 

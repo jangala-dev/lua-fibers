@@ -4,6 +4,8 @@ local IOError = require('fibers.io.error')
 local IOAudit = require('fibers.internal.io_audit')
 local Label = require('fibers.internal.label')
 local Contract = require('fibers.internal.contract')
+local Op = require('fibers.op')
+local HostOffer = require('fibers.io.offer')
 
 local M = {}
 
@@ -132,9 +134,34 @@ do
     }
   end
 
+  function M.wait(spec, pid, nonblocking)
+    while true do
+      local result, errno, message = spec.wait(pid, nonblocking)
+      if result or not spec.interrupted(errno) then return result, errno, message end
+    end
+  end
+
+  function M.provider(spec)
+    return {
+      is_supported = spec.supported,
+      support_reason = function()
+        local ok, reason = spec.supported()
+        return ok and nil or reason
+      end,
+    }
+  end
+
+  function M.handle(class, pid, spec, fields)
+    fields = fields or {}
+    fields._fibers_id = 'host-process-' .. tostring(pid)
+    fields._pid = pid
+    fields.poll_interval = spec.poll_interval or 0.025
+    local process = Label.attach(setmetatable(fields, class), spec.label)
+    IOAudit.created(process, { kind = 'process_handle' })
+    return process
+  end
+
   function M.class(spec)
-    local open_exit = assert(spec.open_exit, 'process class requires open_exit')
-    local exit = assert(spec.exit, 'process class requires exit')
     local Process = {}
     Process.__index = Process
 
@@ -152,11 +179,26 @@ do
     end
 
     function Process:open_exit_op(scope)
-      return open_exit(self, scope)
+      if not self.exit_source then
+        local handle = spec.exit_handle(self)
+        self.exit_source = HostOffer.new({
+          label = Label.describe(self, self._fibers_id or 'process') .. ':exit',
+          domain = 'process', action = 'reap', role = 'process_exit_completion',
+          one_shot = true, capacity = 1, handle = handle,
+          mode = handle and 'read' or 'poll', poll_interval = self.poll_interval,
+          pull = function() return spec.reap(self) end,
+        })
+      end
+      return self.exit_source:open_op(scope)
     end
 
     function Process:exit_op()
-      return exit(self)
+      if self.reaped and self.status then return Op.always(self.status) end
+      if not self.exit_source then
+        return Op.always(nil, IOError.protocol('process', 'exit',
+          'process exit source is not open', { pid = self._pid }))
+      end
+      return self.exit_source:result_op()
     end
 
     function Process:signal(value, target)
@@ -164,10 +206,13 @@ do
         return nil, IOError.closed('process', 'signal', { pid = self._pid })
       end
       local number, err = spec.signals.normalise(value)
-      if not number then
-        return nil, err
-      end
-      return spec.signal(self, number, target)
+      if not number then return nil, err end
+      local destination = target == 'group' and -math.abs(self.group_id or self._pid) or self._pid
+      local ok, errno, message = spec.kill(destination, number)
+      if ok then return true end
+      return nil, IOError.system('process', 'signal',
+        message or spec.message(errno), spec.name_of and spec.name_of(errno), errno,
+        { pid = self._pid, signal = number, target = target })
     end
 
     function Process:close(reason)

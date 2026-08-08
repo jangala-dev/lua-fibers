@@ -5,6 +5,7 @@ package.path = table.concat({
 
 local fibers = require('fibers')
 local Lifetime = require('fibers.lifetime')
+local Lifetimes = require('tests.support.lifetimes')
 local Runtime = require('fibers.runtime')
 local Scope = require('fibers.scope')
 local Closure = require('fibers.closure')
@@ -26,7 +27,7 @@ do
   local runtime = Runtime.new()
   eq(runtime.lifetimes, nil, 'bare Runtime must not allocate a LifetimeStore')
   local item = resource('lazy-store')
-  Lifetime.of(item):bind_runtime(runtime)
+  Lifetime.of(item):_bind_runtime(runtime)
   local store = runtime.lifetimes
   truthy(store, 'binding a Lifetime creates the Runtime-local store')
   eq(runtime:_lifetime_store(), store, 'the Runtime reuses its LifetimeStore')
@@ -37,16 +38,16 @@ end
 do
   local item = resource('store-item')
   local before = Lifetime.of(item)
-  eq(before:current_state().closure_phase, 'dormant')
+  eq(Lifetimes.state(before).closure_phase, 'dormant')
   fibers.run(function(scope)
     eq(fibers.perform(scope:has_custody_op(item)), false)
     eq(fibers.perform(scope:admit_op(item)), item)
-    eq(before:current_state().closure_phase, 'open')
-    eq(before:current_state().custodian, scope:lifetime())
+    eq(Lifetimes.state(before).closure_phase, 'open')
+    eq(Lifetimes.state(before).custodian, scope:lifetime())
     truthy(fibers.perform(scope:has_custody_op(item)))
   end)
-  eq(before:current_state().closure_phase, 'closed')
-  eq(before:current_state().custodian, nil)
+  eq(Lifetimes.state(before).closure_phase, 'closed')
+  eq(Lifetimes.state(before).custodian, nil)
 end
 
 
@@ -68,7 +69,7 @@ do
 
   local child = resource('explicit-child')
   Lifetime.of(parent):add_child(child)
-  eq(Lifetime.of(child):current_state().parent, Lifetime.of(parent))
+  eq(Lifetimes.state(child).parent, Lifetime.of(parent))
 end
 
 -- Dormant structural topology is a tree. Ordinary construction rejects an
@@ -85,11 +86,11 @@ do
   Lifetime.of(c):add_child(d)
   Lifetime.of(d)._construction_children[1] = Lifetime.of(c)
   Lifetime.of(c)._construction_parent = Lifetime.of(d)
-  ok, err = pcall(function() Lifetime.of(c):bind_runtime(Runtime.new()) end)
+  ok, err = pcall(function() Lifetime.of(c):_bind_runtime(Runtime.new()) end)
   eq(ok, false)
   truthy(tostring(err):match('acyclic tree'))
-  eq(Lifetime.of(c).runtime, nil, 'failed validation must not partially bind the root')
-  eq(Lifetime.of(d).runtime, nil, 'failed validation must not partially bind descendants')
+  eq(Lifetime.of(c)._runtime, nil, 'failed validation must not partially bind the root')
+  eq(Lifetime.of(d)._runtime, nil, 'failed validation must not partially bind descendants')
 end
 
 -- Ordinary Lua fields are not authoritative topology. Trusted code may add
@@ -100,7 +101,7 @@ do
     fibers.perform(scope:admit_op(item))
     local node = Lifetime.of(item)
     node.parent, node.children, node.phase = 'user-data', {}, 'user-data'
-    local state = node:current_state()
+    local state = Lifetimes.state(node)
     eq(state.custodian, scope:lifetime())
     eq(state.parent, nil)
     eq(state.closure_phase, 'open')
@@ -116,13 +117,13 @@ do
   fibers.run(function(scope)
     fibers.perform(scope:admit_op(item))
     fibers.perform(node:request_close_op('test-close'))
-    requested = node:current_state().closure_phase
+    requested = Lifetimes.state(node).closure_phase
     fibers.perform(node:_closing_op('test-close'))
-    closing = node:current_state().closure_phase
+    closing = Lifetimes.state(node).closure_phase
   end)
   eq(requested, 'close_requested')
   eq(closing, 'closing')
-  eq(node:current_state().closure_phase, 'closed')
+  eq(Lifetimes.state(node).closure_phase, 'closed')
 end
 
 -- A complete subtree moves atomically between Scope capabilities.
@@ -169,10 +170,10 @@ do
   rt1:_spawn_raw(function() admitted = rt1:perform(s1:admit_op(item)) end,  s1):label('admit-one')
   rt1:run()
   eq(admitted, item)
-  local ok, err = pcall(function() item._lifetime:bind_runtime(rt2) end)
+  local ok, err = pcall(function() item._lifetime:_bind_runtime(rt2) end)
   eq(ok, false)
   truthy(tostring(err):match('another Runtime'))
-  eq(s2._lifetime.runtime, rt2)
+  eq(s2._lifetime._runtime, rt2)
 end
 
 print('tests/lifetimes/test_lifetime_store.lua: ok')

@@ -154,7 +154,6 @@ task:outcome_op()
 task:await_op()
 task:request_cancel_op(reason)
 task:cancel_requested_op()
-task:state_op()
 ```
 
 Direct forms exist for `await` and `request_cancel`.
@@ -216,17 +215,6 @@ Use:
 Because `await_op` contains a post-commit `wrap`, another `map` or `and_then`
 cannot be appended after it. Use `outcome_op` when the next action must belong
 to the same transaction.
-
-### Diagnostic state
-
-```lua
-local state = fibers.perform(task:state_op())
-```
-
-`state_op` returns a consistent diagnostic snapshot including body completion,
-complete outcome, cancellation and Closure phase. It is for observation, not as
-a substitute for composing the relevant authority or completion Option with the
-action it protects.
 
 ## 5. Transactional task admission
 
@@ -465,8 +453,7 @@ local requested, reason = fibers.perform(
 )
 ```
 
-`cancel_requested_op` waits for a request. `cancellation_op()` reads the present
-managed cancellation state immediately.
+`cancel_requested_op` waits for a cancellation request. Fibers does not expose a generic current-cancellation snapshot; when a program needs the present alternative, compose `cancel_requested_op()` with `or_else`.
 
 A non-blocking observation can use `or_else`:
 
@@ -537,15 +524,13 @@ scope:accept_op(filter)
 scope:close_op(value, reason)
 ```
 
-Inspection operations include:
+A focused transactional custody predicate is available when a protocol genuinely needs it:
 
 ```lua
 scope:has_custody_op(value)
-scope:children_op()
-scope:custody_op(value)
-scope:subtree_op(value)
-scope:inspect_op()
 ```
+
+Fibers deliberately does not expose generic children, subtree or custody snapshots. Responsibility changes should normally be expressed by `admit_op`, `move_op`, `offer_op`, `accept_op`, `grant_op`, `can_op` and `close_op`, rather than observed through a parallel topology API.
 
 ### Dormant resources
 
@@ -829,20 +814,15 @@ Authority ends when:
 Subject Closure invalidates every Grant over it immediately, even if a holder
 has not yet retired the Grant Lifetime itself.
 
-## 13. Observation operations and transactional checks
+## 13. Focused transactional checks
 
-Scope inspection operations return managed facts as Options:
+Fibers does not provide a generic live topology snapshot. Where a protocol genuinely depends on current custody, use the focused predicate:
 
 ```lua
-scope:children_op()
 scope:has_custody_op(item)
-scope:custody_op(item)
-scope:subtree_op(item)
-scope:inspect_op()
 ```
 
-These are useful for diagnostics and for constructing larger transactional
-conditions.
+The predicate participates in the same candidate world as the operation composed with it.
 
 ### Boolean reads do not reject a world
 
@@ -1168,8 +1148,8 @@ capability prevents competing recovery attempts.
 | What values did the scope body return? | raising boundary return values or `ScopeResult:unpack()` |
 | Did the Task body return, fail or receive cancellation? | `Task:body_result_op()` |
 | Did the complete Task Lifetime resolve? | `Task:outcome_op()` or `Task:await()` |
-| Is cancellation currently requested? | `cancel_requested_op()` or `cancellation_op()` |
-| Who currently owns a consequence? | custody inspection Options |
+| Has cancellation been requested? | `cancel_requested_op()`, optionally composed with `or_else` for a present alternative |
+| Does this Scope currently hold a consequence? | `Scope:has_custody_op()` when a protocol genuinely needs the predicate |
 | May this Scope perform a protected action? | compose `Scope:can_op()` with that action |
 | Which child or cleanup failures occurred? | checked Scope result and report |
 | Can unresolved Closure be retried or forced? | retained `Closure.Failure` |

@@ -40,11 +40,10 @@ assert(result.reason == 'child_failed')
 assert(incident_cancelled == true)
 assert(#result.report.child_failures == 1)
 
-local warning_state
+local warning_exit
 fibers.run(function()
-  warning_state = fibers.perform(warning_task:state_op())
+  warning_exit = fibers.perform(warning_task:body_result_op())
 end)
-assert(warning_state.body_exited)
-assert(warning_state.body_result.tag == 'cancelled')
+assert(warning_exit.tag == 'cancelled')
 
-print('incident:', result.reason, 'warning feed:', warning_state.body_result.tag)
+print('incident:', result.reason, 'warning feed:', warning_exit.tag)

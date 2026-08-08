@@ -67,7 +67,7 @@ local function key_id(key)
 end
 
 local function handle_hint_ready(entry)
-  local readiness = entry.handle and entry.handle.readiness
+  local readiness = entry.handle and entry.handle._readiness
   local state = readiness and readiness._location and readiness._location.value
   return not not (state and state[entry.mode])
 end
@@ -594,7 +594,7 @@ function Reactor:_retire_entry(entry, reason)
     if retire_error then stream._close_error = combine_error(stream._close_error, retire_error) end
     if stream._reactor_live == 0 and not stream._handle_closed then
       stream._handle_closed = true
-      local ok, err = stream.handle:close(reason)
+      local ok, err = stream._handle:close(reason)
       if not ok then stream._close_error = combine_error(stream._close_error, err or Errors.FLOW_ERROR) end
     end
   end
@@ -868,7 +868,7 @@ function Reactor:_handle_control(kind, entry, reason, mode)
 end
 
 local function control_pending(control)
-  return control ~= nil and control:length() > 0
+  return control ~= nil and control._location.value.count > 0
 end
 
 function Reactor:_next_poll_deadline()
@@ -987,7 +987,7 @@ function Reactor:_host_active()
   return out
 end
 
-function Reactor:registration_count()
+function Reactor:_registration_count()
   local n = 0
   for _ in pairs(self.entries) do
     n = n + 1
@@ -995,7 +995,7 @@ function Reactor:registration_count()
   return n
 end
 
-function Reactor:assert_quiescent(label)
+function Reactor:_assert_quiescent(label)
   local names = {}
   for _, entry in pairs(self.entries) do
     names[#names + 1] = Label.describe(entry, entry._fibers_id) .. ':' .. entry.mode

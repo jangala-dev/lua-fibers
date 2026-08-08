@@ -149,7 +149,7 @@ end, function()
     endpoints[#endpoints + 1] = writer
   end
   local runtime = Runtime.current()
-  local registrations = runtime.host_reactor and runtime.host_reactor:registration_count() or 0
+  local registrations = runtime.host_reactor and runtime.host_reactor:_registration_count() or 0
   assert(registrations == count * 2)
   for i = 1, #endpoints do
     endpoints[i]:close('proof profile complete')

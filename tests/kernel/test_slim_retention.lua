@@ -13,6 +13,7 @@ local External = require('fibers.embed.external')
 local Runtime = require('fibers.runtime')
 local Lifetime = require('fibers.lifetime')
 local Scope = require('fibers.scope')
+local Lifetimes = require('tests.support.lifetimes')
 local Signal = require('fibers.resource.signal')
 
 local function fail(msg)
@@ -89,11 +90,8 @@ do
       local st = rt:run()
       if st.tag == 'idle' or st.tag == 'quiescent' then break end
     end
-    local snapshot
-    rt:spawn_raw(function() snapshot = rt:perform(scope:inspect_op()) end):label('empty-store-snapshot')
-    rt:run()
-    eq(snapshot.custody_count, 0, 'completed Scope should retain no Lifetime records under custody')
-    rt, scope, item, snapshot = nil, nil, nil, nil
+    eq(#Lifetimes.roots(scope), 0, 'completed Scope should retain no Lifetime records under custody')
+    rt, scope, item = nil, nil, nil
   end
   collect()
   eq(weak[1], nil, 'runtime-local store should not retain an empty Scope')

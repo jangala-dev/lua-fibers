@@ -112,7 +112,7 @@ do
     'at_least', 'at_most', 'equal', 'zero',
   }, 'counter')
   assert_twins(Index.new(), {
-    'insert', 'insert_auto', 'append', 'remove', 'pop_first', 'pop_last', 'changed',
+    'insert', 'insert_auto', 'append', 'remove', 'pop_first', 'pop_last',
   }, 'index')
   local keyed = Keyed.new()
   assert_twins(keyed, { 'get', 'take', 'put', 'insert', 'contains', 'remove' }, 'keyed')
@@ -221,7 +221,7 @@ do
     reader:close('done')
 
     local listener = assert(socket.listen_inet('127.0.0.1', 0, { label = 'direct-listener' }))
-    assert_twins(listener, { 'accept', 'close', 'closed' }, 'listener')
+    assert_twins(listener, { 'local_address', 'accept', 'close', 'closed' }, 'listener')
     local address = listener:local_address()
     local client_task = fibers.spawn(function()
       local dial = assert(socket.dial(socket.inet_address(address.host, address.port), {
@@ -245,7 +245,7 @@ do
 
     local datagram_a = assert(socket.udp_ipv4('127.0.0.1', 0))
     local datagram_b = assert(socket.udp_ipv4('127.0.0.1', 0))
-    assert_twins(datagram_a, { 'send_to', 'receive_from', 'flush', 'close', 'closed' }, 'datagram')
+    assert_twins(datagram_a, { 'local_address', 'send_to', 'receive_from', 'flush', 'close', 'closed' }, 'datagram')
     datagram_a:send_to('packet', datagram_b:local_address())
     datagram_a:flush()
     assert_eq(assert(datagram_b:receive_from()).data, 'packet')
@@ -263,6 +263,10 @@ do
       :start()
     assert(child, tostring(child_err))
     assert_twins(child, {
+      'pid',
+      'stdin',
+      'stdout',
+      'stderr',
       'launch_succeeded',
       'launch_failed',
       'launch_result',

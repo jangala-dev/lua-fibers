@@ -17,6 +17,7 @@ local RateLimiter = require('examples.recipes.rate_limiter')
 local Runtime = require('fibers.runtime')
 local fibers = require('fibers')
 local ManualHost = require('fibers.embed.manual')
+local State = require('tests.support.resource_state')
 
 local function fail(msg)
   error(msg, 2)
@@ -62,7 +63,7 @@ local function test_cell_transition_serialises_parallel_updates()
     }))
   end):label('root')
   assert_status(rt:run(), 'found')
-  assert_eq(s.value, 2)
+  assert_eq(State.value(s), 2)
   assert_eq(rows[1][1], 1)
   assert_eq(rows[2][1], 2)
 end
@@ -78,8 +79,8 @@ local function test_rate_limiter_parallel_acquire_serialises_without_double_refi
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
   assert_eq(rows[2][1], true)
-  assert_near(rl.state.value.tokens, 0)
-  assert_near(rl.state.value.last, 1)
+  assert_near(State.value(rl.state).tokens, 0)
+  assert_near(State.value(rl.state).last, 1)
 end
 
 local function test_rate_limiter_waits_until_enough_tokens()
@@ -93,8 +94,8 @@ local function test_rate_limiter_waits_until_enough_tokens()
   assert_status(External.drive(rt, { host = host }), 'found')
   assert_eq(ok, true)
   assert_near(host._now, 1)
-  assert_near(rl.state.value.tokens, 0)
-  assert_near(rl.state.value.last, 1)
+  assert_near(State.value(rl.state).tokens, 0)
+  assert_near(State.value(rl.state).last, 1)
 end
 
 local function test_rate_limiter_try_acquire_reports_deadline()
@@ -109,8 +110,8 @@ local function test_rate_limiter_try_acquire_reports_deadline()
   assert_eq(ok, false)
   assert_near(deadline, 0.5)
   assert_near(available, 0)
-  assert_near(rl.state.value.tokens, 0)
-  assert_near(rl.state.value.last, 0)
+  assert_near(State.value(rl.state).tokens, 0)
+  assert_near(State.value(rl.state).last, 0)
 end
 
 local function test_rate_limiter_available_is_observational()
@@ -123,8 +124,8 @@ local function test_rate_limiter_available_is_observational()
   end):label('root')
   assert_status(rt:run(), 'found')
   assert_near(available, 2)
-  assert_near(rl.state.value.tokens, 0, 1e-9, 'available_op should not commit a refill')
-  assert_near(rl.state.value.last, 0)
+  assert_near(State.value(rl.state).tokens, 0, 1e-9, 'available_op should not commit a refill')
+  assert_near(State.value(rl.state).last, 0)
 end
 
 local function test_cell_transition_ordering_is_direct_and_deterministic()
@@ -141,7 +142,7 @@ local function test_cell_transition_ordering_is_direct_and_deterministic()
     rows = rt:perform(Op.together({ s:transition_op(second), s:transition_op(first) }))
   end):label('root')
   assert_status(rt:run(), 'found')
-  assert_eq(s.value, 'ba')
+  assert_eq(State.value(s), 'ba')
   assert_eq(rows[1][1], 'second')
   assert_eq(rows[2][1], 'first')
 end
@@ -165,7 +166,7 @@ local function test_cell_transition_ordering_controls_select_handoff()
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], 1)
   assert_eq(rows[2][1], true)
-  assert_eq(s.value, 0)
+  assert_eq(State.value(s), 0)
 end
 
 local function test_cell_transition_payload_validation()
@@ -186,7 +187,7 @@ local function test_cell_transition_payload_validation()
     rt:perform(s:transition_op(checked, { n = 2 }))
   end):label('root')
   assert_status(rt:run(), 'found')
-  assert_eq(s.value, 2)
+  assert_eq(State.value(s), 2)
 end
 
 local tests = {

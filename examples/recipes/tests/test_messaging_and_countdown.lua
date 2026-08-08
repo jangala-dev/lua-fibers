@@ -17,6 +17,7 @@ local FibersChannel = require('fibers.channel')
 local CountdownLatch = require('examples.recipes.countdown_latch')
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
+local State = require('tests.support.resource_state')
 
 local function fail(msg)
   error(msg, 2)
@@ -123,8 +124,8 @@ local function test_countdown_latch_wait_and_together_drain()
   assert_eq(rows[2][1], true)
   assert_eq(rows[3][1], true)
   assert_eq(rows[3][2], 1)
-  assert_eq(wg.state.value.count, 0)
-  assert_eq(wg.state.value.generation, 1)
+  assert_eq(State.value(wg.state).count, 0)
+  assert_eq(State.value(wg.state).generation, 1)
 end
 
 local function test_countdown_latch_each_done_does_not_supply_wait()
@@ -137,7 +138,7 @@ local function test_countdown_latch_each_done_does_not_supply_wait()
   assert_status(rt:run(), 'found')
   assert_eq(rows[1][1], true)
   assert_eq(rows[2][1], 'blocked')
-  assert_eq(wg.state.value.count, 0)
+  assert_eq(State.value(wg.state).count, 0)
 end
 
 local function test_countdown_latch_negative_count_is_absent()
@@ -147,7 +148,7 @@ local function test_countdown_latch_negative_count_is_absent()
     rt:perform(wg:done_op())
   end):label('wg-negative')
   assert_not_found(rt:run(), 'negative countdown latch count should not commit')
-  assert_eq(wg.state.value.count, 0)
+  assert_eq(State.value(wg.state).count, 0)
 end
 
 local function test_mailbox_rendezvous_send_recv()

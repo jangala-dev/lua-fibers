@@ -30,35 +30,35 @@ end
 
 local function clear_local_hint(self, mode)
   mode = normalise_mode(mode)
-  if self.readiness then
-    UnsafeExternalMutation.clear(self.readiness, mode)
+  if self._readiness then
+    UnsafeExternalMutation.clear(self._readiness, mode)
   end
 end
 
 local function clear_hint(self, mode)
   mode = normalise_mode(mode)
   clear_local_hint(self, mode)
-  local host = self.host
+  local host = self._host
   if host and type(host.clear_readiness) == 'function' then
-    host:clear_readiness(self.key, mode)
+    host:clear_readiness(self._key, mode)
   elseif host and type(host.set_readiness) == 'function' then
-    host:set_readiness(self.key, mode, false)
+    host:set_readiness(self._key, mode, false)
   end
 end
 
 local function mark_hint(self, mode)
   mode = normalise_mode(mode)
-  if self.readiness then
-    UnsafeExternalMutation.deliver(self.readiness, mode, true)
+  if self._readiness then
+    UnsafeExternalMutation.deliver(self._readiness, mode, true)
   end
-  local host = self.host
+  local host = self._host
   if host and type(host.set_readiness) == 'function' then
-    host:set_readiness(self.key, mode, true)
+    host:set_readiness(self._key, mode, true)
   end
-  local runtime = self.runtime
+  local runtime = self._runtime
   local reactor = runtime and runtime.host_reactor
   if reactor then
-    reactor:hint(self.key, mode)
+    reactor:hint(self._key, mode)
   end
 end
 
@@ -93,11 +93,11 @@ function Handle.new(opts)
   local id = 'host-handle-' .. tostring(next_id)
   local handle = setmetatable({
     _fibers_id = id,
-    key = key,
-    handle = opts.handle or key,
-    host = opts.host,
-    readiness = opts.readiness or Readiness.new(key, nil),
-    feed = opts.feed,
+    _key = key,
+    _handle = opts.handle or key,
+    _host = opts.host,
+    _readiness = opts.readiness or Readiness.new(key, nil),
+    _feed = opts.feed,
     _read = opts.read,
     _write = opts.write,
     _shutdown_read = opts.shutdown_read,
@@ -107,12 +107,12 @@ function Handle.new(opts)
     _bind_runtime = opts.bind_runtime,
     _attach_stream = opts.attach_stream,
     _ready = opts.ready,
-    runtime = nil,
-    stream = nil,
+    _runtime = nil,
+    _stream = nil,
     _fibers_host_handle = true,
   }, Handle)
   Label.attach(handle, opts.label)
-  if opts.readiness == nil then Label.child(handle.readiness, handle, 'readiness') end
+  if opts.readiness == nil then Label.child(handle._readiness, handle, 'readiness') end
   IOAudit.created(handle, { kind = 'host_handle' })
   return handle
 end
@@ -131,18 +131,18 @@ local function require_capability(self, capability)
 end
 
 function Handle:readiness_key()
-  return self.key
+  return self._key
 end
 
 function Handle:bind_runtime(rt)
-  if self.runtime == rt and self.feed then
+  if self._runtime == rt and self._feed then
     IOAudit.bind(self, rt)
     return self
   end
-  self.runtime = rt
+  self._runtime = rt
   IOAudit.bind(self, rt)
-  if not self.feed then
-    self.feed = External.external_feed(rt, self.readiness)
+  if not self._feed then
+    self._feed = External.external_feed(rt, self._readiness)
   end
   local bind = self._bind_runtime
   if bind then
@@ -152,7 +152,7 @@ function Handle:bind_runtime(rt)
 end
 
 function Handle:attach_stream(stream)
-  self.stream = stream
+  self._stream = stream
   IOAudit.transfer(self, stream, { kind = 'host_handle', role = 'stream_handle' })
   local attach = self._attach_stream
   if attach then
@@ -167,7 +167,7 @@ function Handle:ready_op(mode)
   if ready then
     return ready(self, mode)
   end
-  return mode == 'write' and self.readiness:writable_op() or self.readiness:readable_op()
+  return mode == 'write' and self._readiness:writable_op() or self._readiness:readable_op()
 end
 
 function Handle:read_ready_op()
@@ -198,7 +198,7 @@ local function call_error(self, action, detail, extra)
     domain = 'handle',
     action = action,
     detail = extra,
-    handle = Label.describe(self, self._fibers_id),
+    _handle = Label.describe(self, self._fibers_id),
   })
 end
 
@@ -252,21 +252,21 @@ Handle.shutdown_write = shutdown_method('shutdown_write')
 
 local function close_once(self, reason, closer)
   IOAudit.closing(self, reason)
-  if self.closed then
+  if self._closed then
     IOAudit.closed(self, true, nil, reason)
     return true
   end
-  if self.close_error then
-    IOAudit.closed(self, false, self.close_error, reason)
-    return nil, self.close_error
+  if self._close_error then
+    IOAudit.closed(self, false, self._close_error, reason)
+    return nil, self._close_error
   end
   local ok, err = closer()
   if not ok then
-    self.close_error = err
+    self._close_error = err
     IOAudit.closed(self, false, err, reason)
     return nil, err
   end
-  self.closed = true
+  self._closed = true
   IOAudit.closed(self, true, nil, reason)
   return ok
 end

@@ -25,7 +25,7 @@ local function create(initial, minimum, maximum)
     error('counter minimum must not exceed maximum', 3)
   end
 
-  local counter = Facility.identity(setmetatable({ min = minimum, max = maximum }, Counter), Kind)
+  local counter = Facility.identity(setmetatable({ _min = minimum, _max = maximum }, Counter), Kind)
   counter._location = Facility.location(counter, {
     algebra = 'add',
     domain = 'counter',
@@ -91,7 +91,7 @@ function Counter:take_op(amount)
     visibility = 'together',
     supply = 'down',
     step = function(current)
-      if current < self.min + amount then return nil end
+      if current < self._min + amount then return nil end
       return Facility.outcome(Facility.patch.add(-amount), true)
     end,
   }))

@@ -6,13 +6,13 @@ local Platform = require('fibers.io.platform')
 local Manual = require('fibers.embed.manual')
 
 local closed = {}
-local function provider(name, family, methods, capabilities)
+local function provider(name, family, methods, features)
   local out = {
     name = name,
     kind = name,
     family = family,
     wait_domain = family,
-    capabilities = capabilities or {},
+    features = features or {},
   }
   for key, value in pairs(methods or {}) do out[key] = value end
   function out:close()
@@ -67,9 +67,10 @@ assert(reader == 'system:reader' and writer == 'system:writer')
 assert(platform:file_provider() == 'system:files')
 assert(platform:start_process({ command = 'worker' }) == 'system:worker')
 assert(platform:resolve({ host = 'example' })[1] == 'resolver:example')
-assert(platform.capabilities.socket_ipv4 and platform.capabilities.socket_unix)
-assert(platform.capabilities.file and platform.capabilities.process and platform.capabilities.resolver)
-assert(platform:provider('socket') == sockets)
+assert(platform:feature('socket_ipv4') and platform:feature('socket_unix'))
+assert(platform:feature('file') and platform:feature('process') and platform:feature('resolver'))
+assert(platform.capabilities == nil and platform.features == nil and platform.providers == nil)
+assert(platform.application == nil and platform.closed == nil)
 assert(platform:close())
 assert(#closed == 4, 'each distinct owned provider should close once')
 
@@ -99,7 +100,7 @@ local allowed = Platform.new({
   owns_providers = false,
   compatible_wait_domains = { ['numeric-fd:opaque-handle'] = true },
 })
-assert(allowed.capabilities.socket)
+assert(allowed:feature('socket'))
 assert(allowed:close())
 
 local method_defined = provider('method-defined', 'numeric-fd', {
@@ -109,7 +110,7 @@ local method_platform = Platform.new({
   providers = { clock = driver, wait = driver, pipe = method_defined },
   owns_providers = false,
 })
-assert(method_platform.capabilities.pipe == true)
+assert(method_platform:feature('pipe') == true)
 
 local incomplete = provider('incomplete', 'numeric-fd', {})
 local ok_missing, err_missing = pcall(Platform.new, {

@@ -741,7 +741,7 @@ end
 
 function State:terminal_error(state)
   local race = self
-  state = state or race.state.value
+  state = state or race.state._location.value
   local attempts = attempt_records(state)
   if #attempts == 0 then
     local err = state.families.inet6.error or state.families.inet4.error
@@ -768,7 +768,7 @@ end
 
 function State:deadline_error(state)
   local race = self
-  state = state or race.state.value
+  state = state or race.state._location.value
   return IOError.system('socket', 'connect', 'Happy Eyeballs deadline expired', 'ETIMEDOUT', nil, {
     endpoint = race.endpoint,
     deadline = race.opts.overall_deadline,
@@ -801,7 +801,7 @@ end
 
 function State:report(status, err, completed_at, state)
   local race = self
-  state = state or race.state.value
+  state = state or race.state._location.value
   assert(type(completed_at) == 'number', 'Happy Eyeballs report requires a committed completion time')
   local report = {
     kind = 'dial',

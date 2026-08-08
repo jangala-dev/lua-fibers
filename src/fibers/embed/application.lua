@@ -133,7 +133,6 @@ function Application.new(fn, opts)
   }, Application)
 
   if self._application_marker then self[self._application_marker] = true end
-  host.application = self
   runtime:_spawn_raw(function()
     self._root_result = scope:try_run(fn)
     return self._root_result
@@ -146,16 +145,8 @@ function Application.is(value)
   return type(value) == 'table' and value._fibers_embed_application == true
 end
 
-function Application:is_settled()
-  return self._settled == true
-end
-
 function Application:result()
   return self._result
-end
-
-function Application:status()
-  return self._status
 end
 
 function Application:now()
@@ -278,7 +269,7 @@ function Application:advance(opts)
 
   local max_steps, max_work, max_external, horizon = advance_limits(self, opts)
   self._advancing = true
-  if type(self.host.consume_wake) == 'function' then self.host:consume_wake('advance') end
+  if type(self.host._consume_wake) == 'function' then self.host:_consume_wake('advance') end
 
   local external_count = 0
   local ok_external, external_or_error = Protected.pcall(function()
@@ -293,7 +284,7 @@ function Application:advance(opts)
   end
   external_count = external_or_error or 0
   if external_count > 0 then
-    if type(self.host.consume_wake) == 'function' then self.host:consume_wake('external') end
+    if type(self.host._consume_wake) == 'function' then self.host:_consume_wake('external') end
   end
 
   local last_status
@@ -354,7 +345,7 @@ function Application:advance(opts)
       end
       if ready then
         immediate = true
-      elseif type(self.host.has_external) == 'function' and self.host:has_external() then
+      elseif type(self.host._has_external) == 'function' and self.host:_has_external() then
         local ok_more, delivered = Protected.pcall(function()
           return self.host:_drain_external(max_external - external_count)
         end)
@@ -364,7 +355,7 @@ function Application:advance(opts)
         end
         external_count = external_count + (delivered or 0)
         if (delivered or 0) > 0 then
-          if type(self.host.consume_wake) == 'function' then self.host:consume_wake('external') end
+          if type(self.host._consume_wake) == 'function' then self.host:_consume_wake('external') end
         end
         immediate = (delivered or 0) > 0
       elseif deadline ~= nil and deadline <= self:now() then

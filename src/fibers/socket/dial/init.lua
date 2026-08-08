@@ -68,9 +68,9 @@ end
 
 local function terminal_fields(dial)
   return {
-    endpoint = dial.endpoint,
-    address = dial.endpoint,
-    strategy = dial.strategy,
+    endpoint = dial._endpoint,
+    address = dial._endpoint,
+    strategy = dial._strategy.name,
   }
 end
 
@@ -98,7 +98,7 @@ local function driver(dial, driver_scope)
         or nil
       IO.masked_perform(
         rt,
-        dial.lifecycle:closed_op(thrown.reason or 'dial cancelled', attach_report(closed, cancelled_report), false, cancelled_report)
+        dial._lifecycle:closed_op(thrown.reason or 'dial cancelled', attach_report(closed, cancelled_report), false, cancelled_report)
       )
       return
     end
@@ -108,34 +108,34 @@ local function driver(dial, driver_scope)
       and dial._strategy.terminal_report(dial, 'failed', failure, rt:now())
       or nil
     failure = attach_report(failure, failure_report)
-    local state = dial.lifecycle:state_value()
+    local state = dial._lifecycle.state._location.value
     if state.kind == 'closing' then
-      IO.masked_perform(rt, dial.lifecycle:closed_op(state.reason, failure, fatal, failure_report))
+      IO.masked_perform(rt, dial._lifecycle:closed_op(state.reason, failure, fatal, failure_report))
     else
-      IO.masked_perform(rt, dial.lifecycle:publish_failure_op(failure, fatal, failure_report))
+      IO.masked_perform(rt, dial._lifecycle:publish_failure_op(failure, fatal, failure_report))
     end
     return
   end
 
   if not connection then
     err = attach_report(err, report)
-    local state = dial.lifecycle:state_value()
+    local state = dial._lifecycle.state._location.value
     if state.kind == 'closing' then
-      IO.masked_perform(rt, dial.lifecycle:closed_op(state.reason, err, false, report))
+      IO.masked_perform(rt, dial._lifecycle:closed_op(state.reason, err, false, report))
     else
-      IO.masked_perform(rt, dial.lifecycle:publish_failure_op(err, false, report))
+      IO.masked_perform(rt, dial._lifecycle:publish_failure_op(err, false, report))
     end
     return
   end
 
   local published, state =
-    IO.masked_perform(rt, dial.lifecycle:publish_connected_op(connection, driver_scope, report))
+    IO.masked_perform(rt, dial._lifecycle:publish_connected_op(connection, driver_scope, report))
   if not published then
     if state.kind == 'closing' or state.kind == 'closed' then return end
     error(
       IOError.protocol('socket', 'publish_connected', 'Dial lifecycle rejected a connection', {
-        endpoint = dial.endpoint,
-        strategy = dial.strategy,
+        endpoint = dial._endpoint,
+        strategy = dial._strategy.name,
         state = state.kind,
       }),
       0
@@ -144,17 +144,17 @@ local function driver(dial, driver_scope)
 
   -- Keep the private scope, and therefore an untaken winning Stream, alive until
   -- custody moves to the caller or the Dial closes.
-  local released, release_state = Protected.pcall(perform, dial.lifecycle:driver_release_op())
+  local released, release_state = Protected.pcall(perform, dial._lifecycle:driver_release_op())
   if not released then
     if Runtime.is_cancelled(release_state) then
-      local state_now = dial.lifecycle:state_value()
+      local state_now = dial._lifecycle.state._location.value
       local closed = cancelled_error(dial, release_state)
       local cancelled_report = state_now.report
         or (dial._strategy.terminal_report
           and dial._strategy.terminal_report(dial, 'cancelled', closed, rt:now()))
       IO.masked_perform(
         rt,
-        dial.lifecycle:closed_op(
+        dial._lifecycle:closed_op(
           release_state.reason or state_now.reason or 'dial cancelled',
           attach_report(closed, cancelled_report),
           false,
@@ -166,7 +166,7 @@ local function driver(dial, driver_scope)
     error(release_state, 0)
   end
   if release_state.kind == 'closing' then
-    IO.masked_perform(rt, dial.lifecycle:closed_op(release_state.reason, nil, false, release_state.report))
+    IO.masked_perform(rt, dial._lifecycle:closed_op(release_state.reason, nil, false, release_state.report))
   end
 end
 
@@ -174,16 +174,8 @@ function Dial:lifetime()
   return self._lifetime
 end
 
-function Dial:state_op()
-  return self.lifecycle:state_op()
-end
-
-function Dial:state_value()
-  return self.lifecycle:state_value()
-end
-
 local function take_to_scope_op(dial, scope, include_report)
-  return dial.lifecycle:take_op():and_then(Op.guard(function(connection, source_scope, report)
+  return dial._lifecycle:take_op():and_then(Op.guard(function(connection, source_scope, report)
     return source_scope:move_op(connection, scope):map(function()
       if include_report then return connection, report end
       return connection
@@ -200,7 +192,7 @@ function Dial:connected_op(target)
 end
 
 function Dial:failed_op()
-  return self.lifecycle:failure_op()
+  return self._lifecycle:failure_op()
 end
 
 function Dial:result_op(target)
@@ -216,14 +208,14 @@ local function result_with_report_op(dial, target)
 end
 
 function Dial:report_op()
-  return self.lifecycle:report_op()
+  return self._lifecycle:report_op()
 end
 
 function Dial:close_op(reason)
   reason = reason or 'dial closed'
-  local cancel = self.driver and self.driver:request_cancel_op(reason) or Op.always(true)
-  return self.lifecycle:request_close_op(reason):and_then(Op.guard(function(first)
-    if first and self.driver then
+  local cancel = self._driver and self._driver:request_cancel_op(reason) or Op.always(true)
+  return self._lifecycle:request_close_op(reason):and_then(Op.guard(function(first)
+    if first and self._driver then
       return cancel:map(function() return true end)
     end
     return Op.always(true)
@@ -231,7 +223,7 @@ function Dial:close_op(reason)
 end
 
 function Dial:closed_op()
-  return IO.closed_after_driver_op(self.driver, self.lifecycle:terminal_op():map(closed_result))
+  return IO.closed_after_driver_op(self._driver, self._lifecycle:terminal_op():map(closed_result))
 end
 
 function Dial:result(target)
@@ -269,20 +261,19 @@ local function new_op(endpoint, opts, strategy)
   local dial = Label.attach(setmetatable({
     kind = 'socket_dial',
     _fibers_id = id,
-    endpoint = endpoint,
-    strategy = strategy.name,
-    lifecycle = DialLifecycle.new(endpoint),
+    _endpoint = endpoint,
+    _lifecycle = DialLifecycle.new(endpoint),
     _strategy = strategy,
     _options = opts,
   }, Dial), opts.label)
-  Label.child(dial.lifecycle, dial, 'lifecycle')
+  Label.child(dial._lifecycle, dial, 'lifecycle')
 
   return IO.admit_driven_lifetime_op(scope, dial, {
     operation = 'socket.dial_op',
     label = Label.get(dial),
     role = 'socket_dial',
     closure = dial_closure(dial),
-    causal_states = { dial.lifecycle.state },
+    causal_states = { dial._lifecycle.state },
     run = function(driver_scope) return driver(dial, driver_scope) end,
   })
 end

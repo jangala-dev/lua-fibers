@@ -3,7 +3,7 @@
 local M = {}
 
 local function state(value)
-  if value and value._state then return value._state.value end
+  if value and value._state then return value._state._location.value end
   return value
 end
 
@@ -37,8 +37,8 @@ function M.retained(value)
 end
 
 function M.free(flow)
-  if flow.capacity == math.huge then return math.huge end
-  return flow.capacity - M.retained(flow)
+  if flow._capacity == math.huge then return math.huge end
+  return flow._capacity - M.retained(flow)
 end
 
 function M.chunk_count(value)

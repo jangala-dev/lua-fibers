@@ -341,7 +341,7 @@ function M.new(opts)
       not_connected = set_of(ENOTCONN),
       message_too_large = set_of(EMSGSIZE),
     },
-    capabilities = { datagram_truncation = true },
+    features = { datagram_truncation = true },
   }
 
   binding.time = {
@@ -990,11 +990,11 @@ function M.new(opts)
   )
   local aio_supported = AioProbe.available(ffi, C)
   if uring_supported then
-    binding.capabilities.file = true
-    binding.capabilities.file_backend = 'io_uring'
-    binding.capabilities.file_io_uring = true
+    binding.features.file = true
+    binding.features.file_backend = 'io_uring'
+    binding.features.file_io_uring = true
   end
-  binding.capabilities.file_aio_detected = aio_supported
+  binding.features.file_aio_detected = aio_supported
   binding.file = function(Fd)
     return function(_self, runtime, provider_opts)
       if uring_supported then

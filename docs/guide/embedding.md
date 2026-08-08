@@ -337,7 +337,7 @@ handle:shutdown_write(reason)
 handle:close(reason)
 ```
 
-The callback set is authoritative for a concrete handle. Do not duplicate it in a `capabilities` table: `supports(name)` follows the presence of the corresponding callback, and `close` is mandatory.
+The callback set is authoritative for a concrete handle. Do not duplicate it in a `features` table: `supports(name)` follows the presence of the corresponding callback, and `close` is mandatory.
 
 Opening a Stream commits its custody and both reactor-registration effects together. If the option loses, no handle is attached and no reactor service starts. Retirement is structural: both registrations retire, active leases close, the handle closes exactly once, and `closed_op` observes complete Flow and registration closure.
 
@@ -345,7 +345,7 @@ See the [Flow and Stream contract](resources.md#detailed-flow-and-stream-contrac
 
 ## Process capability
 
-A host which advertises `capabilities.process = true` supplies one launch and
+A host which advertises `features.process = true` supplies one launch and
 process-handle contract:
 
 ```text
@@ -368,11 +368,11 @@ A host may expose a narrower, explicit process contract when its native API lack
 
 Parent pipe endpoints are non-blocking HostHandles and enter the normal private host-hold, Stream and reactor path. The process handle itself is also audited. Exactly one supervisor has custody of signal decisions and exit observation. `open_exit_op` admits a reactor-owned one-shot completion beneath the process Scope; `exit_op` returns the cached authoritative terminal status once the provider has reaped the process exactly once.
 
-The Linux FFI family uses pidfds where available and timer-polled `waitpid` otherwise. The test-only SimulatedHost provides deterministic process completion and signalling. A host with no usable process contract omits `capabilities.process` and the `start_process` method.
+The Linux FFI family uses pidfds where available and timer-polled `waitpid` otherwise. The test-only SimulatedHost provides deterministic process completion and signalling. A host with no usable process contract omits `features.process` and the `start_process` method.
 
 ## File capability
 
-A host which advertises `capabilities.file = true` must provide a complete
+A host which advertises `features.file = true` must provide a complete
 evented file path. The standard provider selector first asks the host for:
 
 ```text
@@ -485,27 +485,9 @@ serial entry into the runtime driver boundary
 
 The host and readiness tests in `tests/` are the executable contract.
 
-## I/O lifecycle inspection
+## I/O lifecycle qualification
 
-Hosts can inspect the Runtime-local reactor and the external-resource
-audit while diagnosing integration failures:
-
-```lua
-local registrations = rt.host_reactor and rt.host_reactor:registration_count() or 0
-local IO = require('fibers.diagnostics.io')
-IO.enable()
-local audit = IO.report(rt, { include_history = true })
-```
-
-After an I/O tree held in custody has closed, contract tests should call:
-
-```lua
-IO.assert_clean(rt, { label = 'embedding shutdown' })
-```
-
-This verifies that no HostHandle remains live, no reactor registration remains
-indexed and no custody violation was recorded. Stale readiness deliveries are
-ignored by generation and counted in `audit.stats.stale_ready`.
+Host integration is qualified through executable lifecycle and provider contracts rather than a public reactor snapshot. The internal test instrumentation checks that handles retire, registrations disappear, custody is respected and stale readiness generations are ignored. Those counters and indexes are implementation details, not application observability.
 
 Hosts must declare stream-socket family support separately through
 `socket_ipv4`, `socket_ipv6` and `socket_unix`. Unsupported capabilities should

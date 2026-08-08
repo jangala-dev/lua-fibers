@@ -69,10 +69,10 @@ do
       return true
     end,
   })
-  assert_eq(host.capabilities.socket, nil)
-  assert_eq(host.capabilities.socket_ipv4, nil)
-  assert_eq(host.capabilities.socket_ipv6, nil)
-  assert_eq(host.capabilities.socket_unix, nil)
+  assert_eq(host:feature('socket'), nil)
+  assert_eq(host:feature('socket_ipv4'), nil)
+  assert_eq(host:feature('socket_ipv6'), nil)
+  assert_eq(host:feature('socket_unix'), nil)
   Contract.expect_unsupported('pure', host, socket.ipv4_address('127.0.0.1', 0))
 end
 
@@ -88,24 +88,24 @@ for _, spec in ipairs({
   local ok, provider = pcall(require, spec.module)
   if ok and provider and type(provider.is_supported) == 'function' and provider.is_supported() then
     local host = provider.new()
-    if host.capabilities.socket ~= true then
+    if host:feature('socket') ~= true then
       Contract.expect_unsupported(spec.name, host, socket.ipv4_address('127.0.0.1', 0))
     else
-      if host.capabilities.socket_ipv4 then
+      if host:feature('socket_ipv4') then
         Contract.exercise(spec.name .. '-ipv4', host, socket.ipv4_address('127.0.0.1', 0), {
           require_client_local = true,
           local_address = socket.ipv4_address('127.0.0.1', 0),
           watchdog_seconds = 10,
         })
       end
-      if host.capabilities.socket_ipv6 then
+      if host:feature('socket_ipv6') then
         Contract.exercise(spec.name .. '-ipv6', host, socket.ipv6_address('::1', 0), {
           require_client_local = true,
           local_address = socket.ipv6_address('::1', 0),
           watchdog_seconds = 10,
         })
       end
-      if host.capabilities.socket_unix then
+      if host:feature('socket_unix') then
         local path = os.tmpname() .. '-' .. spec.name .. '.sock'
         os.remove(path)
         Contract.exercise(spec.name .. '-unix', host, socket.unix_address(path), {

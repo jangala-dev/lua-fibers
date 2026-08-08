@@ -278,7 +278,6 @@ local Sleep = require('fibers.sleep')
 ### `Task:request_cancel_op([reason]) -> Op`
 ### `Task:request_cancel([reason])`
 ### `Task:cancel_requested_op() -> Op`
-### `Task:state_op() -> Op`
 ### `Task:label([value])`
 
 `Task.Exit` provides `returned`, `failed`, `cancelled`, `is`, `status` and `unwrap` helpers for body exits.
@@ -308,12 +307,6 @@ Creates a scope capability. Application code normally receives scopes from `run`
 ### `Scope:close_op(item [, reason]) -> Op`
 ### `Scope:request_cancel_op([reason]) -> Op`
 ### `Scope:cancel_requested_op() -> Op`
-### `Scope:cancellation_op() -> Op`
-### `Scope:running_children_op() -> Op`
-### `Scope:children_op() -> Op`
-### `Scope:custody_op(item) -> Op`
-### `Scope:subtree_op(item) -> Op`
-### `Scope:inspect_op() -> Op`
 ### `Scope:try_run(fn) -> ScopeResult`
 ### `Scope:run(fn) -> ...`
 ### `Scope:label([value])`
@@ -380,18 +373,17 @@ Lifetime nodes support:
 
 ```lua
 life:label([value])
-life:current_state()
 life:closed_op()
 life:request_close_op([reason])
 life:request_cancel_op([reason])
 life:cancel_requested_op()
-life:cancellation_op()
 life:body_result_op()
 life:outcome_op()
-life:inspect_op()
 ```
 
 Most applications should use Tasks and Scopes rather than constructing Lifetimes directly.
+
+Live managed state has no generic snapshot API or raw epoch. Observe the domain fact needed by the program through a focused Option such as `closed_op`, `cancel_requested_op`, `body_result_op`, `outcome_op` or a resource-specific operation. Friendly direct methods are performing twins of those Options; they are not a second observation path. Internal versions and epochs are not public semantics. Trusted facility-authoring and host-provider interfaces are implementation boundaries, not application observation APIs.
 
 ## `fibers.grant`
 
@@ -399,7 +391,6 @@ Most applications should use Tasks and Scopes rather than constructing Lifetimes
 ### `grant:has_right(right) -> boolean`
 ### `grant:closed_op() -> Op`
 ### `grant:closed() -> Grant`
-### `grant:inspect() -> table`
 
 Grants are normally created through `Scope:grant_op`.
 
@@ -663,10 +654,14 @@ Commands are immutable reusable descriptions.
 
 ```lua
 proc:lifetime()
+proc:pid_op()
 proc:pid()
 proc:argv()
+proc:stdin_op()
 proc:stdin()
+proc:stdout_op()
 proc:stdout()
+proc:stderr_op()
 proc:stderr()
 proc:launch_result_op()
 proc:result_op()
@@ -678,6 +673,8 @@ proc:closed_op()
 proc:communicate([opts])
 proc:close([reason])
 ```
+
+The process PID and standard streams become available when launch commits. Their direct methods perform the corresponding focused Options; they are not immediate object-field reads.
 
 ### Helpers
 
@@ -709,6 +706,7 @@ A Listener supports:
 ```lua
 listener:accept_op([target_scope])
 listener:accept([target_scope])
+listener:local_address_op()
 listener:local_address()
 listener:close_op([reason])
 listener:closed_op()
@@ -762,10 +760,11 @@ udp:receive_from_op([opts])
 udp:flush_op()
 udp:close_op([reason])
 udp:closed_op()
+udp:local_address_op()
 udp:local_address()
 ```
 
-Direct twins exist for send, receive, flush, close and closed.
+Direct twins exist for local address, send, receive, flush, close and closed.
 
 ## `fibers.effect`
 

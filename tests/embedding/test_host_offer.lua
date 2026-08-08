@@ -11,6 +11,7 @@ local Sleep = require('fibers.sleep')
 local Reactor = require('fibers.io.reactor')
 local Runtime = require('fibers.runtime')
 local FakeHandle = require('tests.support.fake_handle')
+local State = require('tests.support.resource_state')
 
 local function assert_eq(a, b, message)
   if a ~= b then error((message or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a), 2) end
@@ -133,7 +134,7 @@ do
       end,
     })
     fibers.perform(source:open_op(scope))
-    while source._queue:length() < 2 do Sleep.sleep(0) end
+    while State.event_queue_length(source._queue) < 2 do Sleep.sleep(0) end
     fibers.perform(source:close_op('exercise disposal failures'))
 
     local terminal_ok
@@ -142,8 +143,8 @@ do
     local closed_ok
     closed_ok, closed_err = fibers.perform(source:closed_op())
     assert_eq(closed_ok, nil)
-    assert_eq(source._queue:length(), 0)
-    assert_eq(source._slots._location.value, source.capacity)
+    assert_eq(State.event_queue_length(source._queue), 0)
+    assert_eq(source._slots._location.value, source._capacity)
   end, { host = host })
 
   assert_eq(disposed, 2, 'every queued offer should be disposed')

@@ -125,7 +125,7 @@ do
     listener:closed()
   end, { host = host })
   assert_truthy(result.ok, result:tostring())
-  assert_truthy(get_pending().closed, 'pending host handle should close after Dial abandonment')
+  assert_truthy(get_pending()._closed, 'pending host handle should close after Dial abandonment')
   IOAudit.assert_clean(result.runtime, { label = 'pending dial timeout' })
 end
 

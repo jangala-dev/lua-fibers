@@ -204,9 +204,9 @@ function M.mask(fn, ...)
   if not scope then
     return fn(...)
   end
-  scope.mask_depth = (scope.mask_depth or 0) + 1
+  scope._mask_depth = (scope._mask_depth or 0) + 1
   local result = pack(Protected.pcall(fn, ...))
-  scope.mask_depth = scope.mask_depth - 1
+  scope._mask_depth = scope._mask_depth - 1
   if not result[1] then
     error(result[2], 0)
   end
@@ -229,7 +229,7 @@ function M.try_scope(opts, fn)
   local scope = Scope.new({
     runtime = rt,
     parent = parent,
-    closure = opts.closure or (parent and parent.closure),
+    closure = opts.closure or (parent and parent._lifetime._closure),
   })
   if opts.label ~= nil then scope:label(opts.label) end
   return scope:try_run(fn)

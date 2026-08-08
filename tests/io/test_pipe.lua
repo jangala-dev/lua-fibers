@@ -79,8 +79,8 @@ do
     assert_truthy(reader)
     fibers.perform(writer:write_op('x'))
   end, { host = host })
-  assert_eq(read_handle.closed, true)
-  assert_eq(write_handle.closed, true)
+  assert_eq(read_handle._closed, true)
+  assert_eq(write_handle._closed, true)
 end
 
 -- Unsupported hosts return a structured expected error and leak no obligation.
@@ -118,7 +118,7 @@ do
   end, { host = host })
   assert_eq(reader, nil)
   assert_truthy(HostError.is(err, 'system'))
-  assert_eq(read_handle.closed, true)
+  assert_eq(read_handle._closed, true)
 end
 
 -- Stream admission failure closes both immediately held host handles.
@@ -147,8 +147,8 @@ do
   end, { host = host })
   assert_eq(reader, nil)
   assert_truthy(err ~= nil)
-  assert_eq(bad_reader.closed, true)
-  assert_eq(writer.closed, true)
+  assert_eq(bad_reader._closed, true)
+  assert_eq(writer._closed, true)
 end
 
 -- Directional close retains the familiar pipe semantics.

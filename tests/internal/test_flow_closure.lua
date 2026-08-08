@@ -65,13 +65,13 @@ do
     flushed, flush_err = rt:perform(a:writer():flush_op())
   end):label('writer')
   for _ = 1, 10 do
-    if Inspect.data(b:reader().flow) == 'abc' and flushed == nil then
+    if Inspect.data(b:reader()._flow) == 'abc' and flushed == nil then
       break
     end
     rt:run()
   end
   assert_nil(flushed, 'flush should wait while bytes are retained')
-  assert_eq(Inspect.data(b:reader().flow), 'abc', 'bytes should be queued before peer close')
+  assert_eq(Inspect.data(b:reader()._flow), 'abc', 'bytes should be queued before peer close')
 
   rt:spawn_raw(function()
     rt:perform(b:shutdown_read_op('reader_closed'))
@@ -81,8 +81,8 @@ do
   end, 'peer close should settle retained bytes and fail flush with close reason')
   assert_nil(flushed)
   assert_eq(flush_err, 'reader_closed')
-  assert_eq(Inspect.data(b:reader().flow), '', 'peer close should discard queued retained bytes')
-  assert_eq(Inspect.leased_bytes(b:reader().flow), 0, 'peer close should discard leased retained bytes')
+  assert_eq(Inspect.data(b:reader()._flow), '', 'peer close should discard queued retained bytes')
+  assert_eq(Inspect.leased_bytes(b:reader()._flow), 0, 'peer close should discard leased retained bytes')
 end
 
 -- Flush succeeds after previously written bytes have already been consumed, even
@@ -144,13 +144,13 @@ do
   end):label('writer')
   backend:mark_writable()
   for _ = 1, 20 do
-    if stream and Inspect.first_lease_bytes(stream:writer().flow) == 'abc' then
+    if stream and Inspect.first_lease_bytes(stream:writer()._flow) == 'abc' then
       break
     end
     rt:run()
   end
   assert_eq(
-    Inspect.first_lease_bytes(stream:writer().flow),
+    Inspect.first_lease_bytes(stream:writer()._flow),
     'abc',
     'write reaction should hold an active lease'
   )
@@ -163,8 +163,8 @@ do
   end, 'backend failure should fail retained lease')
   assert_nil(flushed)
   assert_eq(flush_err, 'connection_reset')
-  assert_nil(Inspect.first_lease_bytes(stream:writer().flow), 'backend failure should settle active lease')
-  assert_eq(Inspect.leased_bytes(stream:writer().flow), 0, 'backend failure should release leased capacity')
+  assert_nil(Inspect.first_lease_bytes(stream:writer()._flow), 'backend failure should settle active lease')
+  assert_eq(Inspect.leased_bytes(stream:writer()._flow), 0, 'backend failure should release leased capacity')
 end
 
 -- A backend write that claims to accept more than the lease length is a protocol error;
@@ -192,8 +192,8 @@ do
   end, 'invalid backend write count should fail output')
   assert_nil(flushed)
   assert_eq(flush_err, 'backend_protocol_error')
-  assert_nil(Inspect.first_lease_bytes(stream:writer().flow), 'protocol error should settle active lease')
-  assert_eq(Inspect.leased_bytes(stream:writer().flow), 0, 'protocol error should release leased capacity')
+  assert_nil(Inspect.first_lease_bytes(stream:writer()._flow), 'protocol error should settle active lease')
+  assert_eq(Inspect.leased_bytes(stream:writer()._flow), 0, 'protocol error should release leased capacity')
 end
 
 -- Whole-Flow shutdown reaches true terminality even with queued bytes and both

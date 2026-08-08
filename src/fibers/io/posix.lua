@@ -8,6 +8,7 @@ local FlowErrors = require('fibers.resource.flow.errors')
 local Handle = require('fibers.io.handle')
 local IOError = require('fibers.io.error')
 local WaitSet = require('fibers.embed.wait_set')
+local Base = require('fibers.internal.host.base')
 local Address = require('fibers.net.address')
 local Contract = require('fibers.internal.contract')
 
@@ -59,7 +60,7 @@ local function make_fd(binding)
       return ''
     end
     while true do
-      local data, errno, message = raw.read(self.handle, maximum)
+      local data, errno, message = raw.read(self._handle, maximum)
       if data ~= nil then
         if data == '' then
           return nil, FlowErrors.EOF
@@ -85,7 +86,7 @@ local function make_fd(binding)
       return 0
     end
     while true do
-      local count, errno, message = raw.write(self.handle, bytes)
+      local count, errno, message = raw.write(self._handle, bytes)
       if count ~= nil then
         return count
       elseif is_error(binding, 'interrupted', errno) then
@@ -103,7 +104,7 @@ local function make_fd(binding)
   end
 
   function operations.shutdown_read(self)
-    local ok, errno, message = raw.shutdown(self.handle, 'read')
+    local ok, errno, message = raw.shutdown(self._handle, 'read')
     if ok or is_error(binding, 'not_socket', errno) or is_error(binding, 'not_connected', errno) then
       return true
     end
@@ -111,7 +112,7 @@ local function make_fd(binding)
   end
 
   function operations.shutdown_write(self)
-    local ok, errno, message = raw.shutdown(self.handle, 'write')
+    local ok, errno, message = raw.shutdown(self._handle, 'write')
     if ok or is_error(binding, 'not_socket', errno) or is_error(binding, 'not_connected', errno) then
       return true
     end
@@ -123,7 +124,7 @@ local function make_fd(binding)
       return true
     end
     self._native_closed = true
-    local ok, errno, message = raw.close(self.handle)
+    local ok, errno, message = raw.close(self._handle)
     if ok == nil or ok == false then
       return nil, error_detail(binding, errno, message), errno
     end
@@ -132,7 +133,7 @@ local function make_fd(binding)
 
   function operations.set_nonblocking(self, value)
     Contract.boolean(value, 'host descriptor nonblocking', 3)
-    local ok, errno, message = raw.set_nonblocking(self.handle, value)
+    local ok, errno, message = raw.set_nonblocking(self._handle, value)
     if not ok then
       return nil, error_detail(binding, errno, message), errno
     end
@@ -179,9 +180,9 @@ local function make_fd(binding)
       close = operations.close,
       set_nonblocking = has_nonblocking and operations.set_nonblocking or nil,
     })
-    handle.family, handle.generation = binding.family, generation
+    handle._family, handle._generation = binding.family, generation
     if number ~= nil then
-      handle.fd = number
+      handle._fd = number
     end
     if raw.opened then
       raw.opened(handle, value)
@@ -253,7 +254,7 @@ local function make_network(binding, Fd)
   end
 
   local function raw_of(handle)
-    return handle.handle
+    return handle._handle
   end
 
   local function query(value, peer, family)
@@ -525,7 +526,7 @@ local function make_network(binding, Fd)
         return fail(err)
       end
       local function raw_of(self)
-        return self.handle
+        return self._handle
       end
       local native_address = net.query(value, false)
       handle.address = native_address and net.decode(native_address, endpoint.family) or address
@@ -539,8 +540,8 @@ local function make_network(binding, Fd)
           return nil, datagram_error('recv_from', recv_errno, recv_message, { address = self.address })
         end
         flags = flags or {}
-        if not (type(binding.capabilities) == 'table'
-          and binding.capabilities.datagram_truncation == true) then
+        if not (type(binding.features) == 'table'
+          and binding.features.datagram_truncation == true) then
           flags.truncation_unknown = true
           flags.receive_limit = flags.receive_limit or maximum
         end
@@ -612,7 +613,7 @@ local function process_supported(process)
   return process and (type(process.is_supported) ~= 'function' or process.is_supported()) or false
 end
 
-local function capabilities(binding, features)
+local function host_features(binding, features)
   local out = { time = true, readiness = true }
   if features.fd then
     out.fd, out.pipe = true, true
@@ -640,10 +641,10 @@ local function capabilities(binding, features)
   end
   if features.file or features.process then
     out.file = true
-    out.file_backend = features.file and binding.capabilities and binding.capabilities.file_backend
+    out.file_backend = features.file and binding.features and binding.features.file_backend
       or features.process and 'worker'
   end
-  for key, value in pairs(binding.capabilities or {}) do
+  for key, value in pairs(binding.features or {}) do
     if value ~= false and value ~= nil then
       out[key] = value
     end
@@ -682,6 +683,7 @@ function Posix.define(binding)
 
   local Module, Host = {}, {}
   Host.__index = Host
+  setmetatable(Host, { __index = Base })
 
   local function probe()
     local ok, reason
@@ -707,16 +709,13 @@ function Posix.define(binding)
       error(prefix .. ': ' .. tostring(Module.support_reason()), 2)
     end
     local host = setmetatable({
-      kind = binding.name,
-      name = binding.name,
-      family = binding.family,
-      wait_domain = binding.wait_domain or binding.family,
+      name = binding.name, kind = binding.name, family = binding.family,
+      _wait_domain = binding.wait_domain or binding.family,
       fd = Fd,
-      capabilities = capabilities(binding, features),
-      now = function()
-        return binding.time.now()
-      end,
+      now = function() return binding.time.now() end,
     }, Host)
+    Base.init(host, host_features(binding, features),
+      function() return binding.close and binding.close(host) or true end)
     return host
   end
 
@@ -774,7 +773,7 @@ function Posix.define(binding)
   end
 
   function Host:block(rt, waits, _status)
-    if self.closed then
+    if self._closed then
       error(prefix .. ': host is closed', 2)
     end
     local plan = WaitSet.build(waits or {})
@@ -801,13 +800,6 @@ function Posix.define(binding)
     return true, 'poll'
   end
 
-  function Host:close()
-    if self.closed then
-      return true
-    end
-    self.closed = true
-    return binding.close and binding.close(self) or true
-  end
 
   return Module
 end

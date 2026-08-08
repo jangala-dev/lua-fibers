@@ -865,8 +865,8 @@ local function final_candidate(state)
   for loc, patch in pairs(writes or EMPTY) do
     if loc.domain == 'counter' then
       local final, owner = Algebra.apply(loc, loc.value, patch), loc.owner
-      if owner.min ~= nil and final < owner.min then return nil end
-      if owner.max ~= nil and final > owner.max then return nil end
+      if owner._min ~= nil and final < owner._min then return nil end
+      if owner._max ~= nil and final > owner._max then return nil end
     end
   end
 
@@ -962,8 +962,8 @@ local function frontier_supply_score(frontier, intents)
   for i = 1, #(intents or EMPTY) do
     local demand = intents[i]
     if demand.kind == 'exchange' then
-      local roles = frontier.exchanges and frontier.exchanges[demand.resource]
-      local latent = frontier.latent_exchanges and frontier.latent_exchanges[demand.resource]
+      local roles = frontier.dependencies and frontier.dependencies.exchanges[demand.resource]
+      local latent = frontier.latent and frontier.latent.exchanges[demand.resource]
       local opposite = demand.role == 'put' and 'get' or demand.role == 'get' and 'put' or nil
       if opposite and ((roles and roles[opposite]) or (latent and latent[opposite])) then score = score + 1 end
     end

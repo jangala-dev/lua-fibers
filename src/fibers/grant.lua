@@ -102,8 +102,8 @@ function Grant._new(grantor, holder, subject, rights, opts)
     error('Grant creation expects a holder Scope', 2)
   end
   local subject_lifetime = Lifetime.require(subject, 3)
-  local runtime = grantor.runtime
-  if not runtime or runtime ~= holder.runtime then
+  local runtime = grantor._lifetime._runtime
+  if not runtime or runtime ~= holder._lifetime._runtime then
     error('Grant scopes must belong to the same Runtime', 2)
   end
   runtime._next_grant_id = (runtime._next_grant_id or 0) + 1
@@ -141,8 +141,7 @@ function Grant._new(grantor, holder, subject, rights, opts)
   }
   rawset(grant, PRIVATE_STATE, private_state)
 
-  -- Metadata is diagnostic only. Authorisation and transfer checks use the
-  -- private snapshot above, never this publicly inspectable table.
+  -- Authorisation and transfer checks use only the private immutable grant state.
   Lifetime.define(grant, {
     label = opts.label,
     role = 'grant',
@@ -192,19 +191,6 @@ function Grant:closed_op()
 end
 
 
-function Grant:inspect()
-  local value = state(self, 2)
-  return {
-    subject = value.subject,
-    grantor = value.grantor,
-    holder = Lifetime.require(self):current_state().custodian,
-    subject_lifetime = value.subject_lifetime,
-    rights = copy_table(value.rights),
-    right_list = copy_list(value.right_list),
-    terms = copy_table(value.terms),
-    meta = copy_table(value.meta),
-  }
-end
 
 Direct.install(Grant, { 'closed' })
 

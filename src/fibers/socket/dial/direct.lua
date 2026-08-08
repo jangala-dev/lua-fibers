@@ -37,7 +37,7 @@ end
 
 local function timeout_error(dial, deadline)
   return IOError.system('socket', 'connect', 'connection attempt deadline expired', 'ETIMEDOUT', nil, {
-    address = dial.endpoint,
+    address = dial._endpoint,
     deadline = deadline,
   })
 end
@@ -53,7 +53,7 @@ local function connect_completion(dial, handle, driver_scope)
     mode = 'write',
     pull = function(registered_handle)
       if type(registered_handle.finish_connect) ~= 'function' then
-        return { handle = registered_handle, peer = dial.endpoint }
+        return { handle = registered_handle, peer = dial._endpoint }
       end
       local connected, peer, err = registered_handle:finish_connect()
       if connected then return { handle = connected, peer = peer } end
@@ -62,7 +62,7 @@ local function connect_completion(dial, handle, driver_scope)
         IOError.normalise(err, {
           domain = 'socket',
           action = 'connect_finish',
-          address = dial.endpoint,
+          address = dial._endpoint,
         })
     end,
   })
@@ -92,7 +92,7 @@ local function report(dial, status, started_at, completed_at, err)
     kind = 'dial',
     strategy = 'direct',
     status = status,
-    endpoint = dial.endpoint,
+    endpoint = dial._endpoint,
     started_at = started_at,
     completed_at = completed_at,
     duration = completed_at - started_at,
@@ -110,11 +110,11 @@ function Direct.run(dial, driver_scope, opts)
   local host = opts.host or rt.host
   local start_dial = host and host.start_dial
   if type(start_dial) ~= 'function' then
-    local err = IOError.unsupported('host', 'dial', { address = dial.endpoint })
+    local err = IOError.unsupported('host', 'dial', { address = dial._endpoint })
     return nil, err, report(dial, 'failed', started_at, rt:now(), err)
   end
 
-  local handle, err = start_dial(host, dial.endpoint, {
+  local handle, err = start_dial(host, dial._endpoint, {
     label = opts.label,
     nodelay = opts.nodelay,
     local_address = opts.local_address,
@@ -123,7 +123,7 @@ function Direct.run(dial, driver_scope, opts)
     err = IOError.normalise(err, {
       domain = 'socket',
       action = 'dial',
-      address = dial.endpoint,
+      address = dial._endpoint,
     })
     return nil, err, report(dial, 'failed', started_at, rt:now(), err)
   end
@@ -144,9 +144,9 @@ function Direct.run(dial, driver_scope, opts)
   local connection_opts = Connection.options(opts, {
     label = require('fibers.internal.label').describe(dial, dial._fibers_id or 'dial') .. ':connection',
     action = 'open_connection',
-    address = dial.endpoint,
+    address = dial._endpoint,
     peer_address = peer,
-    default_peer = dial.endpoint,
+    default_peer = dial._endpoint,
   })
 
   local connection, connection_err =

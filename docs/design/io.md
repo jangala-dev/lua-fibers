@@ -149,7 +149,7 @@ performs the irreversible launch afterwards. The option means that custody of
 a launch attempt has committed; `Process:launch_result_op` observes the later
 exec handshake.
 
-## Runtime inspection
+## Internal qualification instrumentation
 
 The audit is observational and does not affect production semantics. It uses
 weak references so inspection cannot retain resources.
@@ -171,8 +171,8 @@ runtime has no live handles, no live registrations and no recorded custody viola
 The reactor also exposes:
 
 ```lua
-local registrations = runtime.host_reactor:registration_count()
-runtime.host_reactor:assert_quiescent('after shutdown')
+local registrations = runtime.host_reactor:_registration_count()
+runtime.host_reactor:_assert_quiescent('after shutdown')
 ```
 
 These methods are intended for tests, embedders and diagnostics. The underlying
@@ -183,10 +183,10 @@ These methods are intended for tests, embedders and diagnostics. The underlying
 Every host declares socket support explicitly:
 
 ```lua
-host.capabilities.socket
-host.capabilities.socket_ipv4
-host.capabilities.socket_ipv6
-host.capabilities.socket_unix
+host:feature('socket')
+host:feature('socket_ipv4')
+host:feature('socket_ipv6')
+host:feature('socket_unix')
 ```
 
 A `true` family capability commits the host to the common contract suite. A

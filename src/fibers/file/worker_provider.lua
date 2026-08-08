@@ -130,7 +130,7 @@ end
 
 function Provider:is_supported()
   local host = self.runtime and self.runtime.host
-  return host and host.capabilities and host.capabilities.process == true
+  return host and type(host.supports) == 'function' and host:supports('process')
 end
 
 function Provider:open(path, mode, opts)

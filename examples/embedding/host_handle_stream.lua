@@ -23,10 +23,6 @@ local handle = Handle.new({
   host = host,
   label = 'example-duplex',
   key = { read = input:readiness_key(), write = output:readiness_key() },
-  capabilities = {
-    read = true, write = true, shutdown_read = true, shutdown_write = true,
-    close = true, set_nonblocking = false, readiness = true,
-  },
   read = function(_, maximum) return input:read(maximum) end,
   write = function(_, bytes) return output:write(bytes) end,
   shutdown_read = function(_, reason) return input:shutdown_read(reason) end,

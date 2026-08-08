@@ -6,6 +6,7 @@ package.path = table.concat({
 local fibers = require('fibers')
 local Op = require('fibers.op')
 local Lifetime = require('fibers.lifetime')
+local Lifetimes = require('tests.support.lifetimes')
 local Closure = require('fibers.closure')
 
 local function eq(a, b, msg)
@@ -59,7 +60,7 @@ do
   }
   eq(#log, #expected)
   for i = 1, #expected do eq(log[i], expected[i], 'closure order at ' .. i) end
-  eq(Lifetime.of(root):current_state().closure_phase, 'closed')
+  eq(Lifetimes.state(root).closure_phase, 'closed')
 end
 
 -- A failed closure retains completed progress and an exclusive recovery
@@ -97,7 +98,7 @@ do
   good_count = 0
   for i = 1, #log do if log[i] == 'finish good' then good_count = good_count + 1 end end
   eq(good_count, 1, 'completed sibling must not finish twice')
-  eq(Lifetime.of(root):current_state().closure_phase, 'closed')
+  eq(Lifetimes.state(root).closure_phase, 'closed')
 end
 
 -- Complete containment is enforced by the store. A running child whose own
@@ -119,11 +120,11 @@ do
 
   eq(result.ok, false)
   eq(result.reason, 'child_failed')
-  local task_state = task:lifetime():current_state()
+  local task_state = Lifetimes.state(task:lifetime())
   eq(task_state.closure_phase, 'closure_failed')
   truthy(task_state.custodian ~= nil, 'failed child Lifetime must retain parent custody')
-  eq(Lifetime.of(bad):current_state().closure_phase, 'closure_failed')
-  eq(#child_scope:_store():current_records(child_scope, false), 1)
+  eq(Lifetimes.state(bad).closure_phase, 'closure_failed')
+  eq(#child_scope:_store():_roots(child_scope), 1)
 
   local nested_failure, parent_failure
   for i = 1, #(result.closure_failures or {}) do
@@ -135,19 +136,16 @@ do
   truthy(parent_failure, 'parent containment failure must remain recoverable')
   local parent_inspection = parent_failure:inspect()
   local blocker = parent_inspection.failures[1] and parent_inspection.failures[1].blocker
-  truthy(blocker and #blocker.descendants > 0, 'containment diagnostics should identify unresolved descendants')
-  truthy(
-    string.find(blocker.descendants[1].path or '', 'nested%-bad') ~= nil,
-    'containment diagnostics should include the custody path'
-  )
+  truthy(blocker and blocker.count > 0, 'containment failure should retain the unresolved descendant count')
+
 
   fibers.run(function() nested_failure:force() end)
-  eq(Lifetime.of(bad):current_state().closure_phase, 'closed')
-  eq(#child_scope:_store():current_records(child_scope, false), 0)
-  eq(task:lifetime():current_state().closure_phase, 'closure_failed')
+  eq(Lifetimes.state(bad).closure_phase, 'closed')
+  eq(#child_scope:_store():_roots(child_scope), 0)
+  eq(Lifetimes.state(task:lifetime()).closure_phase, 'closure_failed')
 
   fibers.run(function() parent_failure:retry() end)
-  task_state = task:lifetime():current_state()
+  task_state = Lifetimes.state(task:lifetime())
   eq(task_state.closure_phase, 'closed')
   eq(task_state.custodian, nil)
 end

@@ -4,10 +4,7 @@ local External = require('fibers.embed.external')
 local Direct = require('fibers.internal.direct')
 
 local Signal = {}
-Signal.__index = function(self, key)
-  if key == 'version' then return self._location.version end
-  return Signal[key]
-end
+Signal.__index = Signal
 
 local Kind = Facility.kind('signal')
 

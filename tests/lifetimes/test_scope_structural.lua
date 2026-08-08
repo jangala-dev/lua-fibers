@@ -12,6 +12,7 @@ local fibers = require('fibers')
 local Op = require('fibers.op')
 local FibersRendezvous = require('fibers.resource.rendezvous')
 local Lifetime = require('fibers.lifetime')
+local Lifetimes = require('tests.support.lifetimes')
 
 local function fail(msg)
   error(msg, 2)
@@ -47,7 +48,7 @@ do
       fibers.perform(scope:admit_op(h))
       assert_truthy(fibers.perform(scope:has_custody_op(h)), 'inner scope should own admitted handle')
     end)
-    owner_after_inner = Lifetime.of(h):current_state().custodian
+    owner_after_inner = Lifetimes.state(h).custodian
   end)
   assert_eq(owner_after_inner, nil, 'scope exit should release the handle owner')
   assert_eq(retired, 1, 'scope exit should run the Closure protocol once')
@@ -77,7 +78,7 @@ do
     owned_by_root_after_inner = fibers.perform(root:has_custody_op(h))
   end)
   assert_eq(owned_by_root_after_inner, true, 'move should transfer ownership to the root scope')
-  assert_eq(Lifetime.of(h):current_state().custodian, nil, 'root scope exit should retire the handed-off handle')
+  assert_eq(Lifetimes.state(h).custodian, nil, 'root scope exit should retire the handed-off handle')
   assert_eq(retired, 1, 'the handed-off handle should still settle exactly once')
 end
 
@@ -98,7 +99,7 @@ do
     end)
   end)
   assert_eq(owned_inside, true, 'current scope should survive suspension and resume')
-  assert_eq(Lifetime.of(h):current_state().custodian, nil, 'post-suspension owned root should be retired on scope exit')
+  assert_eq(Lifetimes.state(h).custodian, nil, 'post-suspension owned root should be retired on scope exit')
 end
 
 print('tests/test_scope_structural.lua: ok')

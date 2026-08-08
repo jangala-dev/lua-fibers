@@ -1,12 +1,9 @@
 local Op = require('fibers.op')
 local Facility = require('fibers.resource.authoring')
+local perform = require('fibers.perform')
 
 local Petri = {}
-Petri.__index = function(self, key)
-  if key == '_state' then return self._location and self._location.value end
-  if key == 'version' then return self._location and self._location.version or 0 end
-  return Petri[key]
-end
+Petri.__index = Petri
 local Kind = { name = 'petri' }
 local next_net_id = 0
 
@@ -325,9 +322,7 @@ function Petri:marking_op()
   )
 end
 
-function Petri:marking()
-  return marking_of(self._state)
-end
+function Petri:marking() return perform(self:marking_op()) end
 
 Petri.Kind = Kind
 return Petri

@@ -137,11 +137,11 @@ do
   assert_status(st, 'pending')
   assert_truthy(stream, 'stream should open before waiting for writability')
   assert_eq(
-    Inspect.first_lease_bytes(stream:writer().flow),
+    Inspect.first_lease_bytes(stream:writer()._flow),
     nil,
     'reactor should not lease bytes before a writable hint'
   )
-  assert_eq(Inspect.data(stream:writer().flow), 'hello')
+  assert_eq(Inspect.data(stream:writer()._flow), 'hello')
   assert_eq(handle:written(), '')
   handle:unblock_writes()
   drive_until(rt, host, function()

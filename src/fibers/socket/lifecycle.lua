@@ -134,13 +134,6 @@ function Lifecycle.define(spec)
     return value
   end
 
-  function Type:state_value()
-    return self.state.value
-  end
-
-  function Type:state_op()
-    return self.state:read_op()
-  end
 
   function Type:activate_op(handle, address)
     return self.state:transition_op(Activate, { handle = handle, address = address })

@@ -105,7 +105,7 @@ end
 local socket_host = LinuxHost.new()
 if type(rawget(_G, 'jit')) ~= 'table' then
   Common.assert_eq(
-    socket_host.capabilities.resolver,
+    socket_host:feature('resolver'),
     false,
     'compatibility ffi must not advertise unsafe getaddrinfo traversal'
   )

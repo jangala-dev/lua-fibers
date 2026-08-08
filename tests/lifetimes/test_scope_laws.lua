@@ -85,9 +85,9 @@ do
   local live_phase, owner_after, closure_phase
   fibers.run(function()
     fibers.perform(life:admit_op(h))
-    live_phase = fibers.perform(life:custody_op(h)).phase
+    live_phase = Lifetimes.state(h).custody_phase
     fibers.perform(life:close_op(h, 'law closure'))
-    local state = Lifetime.of(h):current_state()
+    local state = Lifetimes.state(h)
     owner_after = state.custodian
     closure_phase = state.closure_phase
   end)

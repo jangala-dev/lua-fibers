@@ -142,10 +142,6 @@ function SendState:flush_op()
   end))
 end
 
-function SendState:state_value()
-  return self.state.value
-end
-
 local Module = {}
 local Datagram = {}
 Datagram.__index = Datagram
@@ -175,21 +171,22 @@ local function datagram_closure(socket)
 end
 
 
-function Datagram:state_op()
-  return self.lifecycle:state_op()
+local function local_address_now(socket)
+  local state = socket._lifecycle.state._location.value
+  return state.address or socket._address
 end
 
-function Datagram:state_value()
-  return self.lifecycle:state_value()
+function Datagram:local_address_op()
+  return self._lifecycle.state:select_op(function(state)
+    if state.kind == 'starting' then return nil, true end
+    return Op.always(state.address or self._address)
+  end)
 end
 
-function Datagram:local_address()
-  local state = self.lifecycle:state_value()
-  return state.address or self.address
-end
 
-function Datagram:host_handle()
-  return self.lifecycle:state_value().handle
+local function host_handle(socket)
+  local state = socket._lifecycle.state._location.value
+  return state and state.handle or nil
 end
 
 function Datagram:send_to_op(data, address)
@@ -200,7 +197,7 @@ function Datagram:send_to_op(data, address)
   if address.kind ~= 'inet4' and address.kind ~= 'inet6' then
     error('DatagramSocket:send_to_op currently supports IPv4 and IPv6 destinations', 2)
   end
-  local local_address = self:local_address()
+  local local_address = local_address_now(self)
   if local_address and local_address.kind ~= address.kind then
     return Op.always(
       nil,
@@ -211,21 +208,21 @@ function Datagram:send_to_op(data, address)
       })
     )
   end
-  local send = self.lifecycle:available_op():and_then(
-    self.sends:admit_op(data, Address.copy(address)):map(function(ok, seq)
+  local send = self._lifecycle:available_op():and_then(
+    self._sends:admit_op(data, Address.copy(address)):map(function(ok, seq)
       if not ok then
         return nil, seq
       end
       return true
     end)
   )
-  return send:or_else(self.lifecycle:unavailable_op():map(function(state)
+  return send:or_else(self._lifecycle:unavailable_op():map(function(state)
     return nil, terminal_error(state, 'send_to')
   end))
 end
 
 function Datagram:flush_op()
-  return self.sends:flush_op()
+  return self._sends:flush_op()
 end
 
 local RECEIVE_OPTIONS = { max_size = true }
@@ -252,10 +249,10 @@ function Datagram:receive_from_op(opts)
   if opts.max_size ~= nil then
     Contract.non_negative_integer(opts.max_size, 'DatagramSocket:receive_from_op max_size', 2)
   end
-  local received = self.packets:next_op():map(function(packet)
+  local received = self._packets:next_op():map(function(packet)
     return limit_packet(packet, opts)
   end)
-  return received:or_else(self.lifecycle:unavailable_op():map(function(state)
+  return received:or_else(self._lifecycle:unavailable_op():map(function(state)
     return nil, terminal_error(state, 'receive_from')
   end))
 end
@@ -263,11 +260,11 @@ end
 function Datagram:close_op(reason)
   local socket = self
   reason = reason or 'datagram socket closed'
-  local cancel = socket.driver and socket.driver:request_cancel_op(reason) or Op.always(true)
-  return socket.lifecycle
+  local cancel = socket._driver and socket._driver:request_cancel_op(reason) or Op.always(true)
+  return socket._lifecycle
     :request_stop_op(reason)
     :and_then(Op.guard(function(first, state)
-      if first and socket.driver then
+      if first and socket._driver then
         return cancel:map(function()
           return first, state
         end)
@@ -284,7 +281,7 @@ function Datagram:close_op(reason)
         if not ok then
           local rt = Runtime.current()
           if rt then
-            IO.masked_perform(rt, socket.lifecycle:record_close_error_op(close_err))
+            IO.masked_perform(rt, socket._lifecycle:record_close_error_op(close_err))
           end
         end
       end
@@ -303,17 +300,17 @@ local function close_result(state)
 end
 
 function Datagram:closed_op()
-  return IO.closed_after_driver_op(self.driver, self.lifecycle:terminal_op():map(close_result))
+  return IO.closed_after_driver_op(self._driver, self._lifecycle:terminal_op():map(close_result))
 end
 
 local function close_from_driver(socket, rt, reason, err, fatal)
-  local first, state = IO.masked_perform(rt, socket.lifecycle:request_stop_op(reason, err, fatal))
+  local first, state = IO.masked_perform(rt, socket._lifecycle:request_stop_op(reason, err, fatal))
   local pending_error = err
     or IOError.closed('datagram', 'send_to', {
       reason = reason,
-      address = socket:local_address(),
+      address = local_address_now(socket),
     })
-  IO.masked_perform(rt, socket.sends:close_op(pending_error))
+  IO.masked_perform(rt, socket._sends:close_op(pending_error))
   if first and state.handle then
     local ok, close_err = IO.safe_close('datagram', state.handle, reason, {
       domain = 'datagram',
@@ -321,10 +318,10 @@ local function close_from_driver(socket, rt, reason, err, fatal)
       address = state.address,
     })
     if not ok then
-      IO.masked_perform(rt, socket.lifecycle:record_close_error_op(close_err))
+      IO.masked_perform(rt, socket._lifecycle:record_close_error_op(close_err))
     end
   end
-  IO.masked_perform(rt, socket.lifecycle:stopped_op(reason, err, fatal))
+  IO.masked_perform(rt, socket._lifecycle:stopped_op(reason, err, fatal))
 end
 
 local function normalise_packet(socket, packet)
@@ -340,7 +337,7 @@ local function normalise_packet(socket, packet)
     end
     packet.peer = peer
   end
-  packet.local_address = packet.local_address or socket:local_address()
+  packet.local_address = packet.local_address or local_address_now(socket)
   packet.truncated = packet.truncated == true
   packet.flags = packet.flags or {}
   return packet
@@ -353,10 +350,10 @@ local function packet_source(socket, capacity)
     action = 'receive_from',
     role = 'datagram_packet_source',
     capacity = capacity,
-    handle = function() return socket:host_handle() end,
+    handle = function() return host_handle(socket) end,
     mode = 'read',
     pull = function(registered_handle)
-      local packet, err = registered_handle:recv_from(socket.max_datagram_size)
+      local packet, err = registered_handle:recv_from(socket._max_datagram_size)
       if not packet then return nil, err end
       local normalised, packet_err = normalise_packet(socket, packet)
       if not normalised then error(packet_err, 0) end
@@ -365,7 +362,7 @@ local function packet_source(socket, capacity)
     closed_error = function(err)
       return IOError.closed('datagram', 'receive_from', {
         reason = err and err.reason or 'datagram socket closed',
-        address = socket:local_address(),
+        address = local_address_now(socket),
       })
     end,
   })
@@ -380,10 +377,10 @@ local function service_send(socket, handle, record)
         actual = n,
         address = record.address,
       })
-      perform(socket.sends:fail_op(record.seq, protocol))
+      perform(socket._sends:fail_op(record.seq, protocol))
       error(protocol, 0)
     end
-    perform(socket.sends:complete_op(record.seq))
+    perform(socket._sends:complete_op(record.seq))
     return nil
   end
   if IOError.is_would_block(err) then return record end
@@ -392,17 +389,17 @@ local function service_send(socket, handle, record)
     action = 'send_to',
     address = record.address,
   })
-  perform(socket.sends:fail_op(record.seq, err))
+  perform(socket._sends:fail_op(record.seq, err))
   error(err, 0)
 end
 
 local function next_driver_event(socket, handle, pending)
-  local terminal = socket.packets:terminal_op():map(function(ok, err)
+  local terminal = socket._packets:terminal_op():map(function(ok, err)
     return 'terminal', ok, err
   end)
   local send = pending and handle:write_ready_op():map(function()
     return 'send', pending
-  end) or socket.sends:next_op():map(function(record)
+  end) or socket._sends:next_op():map(function(record)
     return 'send', record
   end)
   -- Once packet reception has terminated, do not admit another send turn at the
@@ -413,13 +410,13 @@ end
 local function driver(socket, driver_scope)
   local rt = Runtime.current()
   local ok, driver_err = Protected.pcall(function()
-    local handle, start_err = perform(socket.lifecycle:start_result_op())
+    local handle, start_err = perform(socket._lifecycle:start_result_op())
     if not handle then
-      if start_err then IO.masked_perform(rt, socket.sends:close_op(start_err)) end
+      if start_err then IO.masked_perform(rt, socket._sends:close_op(start_err)) end
       return
     end
 
-    perform(socket.packets:open_op(driver_scope))
+    perform(socket._packets:open_op(driver_scope))
     local pending
     while true do
       local event, value, err = perform(next_driver_event(socket, handle, pending))
@@ -446,7 +443,7 @@ local function driver(socket, driver_scope)
     failure = driver_err
   else
     failure = IO.protocol_error('datagram', 'driver', driver_err, {
-      address = socket:local_address(),
+      address = local_address_now(socket),
     })
     fatal = true
   end
@@ -471,7 +468,7 @@ function Module.udp_op(address, opts)
   end
   local receive_capacity = opts.receive_capacity or 64
   local send_capacity = opts.send_capacity or 64
-  local max_datagram_size = opts.max_datagram_size or 65535
+  local max_datagram_size = opts._max_datagram_size or 65535
   Contract.positive_integer(receive_capacity, 'socket.udp_op receive_capacity', 2)
   Contract.positive_integer(send_capacity, 'socket.udp_op send_capacity', 2)
   Contract.non_negative_integer(max_datagram_size, 'socket.udp_op max_datagram_size', 2)
@@ -482,31 +479,31 @@ function Module.udp_op(address, opts)
   local socket = Label.attach(setmetatable({
     kind = 'datagram_socket',
     _fibers_id = id,
-    address = address,
-    lifecycle = DatagramLifecycle.new(address),
-    host_hold = HostHold.new(),
-    sends = SendState.new(send_capacity),
-    max_datagram_size = max_datagram_size,
+    _address = address,
+    _lifecycle = DatagramLifecycle.new(address),
+    _host_hold = HostHold.new(),
+    _sends = SendState.new(send_capacity),
+    _max_datagram_size = max_datagram_size,
   }, Datagram), opts.label)
-  Label.child(socket.lifecycle, socket, 'lifecycle')
-  Label.child(socket.host_hold, socket, 'host-hold')
-  Label.child(socket.sends, socket, 'sends')
-  socket.packets = packet_source(socket, receive_capacity)
+  Label.child(socket._lifecycle, socket, 'lifecycle')
+  Label.child(socket._host_hold, socket, 'host-hold')
+  Label.child(socket._sends, socket, 'sends')
+  socket._packets = packet_source(socket, receive_capacity)
 
   return IO.admit_driven_lifetime_op(scope, socket, {
     operation = 'socket.udp_op',
     label = Label.get(socket),
     role = 'datagram_socket',
     closure = datagram_closure(socket),
-    children = { socket.host_hold },
+    children = { socket._host_hold },
     run = function(driver_scope) return driver(socket, driver_scope) end,
   }):wrap(function()
     return Activation.create(socket, {
       host = opts.host,
       host_method = 'create_datagram',
       options = { label = opts.label, reuse_address = opts.reuse_address },
-      lifecycle = socket.lifecycle,
-      hold = socket.host_hold,
+      lifecycle = socket._lifecycle,
+      hold = socket._host_hold,
       hold_key = 'socket',
       close = close_handle,
       domain = 'datagram',
@@ -525,6 +522,6 @@ end
 
 
 Module.DatagramSocket = Datagram
-Direct.install(Datagram, { 'send_to', 'receive_from', 'flush', 'close', 'closed' })
+Direct.install(Datagram, { 'local_address', 'send_to', 'receive_from', 'flush', 'close', 'closed' })
 
 return Module

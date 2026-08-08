@@ -69,10 +69,10 @@ function IO.admit_driven_lifetime_op(scope, value, spec)
     return private_scope:run(spec.run)
   end, scope, {
     lifetime = value._lifetime,
-    closure = scope.closure,
+    closure = scope._lifetime._closure,
     label = spec.label,
   })
-  value.driver = driver
+  value._driver = driver
 
   return scope:admit_op(value)
     :and_then(driver:spawn_effect_op())

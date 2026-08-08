@@ -43,7 +43,7 @@ local function exchange(host, family)
 end
 
 local host = LinuxHost.new()
-assert(host.capabilities.datagram == true)
+assert(host:feature('datagram') == true)
 exchange(host, 'inet4')
 exchange(host, 'inet6')
 host:close()

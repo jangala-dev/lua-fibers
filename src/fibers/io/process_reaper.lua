@@ -6,9 +6,6 @@
 local IOError = require('fibers.io.error')
 local IOAudit = require('fibers.internal.io_audit')
 local Process = require('fibers.io.process')
-local Op = require('fibers.op')
-local HostOffer = require('fibers.io.offer')
-local Label = require('fibers.internal.label')
 
 local Reaper = {}
 local ACTION =
@@ -207,18 +204,6 @@ function Reaper.new(spec)
     end
   end
 
-  local function wait_child(pid, nonblocking)
-    while true do
-      local result, errno, message = spec.wait(pid, nonblocking)
-      if result then
-        return result
-      end
-      if not spec.interrupted(errno) then
-        return nil, errno, message
-      end
-    end
-  end
-
   local function reaper_main(process_spec, executable, env, stdio, inherited, status_read, status_write)
     close(status_read)
     close_inherited(inherited)
@@ -276,14 +261,14 @@ function Reaper.new(spec)
     close(launch_read)
     if line ~= 'ready\n' then
       spec.kill(child, signals.numbers.kill)
-      wait_child(child, false)
+      Core.wait(spec, child, false)
       write_all(status_write, line ~= '' and line or 'failed exec 0\n')
       close(status_write)
       spec.exit(127)
     end
 
     write_all(status_write, 'pid ' .. tostring(child) .. '\n')
-    local result = wait_child(child, false)
+    local result = Core.wait(spec, child, false)
     if result and result.kind == 'exited' then
       write_all(status_write, 'exited ' .. tostring(result.code or 0) .. '\n')
     elseif result and result.kind == 'signalled' then
@@ -436,48 +421,9 @@ function Reaper.new(spec)
         self.status_handle:bind_runtime(rt)
       end
     end,
-    open_exit = function(self, scope)
-      if not self.exit_source then
-        self.exit_source = HostOffer.new({
-          label = Label.describe(self, self._fibers_id or 'process') .. ':exit',
-          domain = 'process',
-          action = 'reap',
-          role = 'process_exit_completion',
-          one_shot = true,
-          capacity = 1,
-          handle = self.status_handle,
-          mode = self.status_handle and 'read' or 'poll',
-          poll_interval = self.poll_interval,
-          pull = function()
-            return reap_process(self)
-          end,
-        })
-      end
-      return self.exit_source:open_op(scope)
-    end,
-    exit = function(self)
-      if self.reaped and self.status then return Op.always(self.status) end
-      if not self.exit_source then
-        return Op.always(nil, IOError.protocol('process', 'exit', 'process exit source is not open', { pid = self._pid }))
-      end
-      return self.exit_source:result_op()
-    end,
-    signal = function(self, number, target)
-      local destination = target == 'group' and -math.abs(self.group_id or self._pid) or self._pid
-      local ok, errno, message = spec.kill(destination, number)
-      if not ok then
-        return nil,
-          IOError.system(
-            'process',
-            'signal',
-            message or spec.message(errno),
-            spec.name_of(errno),
-            errno,
-            { pid = self._pid, signal = number, target = target }
-          )
-      end
-      return true
-    end,
+    reap = reap_process,
+    exit_handle = function(self) return self.status_handle end,
+    kill = spec.kill, message = spec.message, name_of = spec.name_of,
     close = function(self, reason)
       if self.status_handle then
         self.status_handle:close(reason or 'process closed')
@@ -490,14 +436,7 @@ function Reaper.new(spec)
     end,
   })
 
-  local Provider = {}
-  function Provider.is_supported()
-    return spec.supported()
-  end
-  function Provider.support_reason()
-    local ok, reason = spec.supported()
-    return ok and nil or reason
-  end
+  local Provider = Core.provider(spec)
 
   function Provider.start_process(host, process_spec)
     local ok, reason = spec.supported()
@@ -562,7 +501,7 @@ function Reaper.new(spec)
       for _, value in pairs(parents) do
         close(value)
       end
-      wait_child(reaper, false)
+      Core.wait(spec, reaper, false)
       return nil, nil, startup_err
     end
     local status_handle, wrap_err = spec.Fd.new(
@@ -587,20 +526,12 @@ function Reaper.new(spec)
       status_handle:close()
       return nil, nil, endpoint_err
     end
-    local process = Label.attach(setmetatable({
-      _fibers_id = 'host-process-' .. tostring(pid),
-      _pid = pid,
+    local process = Core.handle(ProcessClass, pid, process_spec, {
       reaper_pid = reaper,
       group_id = process_spec.process_group == 'new' and pid or nil,
-      poll_interval = process_spec.poll_interval or 0.025,
       status_handle = status_handle,
       buffer = buffer or '',
-      status = nil,
-      terminal_error = nil,
-      reaped = false,
-      closed = false,
-    }, ProcessClass), process_spec.label)
-    IOAudit.created(process, { kind = 'process_handle' })
+    })
     IOAudit.transfer(status_handle, process, { kind = 'host_handle', role = 'process_status' })
     return process, endpoints
   end

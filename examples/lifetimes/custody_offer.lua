@@ -93,8 +93,6 @@ rt:spawn_raw(function()
 
   rt:perform(request:seal_op())
   rt:perform(supervisor:seal_op())
-  result.request_state = rt:perform(request:inspect_op())
-  result.supervisor_state = rt:perform(supervisor:inspect_op())
 end):label('custody-offer-root')
 
 local st
@@ -129,9 +127,5 @@ print('supervisor has custody after?       ' .. yn(result.supervisor_has_custody
 print('registry custodian after commit: ' .. result.registry_after.custodian .. ' / ' .. result.registry_after.task)
 print('task await result:            ' .. tostring(result.await[1]))
 print('supervisor has custody after close? ' .. yn(result.supervisor_has_custody_after_close))
-print('request sealed?              ' .. yn(result.request_state.sealed))
-print('supervisor sealed?           ' .. yn(result.supervisor_state.sealed))
-print('request custody count:         ' .. tostring(result.request_state.custody_count))
-print('supervisor custody count:      ' .. tostring(result.supervisor_state.custody_count))
 print('audit:')
 print('  ' .. result.audit_after.text)

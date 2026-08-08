@@ -293,7 +293,7 @@ function Common.socket_churn_smoke(name, host, count)
 end
 
 function Common.native_datagram_smoke(name, host)
-  if not (host.capabilities and host.capabilities.datagram) then
+  if not (host:supports('datagram')) then
     return false, 'host does not advertise datagram capability'
   end
   local socket = require('fibers.socket')
@@ -318,7 +318,7 @@ function Common.native_datagram_smoke(name, host)
 end
 
 function Common.native_resolver_smoke(name, host)
-  if not (host.capabilities and host.capabilities.resolver) then
+  if not (host:supports('resolver')) then
     return false, 'host does not advertise resolver capability'
   end
   local socket = require('fibers.socket')
@@ -338,7 +338,7 @@ function Common.native_resolver_smoke(name, host)
 end
 
 function Common.native_socket_smoke(name, host)
-  if not (host.capabilities and host.capabilities.socket) then
+  if not (host:supports('socket')) then
     return false, 'host does not advertise socket capability'
   end
   Common.socket_echo_smoke(name .. ':tcp4', host, {

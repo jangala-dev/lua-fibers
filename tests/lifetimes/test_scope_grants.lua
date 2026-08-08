@@ -67,8 +67,8 @@ do
     holder = FibersScope.new( { runtime = rt }):label('grant-holder')
     fibers.perform(owner:admit_op(h))
     grant = fibers.perform(owner:grant_op(h, holder, { 'read' }))
-    subject_owner = Lifetime.of(h):current_state().custodian
-    grant_owner = Lifetime.of(grant):current_state().custodian
+    subject_owner = Lifetimes.state(h).custodian
+    grant_owner = Lifetimes.state(grant).custodian
     read_auth = fibers.perform(maybe(holder:can_op(h, 'read')))
     write_auth = fibers.perform(maybe(holder:can_op(h, 'write')))
     fibers.perform(holder:close_op(grant, 'revoked'))
@@ -159,7 +159,7 @@ do
       terms = { transferable = true },
     }))
     fibers.perform(first:move_op(movable, second))
-    explicit_moved = Lifetime.of(movable):current_state().custodian == second:lifetime()
+    explicit_moved = Lifetimes.state(movable).custodian == second:lifetime()
     fibers.perform(second:close_op(movable, 'cleanup'))
     fibers.perform(owner:close_op(h, 'done'))
   end)
@@ -215,7 +215,7 @@ end
 -- fields and inspection snapshots cannot be used to escalate authority.
 do
   local h = Lifetimes.resource('grant-immutable-subject')
-  local write_auth, moved, inspected_write
+  local write_auth, moved, still_read_only
   fibers.run(function(owner)
     local holder = FibersScope.new( { runtime = FibersRuntime.current() }):label('grant-immutable-holder')
     local destination = FibersScope.new( { runtime = FibersRuntime.current() }):label('grant-immutable-destination')
@@ -227,10 +227,7 @@ do
     grant.terms = { transferable = true }
     grant.subject_lifetime = Lifetime.of({})
 
-    local inspected = grant:inspect()
-    inspected.rights.write = true
-    inspected.terms.transferable = true
-    inspected_write = grant:inspect().rights.write == true
+    still_read_only = grant:has_right('read') and not grant:has_right('write')
 
     write_auth = fibers.perform(maybe(holder:can_op(h, 'write')))
     moved = pcall(function()
@@ -241,7 +238,7 @@ do
   end)
   assert_eq(write_auth, 'no', 'mutating a Grant view must not add authority')
   assert_eq(moved, false, 'mutating a Grant view must not enable transfer')
-  assert_eq(inspected_write, false, 'mutating an inspection snapshot must not alter the Grant')
+  assert_eq(still_read_only, true, 'mutating public fields must not alter Grant authority')
 end
 
 

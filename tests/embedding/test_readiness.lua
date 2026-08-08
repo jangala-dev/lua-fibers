@@ -206,7 +206,7 @@ do
   end
   assert_nil(got, 'stale readable hint should not append bytes')
   assert_nil(err, 'stale readable hint should not commit an error')
-  assert_eq(Inspect.reserved(stream:reader().flow), 0, 'would_block must release producer-side capacity')
+  assert_eq(Inspect.reserved(stream:reader()._flow), 0, 'would_block must release producer-side capacity')
   backend:feed_read('x')
   backend:mark_readable()
   drive_until(rt, function()
@@ -234,17 +234,17 @@ do
   end):label('root')
   for _ = 1, 20 do
     rt:run()
-    if stream and Inspect.data(stream:writer().flow) == 'abc' then
+    if stream and Inspect.data(stream:writer()._flow) == 'abc' then
       break
     end
   end
   assert_truthy(stream, 'stream should open')
   assert_eq(
-    Inspect.first_lease_bytes(stream:writer().flow),
+    Inspect.first_lease_bytes(stream:writer()._flow),
     nil,
     'reactor should wait for writability before leasing bytes'
   )
-  assert_eq(Inspect.data(stream:writer().flow), 'abc')
+  assert_eq(Inspect.data(stream:writer()._flow), 'abc')
   assert_eq(backend:written(), '')
   backend:unblock_writes()
   drive_until(rt, function()
@@ -276,13 +276,13 @@ do
   end):label('root')
   for _ = 1, 80 do
     rt:step({ max_work = 1 })
-    if stream and Inspect.data(stream:writer().flow) == 'xy' then
+    if stream and Inspect.data(stream:writer()._flow) == 'xy' then
       break
     end
   end
   assert_truthy(stream, 'bounded stream should open')
   assert_eq(
-    Inspect.first_lease_bytes(stream:writer().flow),
+    Inspect.first_lease_bytes(stream:writer()._flow),
     nil,
     'bounded reactor should not lease before writability'
   )

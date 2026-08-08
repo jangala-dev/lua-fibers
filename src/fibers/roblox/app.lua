@@ -47,6 +47,7 @@ function Application.new(fn, opts)
   self._reschedule = false
   self._phase_requested = false
   self._scheduling = nil
+  self.runtime._fibers_roblox_application = self
   return setmetatable(self, Application)
 end
 
@@ -103,7 +104,7 @@ function Application:_request_event_turn(reason)
     if self._settled then
       return
     end
-    if status.needs_immediate_resume or self._reschedule or self.host:has_pending_wake() then
+    if status.needs_immediate_resume or self._reschedule or self.host:_has_pending_wake() then
       self._reschedule = false
       self:_request_event_turn(status.reason or reason or 'resume')
     else
@@ -175,7 +176,7 @@ function Application:_attach_phase(opts)
       local status = self:advance()
       if not self._settled then
         self._next_deadline = status.next_deadline
-        if status.needs_immediate_resume or self.host:has_pending_wake() then
+        if status.needs_immediate_resume or self.host:_has_pending_wake() then
           self._phase_requested = true
         end
       end
