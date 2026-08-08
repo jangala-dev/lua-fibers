@@ -26,7 +26,7 @@ end
 
 function Signal.new()
   local signal = Facility.identity(setmetatable({}, Signal), Kind)
-  signal._location = Facility.location(signal, 'state', {
+  signal._location = Facility.location(signal, {
     algebra = 'machine',
     domain = 'external',
     value = { ready = false },

@@ -272,7 +272,7 @@ do
   local Facility = require('fibers.resource.authoring')
   local rt = Runtime.new()
   local resource = { name = 'generic-external-resource' }
-  local location = Facility.location(resource, 'value', { algebra = 'replace', value = nil })
+  local location = Facility.location(resource, { algebra = 'replace', value = nil })
   ExternalModule.attach(
     resource,
     location,

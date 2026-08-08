@@ -2,6 +2,7 @@
 
 local Journal = require('fibers.internal.kernel.journal')
 local Proof = require('fibers.internal.proof')
+local Effect = require('fibers.effect')
 
 local Candidate = {}
 Candidate.__index = Candidate
@@ -60,28 +61,45 @@ function Candidate:discard(reason)
   end
 end
 
-local function effect_key(kind, payload)
-  local key = kind.key(payload)
+local function contract_error(runtime, phase, message)
+  return runtime:_fatal('effect_contract_error', message, {
+    phase = phase,
+    committed = false,
+    level = 0,
+  })
+end
+
+local function effect_key(runtime, kind, payload)
+  local key = runtime:_call_contract_in_phase('effect_key', 'effect_contract_error', kind.key, payload)
   if type(key) == 'number' and key ~= key then
-    return nil, { kind = 'invalid_effect_key', message = 'effect kind ' .. tostring(kind.name) .. ' returned NaN as its key' }
+    contract_error(runtime, 'effect_key',
+      'effect kind ' .. tostring(kind.name) .. ' returned NaN as its key')
   end
   return key == nil and NIL_EFFECT_KEY or key
 end
 
-local function merge_effects(source)
+local function merge_effects(engine, source)
+  local runtime = engine.runtime
   local by_kind, ordered = {}, {}
   for i = 1, #source do
     local effect, kind = source[i], source[i].kind
-    local key, err = effect_key(kind, effect.payload)
-    if key == nil then return nil, err end
+    local key = effect_key(runtime, kind, effect.payload)
     local bucket = by_kind[kind]
     if not bucket then bucket = {}; by_kind[kind] = bucket end
     local old = bucket[key]
     if old then
-      local payload
-      payload, err = kind.merge(old.payload, effect.payload)
-      if not payload then return nil, err end
-      old.payload = payload
+      local merged = runtime:_call_contract_in_phase(
+        'effect_merge', 'effect_contract_error', kind.merge, old.payload, effect.payload
+      )
+      if Effect.is_rejection(merged) then
+        return nil, Effect.rejection_reason(merged), true
+      end
+      if type(merged) ~= 'table' then
+        contract_error(runtime, 'effect_merge',
+          'effect kind ' .. tostring(kind.name)
+            .. ' merge must return a payload table or Effect.reject(reason)')
+      end
+      old.payload = merged
     else
       local copy = { _fibers_effect = true, kind = kind, payload = effect.payload }
       bucket[key], ordered[#ordered + 1] = copy, copy
@@ -94,19 +112,21 @@ function Candidate:prepare(engine)
   if self.prepared_effects then return self.prepared_effects end
   local source = self.effects
   if not source or #source == 0 then self.prepared_effects = EMPTY; return EMPTY end
-  local effects, err = merge_effects(source)
-  if not effects then return nil, err end
+  local effects, err, rejected = merge_effects(engine, source)
+  if not effects then return nil, err, rejected end
   local runtime, prepared = engine.runtime, {}
   for i = 1, #effects do
     local effect = effects[i]
-    local value
-    value, err = runtime:_call_in_phase('effect_prepare', 'effect_error', effect.kind.prepare, runtime, effect.payload)
-    if not value then return nil, err end
+    local value = runtime:_call_contract_in_phase(
+      'effect_prepare', 'effect_contract_error', effect.kind.prepare, runtime, effect.payload
+    )
+    if Effect.is_rejection(value) then
+      return nil, Effect.rejection_reason(value), true
+    end
     if type(value) ~= 'table' or type(value.discharge) ~= 'function' then
-      return nil, {
-        kind = 'invalid_prepared_effect',
-        message = 'effect kind ' .. tostring(effect.kind.name) .. ' prepare must return a record with discharge',
-      }
+      contract_error(runtime, 'effect_prepare',
+        'effect kind ' .. tostring(effect.kind.name)
+          .. ' prepare must return a record with discharge or Effect.reject(reason)')
     end
     prepared[#prepared + 1] = value
   end
@@ -133,7 +153,7 @@ function Candidate:settle(engine)
   end
 
   local prepared, err = self:prepare(engine)
-  if not prepared then return false, err or 'effect-prepare-refused' end
+  if not prepared then return false, err or 'effect-rejected' end
 
   local count, request1, request2 = self:count(), self:participant(1), self:participant(2)
   local outcome1 = request1 and self:outcome(1, request1) or nil

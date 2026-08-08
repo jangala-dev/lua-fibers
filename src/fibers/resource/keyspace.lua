@@ -30,7 +30,7 @@ function Keyspace:location(key)
   self.initial[key] = nil
   if initial == nil and self.absent then initial = self.absent end
   if self.clone_initial then initial = self.clone_initial(initial) end
-  location = Facility.location(self.owner, key, {
+  location = Facility.location(self.owner, {
     algebra = self.algebra,
     domain = self.domain,
     value = initial,

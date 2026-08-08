@@ -127,6 +127,29 @@ function Task:diagnostic_label()
 end
 
 
+local function exit_from_protected(results)
+  if results[1] then
+    return Exit.returned(unpack_(results, 2, results.n))
+  end
+  local err = results[2]
+  if Runtime.is_cancelled and Runtime.is_cancelled(err) then
+    return Exit.cancelled(err.reason, err.token)
+  end
+  return Exit.failed(err)
+end
+
+-- Publish the execution result at the point where the user's Task body exits,
+-- not after the Scope sharing this Lifetime has retired its descendants. The
+-- publish is one-shot: the outer Task runner may call this again as a fallback
+-- if setup failed before the user's body was entered.
+function Task:_publish_protected_body_result(results, runtime)
+  local rt = runtime or Runtime.current()
+  if not rt then error('task body result published without a current runtime', 2) end
+  local exit = exit_from_protected(results)
+  rt:perform(self._lifetime:publish_body_result_op(exit), { masked = true })
+  return exit
+end
+
 function Task:_spawn_body(fn)
   local task = self
   return function()
@@ -134,18 +157,7 @@ function Task:_spawn_body(fn)
     if not rt then error('task started without a current runtime', 2) end
     local results = pack(Protected.pcall(fn, task))
     fn = nil
-    local exit
-    if results[1] then
-      exit = Exit.returned(unpack_(results, 2, results.n))
-    else
-      local err = results[2]
-      if Runtime.is_cancelled and Runtime.is_cancelled(err) then
-        exit = Exit.cancelled(err.reason, err.token)
-      else
-        exit = Exit.failed(err)
-      end
-    end
-    rt:perform(task._lifetime:publish_body_result_op(exit), { masked = true })
+    task:_publish_protected_body_result(results, rt)
   end
 end
 
@@ -195,7 +207,13 @@ function Task:await_op()
 end
 
 function Task:request_cancel_op(reason)
-  return self._lifetime:request_cancel_op(reason)
+  -- A Task is the control capability for the complete running Lifetime, not only
+  -- for its current coroutine suspension. Route cancellation through the Scope
+  -- view so Closure policy seals admission and propagates the request to retained
+  -- descendants even after the user body has already exited. Require lazily to
+  -- avoid the Task <-> Scope construction cycle at module load time.
+  local Scope = require('fibers.scope')
+  return Scope.for_lifetime(self._lifetime):request_cancel_op(reason)
 end
 
 function Task:cancel_requested_op()

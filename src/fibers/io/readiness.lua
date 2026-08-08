@@ -58,7 +58,7 @@ function Readiness.new(key, initial_mode)
     }, Readiness),
     Kind
   )
-  r._location = Facility.location(r, 'state', {
+  r._location = Facility.location(r, {
     algebra = 'machine',
     domain = 'external',
     value = { read = false, write = false },

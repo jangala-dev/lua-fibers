@@ -29,7 +29,7 @@ CloseReasonKind = Effect.kind({
   end,
   prepare = function(_runtime, payload)
     if type(payload.state) ~= 'table' then
-      return nil, 'closure close-reason effect requires retained Closure state'
+      error('closure close-reason effect requires retained Closure state', 0)
     end
     return {
       kind = CloseReasonKind,

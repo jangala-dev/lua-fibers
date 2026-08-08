@@ -85,7 +85,7 @@ Facilities must place each callback in one of three phases.
 | Phase | Facility callbacks | Requirements |
 |---|---|---|
 | Speculative search | guards, `map`, transition rules, effect `key` and `merge` | Deterministic, non-yielding and replayable. No external mutation, performing, spawning or irreversible work. |
-| Candidate-world effect protocol | effect `prepare` and `discharge` | `prepare` is pure and may be called repeatedly or discarded. It returns either a structured refusal or a prepared record with `discharge`. `discharge` runs once after state installation. |
+| Candidate-world effect protocol | effect `prepare` and `discharge` | `prepare` is pure and may be called repeatedly or discarded. It returns either `Effect.reject(reason)` or a prepared record with `discharge`. Malformed returns are contract errors. `discharge` runs once after state installation. |
 | Participant continuation | `wrap` | Runs after commit in the resumed fiber. It may perform, spawn and interact with the outside world. |
 
 `prepare` must not reserve host capacity or acquire an external resource. It may inspect only the effect payload, captured runtime configuration and managed facts already represented by the candidate. A refusal based on untracked volatile host state is invalid because it could admit an `or_else` fallback without a revalidatable proof. Model such capacity or readiness as a managed resource, then put the irreversible host action in `discharge`.
@@ -123,7 +123,7 @@ These recipes are tested but are not part of the installed version 1 surface.
 
 ## Closed executable-leaf protocol
 
-The public Op graph is executed directly. Trusted primitive leaves and the transactional store remain implementation details under `fibers.internal`. New leaf kinds or trusted transition behaviour require repository-level review and require repository-level review under the trusted-authoring contract below.
+The public Op graph is executed directly. Trusted primitive leaves and the transactional store remain implementation details under `fibers.internal`. New leaf kinds or trusted transition behaviour require repository-level review under the trusted-authoring contract below.
 
 
 ## Ordered finite-map selection
@@ -167,7 +167,7 @@ local kind = Effect.kind({
   merge = function(a, b)
     return combine(a, b)
   end,
-  prepare = function(payload, runtime)
+  prepare = function(runtime, payload)
     return {
       discharge = function()
         publish(payload)
@@ -201,7 +201,7 @@ Effects of one kind may share a key and merge into one committed obligation.
 
 Keying and merging are speculative callbacks. They must be deterministic, non-yielding and free of external effects.
 
-A merge may reject incompatible obligations. Rejection invalidates that candidate world; it does not partially discharge either obligation.
+A merge may reject incompatible obligations only by returning `Effect.reject(reason)`. Rejection invalidates that candidate world; it does not partially discharge either obligation. Returning `nil` or another malformed value is a trusted-authoring contract error rather than a semantic conflict. An exception raised by `key`, `merge` or `prepare` is likewise an authoring failure and does not cause search to backtrack; Fibers-generated phase violations retain their more specific `phase_error` classification.
 
 ### Preparation
 
@@ -211,7 +211,7 @@ It must remain pure. It may:
 
 - validate the complete merged payload;
 - calculate a discharge plan;
-- reject the candidate;
+- reject the candidate explicitly with `Effect.reject(reason)`;
 - capture immutable values needed after commitment.
 
 It must not:
@@ -346,7 +346,7 @@ Mutable perform state belongs to the activation, journal and search.
 Create authoritative committed state through `Facility.location`:
 
 ```lua
-local location = Facility.location(box, 'value', {
+local location = Facility.location(box, {
   algebra = 'replace',
   domain = 'plain',
   value = initial,
@@ -386,6 +386,13 @@ A rule returns `nil` when presently blocked, or an outcome when ready:
 ```lua
 return Facility.outcome(patch_or_nil, results...)
 ```
+
+Every transition outcome must carry a canonical, nil-preserving Fibers value
+pack. `Facility.outcome` constructs that pack for ordinary results. If a facility
+already has a packed result, use `Facility.outcome_packed`; passing an ordinary
+table with an `n` field is not equivalent. Resource authoring is a trusted
+boundary: the kernel relies on this invariant and does not inspect or repair
+ambiguous result representations during search.
 
 Nils and result arity are preserved. A read-only outcome passes `nil` as its
 patch.
@@ -573,6 +580,16 @@ Unknown never opens fallback
 stale candidates fail validation
 post-commit actions run only for the selected world
 ```
+
+These names are executable repository requirements in
+`tests/support/facility_conformance.lua`. A trusted primitive test calls
+`Conformance.check { ... }` and supplies a check for every applicable law; a
+non-applicable law requires an explicit reason rather than disappearing from
+review. The same kit exposes `Conformance.differential`, which drives generated
+finite cases through independent production and reference translators.
+`tests/reference/test_facility_authoring_conformance.lua` applies all ten laws
+to authoring-level state rules and compares 192 generated additive cases with
+`reference/evaluator.lua`.
 
 Do not attach mutable perform state to a shared specification or `Op`. Do not
 add facility-specific evaluator exceptions where a state rule, exchange or

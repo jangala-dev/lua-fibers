@@ -10,9 +10,11 @@
 --     irreversible host action represented by the prepared record.
 --
 -- prepare must not reserve capacity, mutate host state, deliver external facts,
--- spawn, perform, yield or otherwise require rollback.  It may return nil plus a
--- structured reason to reject the candidate, or a prepared record containing a
--- discharge function.  A refusal must depend only on the payload, captured
+-- spawn, perform, yield or otherwise require rollback. It returns either an
+-- explicit Effect.reject(reason) value or a prepared record containing a
+-- discharge function. Returning nil or a malformed record is an authoring
+-- contract error, not semantic candidate rejection. A refusal must depend only
+-- on the payload, captured
 -- runtime configuration or managed facts already represented by the candidate.
 --
 -- Effect identity is the pair (EffectKind object, raw Lua key).  Lua types and
@@ -82,6 +84,30 @@ end)()
 
 local Effect = {}
 
+local Rejection = {}
+Rejection.__index = Rejection
+
+-- Explicit semantic refusal from merge/prepare. Trusted effect callbacks must
+-- use this value when a well-formed candidate world is inadmissible. Ordinary
+-- nil returns are reserved for authoring mistakes so they cannot silently alter
+-- choice/or_else semantics.
+function Effect.reject(reason)
+  if reason == nil then
+    reason = { kind = 'effect_rejected', message = 'effect candidate rejected' }
+  elseif type(reason) == 'string' then
+    reason = { kind = 'effect_rejected', message = reason }
+  end
+  return setmetatable({ _fibers_effect_rejection = true, reason = reason }, Rejection)
+end
+
+function Effect.is_rejection(value)
+  return type(value) == 'table' and getmetatable(value) == Rejection
+end
+
+function Effect.rejection_reason(value)
+  return Effect.is_rejection(value) and value.reason or nil
+end
+
 
 function Effect.kind(spec)
   return EffectKind.new(spec)
@@ -115,7 +141,7 @@ InterruptKind = EffectKind.new({
   end,
   prepare = function(_rt, payload)
     if type(payload.token) ~= 'table' or not payload.token._fibers_interrupt then
-      return nil, 'interrupt effect requires an interrupt token'
+      error('interrupt effect requires an interrupt token', 0)
     end
     return {
       kind = InterruptKind,
@@ -144,23 +170,23 @@ SpawnKind = EffectKind.new({
   name = 'spawn',
   key = spawn_key,
   merge = function()
-    return nil, { kind = 'effect_conflict', message = 'duplicate spawn effect' }
+    return Effect.reject({ kind = 'effect_conflict', message = 'duplicate spawn effect' })
   end,
   prepare = function(rt, payload)
     local owner = payload.owner
     if owner ~= nil then
       if type(owner) ~= 'table' or type(owner._take_spawn_body) ~= 'function' then
-        return nil, 'owned spawn effect requires a Task owner'
+        error('owned spawn effect requires a Task owner', 0)
       end
       local life = owner._lifetime
       if type(life) ~= 'table' or type(life.body) ~= 'function' then
-        return nil, 'owned spawn effect requires a dormant task body'
+        error('owned spawn effect requires a dormant task body', 0)
       end
       if life.runtime ~= nil and life.runtime ~= rt then
-        return nil, 'spawn Task belongs to another runtime'
+        error('spawn Task belongs to another runtime', 0)
       end
     elseif type(payload.fn) ~= 'function' then
-      return nil, 'spawn effect requires a function or Task owner'
+      error('spawn effect requires a function or Task owner', 0)
     end
     return {
       kind = SpawnKind,

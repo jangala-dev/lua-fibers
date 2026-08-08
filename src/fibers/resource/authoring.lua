@@ -51,10 +51,9 @@ function M.identity(resource, kind)
   return Label.attach(resource)
 end
 
-function M.location(owner, suffix, opts)
+function M.location(owner, opts)
   opts = opts or {}
   opts.owner = opts.owner or owner
-  opts.name = opts.name or (Label.describe(owner, owner and owner._fibers_id or 'resource') .. ':' .. tostring(suffix or 'state'))
   return Journal.new_location(opts)
 end
 

@@ -247,7 +247,7 @@ function Calendar.new(initial, name)
     _fibers_id = 'calendar-' .. next_calendar_id,
     _fibers_kind = Kind,
   }, Calendar)
-  calendar._location = Facility.location(calendar, 'schedule', {
+  calendar._location = Facility.location(calendar, {
     algebra = 'machine',
     domain = 'plain',
     value = state,

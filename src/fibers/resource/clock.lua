@@ -17,7 +17,7 @@ end
 
 function Clock.new()
   local c = Facility.identity(setmetatable({}, Clock), Kind)
-  c._location = Facility.location(c, 'observation', {
+  c._location = Facility.location(c, {
     algebra = 'machine',
     domain = 'external-clock',
     value = false,

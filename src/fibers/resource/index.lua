@@ -44,7 +44,7 @@ local function create(entries)
     if seq > index._next_seq then index._next_seq = seq end
     index._initial_entries[key] = { key = key, rank = rank, value = entry.value, seq = seq }
   end
-  index._location = Facility.location(index, 'entries', {
+  index._location = Facility.location(index, {
     algebra = 'finite_map',
     domain = 'finite_map',
     value = index._initial_entries,

@@ -56,7 +56,7 @@ ApplyRadioConfig = Effect.kind({
   merge = function(first, second)
     local config, err = merge_fields(first.config, second.config)
     if not config then
-      return nil, err
+      return Effect.reject(err)
     end
     return { radio = first.radio, config = config }
   end,
@@ -65,10 +65,10 @@ ApplyRadioConfig = Effect.kind({
     -- Pure and replayable: reject unsupported candidate worlds, but do not
     -- reserve the driver or touch the radio here.
     if payload.config.channel > driver_capabilities.highest_channel then
-      return nil, {
+      return Effect.reject({
         kind = 'unsupported_radio_channel',
         channel = payload.config.channel,
-      }
+      })
     end
 
     return {

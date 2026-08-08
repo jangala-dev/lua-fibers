@@ -23,7 +23,7 @@ end
 
 -- Joining a materialised child into an unmaterialised parent applies its delta once.
 do
-  local location = Journal.new_location({ algebra = 'add', value = 5, name = 'join-once' })
+  local location = Journal.new_location({ algebra = 'add', value = 5 })
   local journal = Journal.new()
   local parent = journal:new_segment(1, {}, nil)
   local child = journal:new_segment(1, { { group_id = 1, mode = 'independent', lane = 1 } }, parent)

@@ -252,13 +252,13 @@ function Op.each(...)
   return product('independent', 'each', ...)
 end
 
-function Op.named_each(entries)
-  local parsed = parse_named_entries(entries, 'named_each')
+local function named_product(entries, label, constructor)
+  local parsed = parse_named_entries(entries, label)
   local lanes = {}
   for i = 1, #parsed do
     lanes[i] = parsed[i][2]
   end
-  return Op.each(lanes):map(function(rows)
+  return constructor(lanes):map(function(rows)
     local out = {}
     local raw = {}
     out._rows = raw
@@ -272,10 +272,18 @@ function Op.named_each(entries)
   end)
 end
 
+function Op.named_each(entries)
+  return named_product(entries, 'named_each', Op.each)
+end
+
 -- Interacting conjunction. Compatible siblings may supply one another, such as
 -- a scene cue written in one lane and read in another.
 function Op.together(...)
   return product('interacting', 'together', ...)
+end
+
+function Op.named_together(entries)
+  return named_product(entries, 'named_together', Op.together)
 end
 
 -- Transform provisional values during search. fn is pure, non-yielding and may

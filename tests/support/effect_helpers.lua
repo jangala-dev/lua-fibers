@@ -10,10 +10,10 @@ M.TagKind = Effect.kind({
   merge = function(a, b)
     local at, bt = a.tag or a.kind, b.tag or b.kind
     if at ~= bt then
-      return nil, { kind = 'effect_conflict', message = 'tag key mismatch' }
+      return Effect.reject({ kind = 'effect_conflict', message = 'tag key mismatch' })
     end
     if a.value ~= nil and b.value ~= nil and a.value ~= b.value then
-      return nil, { kind = 'effect_conflict', message = 'tag value conflict' }
+      return Effect.reject({ kind = 'effect_conflict', message = 'tag value conflict' })
     end
     return a
   end,
@@ -38,7 +38,7 @@ M.ConflictKind = Effect.kind({
     return 'same'
   end,
   merge = function(_a, _b)
-    return nil, { kind = 'effect_conflict', message = 'test conflict' }
+    return Effect.reject({ kind = 'effect_conflict', message = 'test conflict' })
   end,
   prepare = function(_rt, payload)
     return {
@@ -59,7 +59,7 @@ M.PrepareRefuseKind = Effect.kind({
     return a
   end,
   prepare = function()
-    return nil, { kind = 'effect_prepare_refused', message = 'refused by test kind' }
+    return Effect.reject({ kind = 'effect_prepare_refused', message = 'refused by test kind' })
   end,
 })
 

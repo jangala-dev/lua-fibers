@@ -194,7 +194,6 @@ local function none()
   return { next = function() return nil end }
 end
 
-
 function Operation.transition_cursor(leaf, value, context, phase, occurrence)
   local transition = Operation.transition_behaviour(leaf)
   local argument = Operation.argument(leaf, occurrence)

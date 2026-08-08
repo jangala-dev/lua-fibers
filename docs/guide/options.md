@@ -229,7 +229,7 @@ assert(rows[1][3] == 'c')
 assert(rows[2][1] == 42)
 ```
 
-`Op.named_each` returns a table keyed by lane name. A single-valued lane is projected directly; the original packed rows remain available through `_rows`.
+`Op.named_each` and `Op.named_together` return tables keyed by lane name. A single-valued lane is projected directly; the original packed rows remain available through `_rows`. The former retains `each` independence; the latter retains `together` sibling interaction.
 
 ## `wrap`: participant continuation after commitment
 

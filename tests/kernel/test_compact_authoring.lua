@@ -13,9 +13,9 @@ local Operation = require('fibers.internal.operation')
 local Runtime = require('fibers.runtime')
 local Machine = require('fibers.resource.machine')
 
-local owner = Facility.identity({}, Facility.kind('compact-authoring-test'), 'compact-authoring-test')
-local replace = Facility.location(owner, 'replace', { algebra = 'replace', value = 0 })
-local machine = Facility.location(owner, 'machine', { algebra = 'machine', value = 0 })
+local owner = Facility.identity({}, Facility.kind('compact-authoring-test'))
+local replace = Facility.location(owner, { algebra = 'replace', value = 0 })
+local machine = Facility.location(owner, { algebra = 'machine', value = 0 })
 
 assert(Facility.exchange == nil)
 assert(Facility.supply == nil)
@@ -140,6 +140,19 @@ do
   assert(ran == false)
   assert(tostring(run_err):find('inspect rule cannot stage a patch', 1, true))
   assert(replace.value == 0 and replace.version == 0)
+end
+
+-- Transition outcomes use one canonical nil-preserving Fibers value pack.
+do
+  local Values = require('fibers.internal.values')
+  local outcome = Facility.outcome(nil, nil, true)
+  assert(Values.is(outcome.result))
+  assert(outcome.result.n == 2 and outcome.result[1] == nil and outcome.result[2] == true)
+
+  local ok = pcall(function()
+    Facility.outcome_packed(nil, { n = 1, true })
+  end)
+  assert(ok == false)
 end
 
 print('tests/test_compact_authoring.lua: ok')

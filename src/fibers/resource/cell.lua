@@ -28,7 +28,7 @@ local function select_op(resource, select)
 end
 
 function Cell._init(resource, value, algebra)
-  resource._location = Facility.location(resource, 'value', {
+  resource._location = Facility.location(resource, {
     algebra = algebra or 'replace',
     domain = 'plain',
     value = value,

@@ -56,12 +56,12 @@ function M.merge_supply(dst, src)
   return dst
 end
 
-function M.supply_empty(value)
+local function supply_empty(value)
   return not (value and (value.up or value.down or value.any))
 end
 
 function M.may_supply(value, demand)
-  if M.supply_empty(value) then
+  if supply_empty(value) then
     return false
   end
   if value.any or demand == nil then
@@ -179,6 +179,23 @@ local function push(trail, target, value)
   end
 end
 
+local function stage_log(summary, patch, trail)
+  if not summary then
+    return clone_log(patch)
+  end
+  for i = 1, #(patch.ops or {}) do
+    push(trail, summary.ops, copy_operation(patch.ops[i]))
+  end
+  return summary
+end
+
+local function constrain_log(_, patch, orientation)
+  if not orientation then
+    return clone_log(patch)
+  end
+  return filter_operations(patch, orientation == 'up' and 'down' or 'up')
+end
+
 local Replace = { name = 'replace' }
 function Replace.clone(patch)
   return { kind = 'replace', value = patch.value }
@@ -273,6 +290,15 @@ end
 function Machine.supplies()
   return { any = true }
 end
+function Machine.serialise(patch, relation, out)
+  for i = 1, #(patch.steps or {}) do
+    local step = patch.steps[i]
+    out[#out + 1] = { serial = step.serial, value = step.value, relation = relation }
+  end
+end
+function Machine.change(serial, value)
+  return { kind = Machine.name, steps = { { serial = serial, value = value } } }
+end
 
 local Presence = { name = 'presence' }
 Presence.clone = clone_log
@@ -289,15 +315,7 @@ function Presence.apply(_, value, patch)
   end
   return value
 end
-function Presence.stage(summary, patch, trail)
-  if not summary then
-    return Presence.clone(patch)
-  end
-  for i = 1, #(patch.ops or {}) do
-    push(trail, summary.ops, copy_operation(patch.ops[i]))
-  end
-  return summary
-end
+Presence.stage = stage_log
 function Presence.join(_, left, right)
   if #(left.ops or {}) ~= 1 or #(right.ops or {}) ~= 1 then
     return nil, 'presence-complex-parallel-conflict'
@@ -320,12 +338,7 @@ function Presence.join(_, left, right)
   end
   return nil, 'presence-parallel-conflict'
 end
-function Presence.constraint(_, patch, orientation)
-  if not orientation then
-    return Presence.clone(patch)
-  end
-  return filter_operations(patch, orientation == 'up' and 'down' or 'up')
-end
+Presence.constraint = constrain_log
 Presence.supplies = log_supplies
 
 local function merge_map_operation(location, left, right, composition, key)
@@ -368,15 +381,7 @@ function FiniteMap.apply(location, value, patch)
   end
   return out
 end
-function FiniteMap.stage(summary, patch, trail)
-  if not summary then
-    return FiniteMap.clone(patch)
-  end
-  for i = 1, #(patch.ops or {}) do
-    push(trail, summary.ops, copy_operation(patch.ops[i]))
-  end
-  return summary
-end
+FiniteMap.stage = stage_log
 function FiniteMap.join(location, left, right, composition)
   local a, b = left.ops or {}, right.ops or {}
   if #a == 1 and #b == 1 then
@@ -425,23 +430,8 @@ function FiniteMap.join(location, left, right, composition)
   end
   return { kind = 'finite_map', ops = out }
 end
-function FiniteMap.constraint(_, patch, orientation)
-  if not orientation then
-    return FiniteMap.clone(patch)
-  end
-  return filter_operations(patch, orientation == 'up' and 'down' or 'up')
-end
+FiniteMap.constraint = constrain_log
 FiniteMap.supplies = log_supplies
-
-function Machine.serialise(patch, relation, out)
-  for i = 1, #(patch.steps or {}) do
-    local step = patch.steps[i]
-    out[#out + 1] = { serial = step.serial, value = step.value, relation = relation }
-  end
-end
-function Machine.change(serial, value)
-  return { kind = Machine.name, steps = { { serial = serial, value = value } } }
-end
 
 local BY_NAME = {
   replace = Replace,
@@ -465,7 +455,7 @@ function M.get(value)
   return algebra
 end
 
-function M.clone(patch)
+local function clone_patch(patch)
   return patch and M.get(patch.kind).clone(patch) or nil
 end
 
@@ -483,10 +473,10 @@ end
 
 function M.join(location, left, right, composition)
   if not left then
-    return M.clone(right)
+    return clone_patch(right)
   end
   if not right then
-    return M.clone(left)
+    return clone_patch(left)
   end
   return M.get(location).join(location, left, right, composition)
 end

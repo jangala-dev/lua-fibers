@@ -85,7 +85,7 @@ end
 -- Witness cursors retain their position across bounded yields.
 do
   local Journal = require('fibers.internal.kernel.journal')
-  local location = Journal.new_location({ name = 'resumable-witness-location', algebra = 'machine', value = 0 })
+  local location = Journal.new_location({ algebra = 'machine', value = 0 })
   local opened, next_calls = 0, 0
   local leaf = Facility.rule.change({
     visibility = 'together',

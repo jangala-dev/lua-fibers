@@ -133,14 +133,14 @@ do
       'mask', 'without_suspension', 'now', 'current_runtime', 'current_scope', 'pcall', 'xpcall',
     } },
     { 'Op', Op, {
-      'always', 'never', 'choice', 'named_choice', 'each', 'named_each', 'together',
+      'always', 'never', 'choice', 'named_choice', 'each', 'named_each', 'together', 'named_together',
       'and_then', 'or_else', 'guard', 'map', 'wrap', 'on_defeat', 'emit',
       'is_op',
     } },
     { 'Protected', FibersProtected, { 'pcall', 'xpcall' } },
     { 'Runtime', FibersRuntime, { 'new' } },
     { 'External', External, { 'drive', 'external_feed', 'deliver', 'clear', 'signal', 'events', 'readiness' } },
-    { 'Effect', FibersEffect, { 'kind', 'of', 'is_kind', 'is_effect' } },
+    { 'Effect', FibersEffect, { 'kind', 'of', 'is_kind', 'is_effect', 'reject', 'is_rejection', 'rejection_reason' } },
     { 'Machine', FibersMachine, {
       'new', 'rule', 'update', 'select', 'select_when',
       'query', 'query_when', 'transition_op',

@@ -17,7 +17,7 @@ local channel = require('fibers.channel')
 local ManualHost = require('fibers.embed.manual')
 
 local position_fixes = channel.new()
-local selected, position, drive_ready
+local selected, position, drive_ready, transfer
 
 fibers.run(function(scope)
   scope:spawn(function()
@@ -36,10 +36,16 @@ fibers.run(function(scope)
     lidar = Op.always('clear'),
   }))
   drive_ready = readiness.motors .. ' and ' .. readiness.lidar
+
+  transfer = fibers.perform(Op.named_together({
+    source = Op.always('battery'),
+    destination = Op.always('drive'),
+  }))
 end, { host = ManualHost.new() })
 
 assert(selected == 'vision')
 assert(position == 'aisle 7, bay 3')
 assert(drive_ready == 'armed and clear')
+assert(transfer.source == 'battery' and transfer.destination == 'drive')
 print('localisation:', selected, position)
 print('drive:', drive_ready)

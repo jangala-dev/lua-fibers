@@ -255,6 +255,7 @@ return {
     ['tests/native/test_process_native.lua'] = 'host_specific',
     ['tests/reference/test_evaluator.lua'] = 'stock_lua_loader',
     ['tests/reference/test_frontier_conformance.lua'] = 'stock_lua_loader',
+    ['tests/reference/test_facility_authoring_conformance.lua'] = 'portable',
     ['tests/public/test_contracts.lua'] = 'portable',
     ['examples/test_documented_examples.lua'] = 'portable',
     ['tests/public/test_flow.lua'] = 'portable',

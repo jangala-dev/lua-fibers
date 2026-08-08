@@ -42,10 +42,6 @@ local function frontier_active(intent)
   return intent and intent.active and intent or nil
 end
 
-local function frontier_rule(intent)
-  if intent and intent.kind == 'transition' then return Operation.transition_behaviour(intent.spec) end
-end
-
 local BULK_MATCH_THRESHOLD = 32
 
 -- Return one complete left-to-right matching, or nil. Edges may be stored
@@ -243,10 +239,10 @@ local function claim_frontier(state)
     local group
     for i = 1, #ids do
       local intent = frontier_active(ids[i])
-      local rule = frontier_rule(intent)
+      local rule = intent and intent.rule
       if rule and not rule.enumerable then
         if not group then
-          group = { key = location, intents = {}, all_machine = true, accepts_supply = false }
+          group = { intents = {}, all_machine = true, accepts_supply = false }
           groups[#groups + 1] = group
         end
         group.intents[#group.intents + 1] = intent
@@ -287,9 +283,7 @@ end
 
 local unpack_ = table.unpack or unpack
 local pack_ = Values.pack
-local function leaf_kind(leaf)
-  return Operation.leaf_kind(leaf)
-end
+local leaf_kind = Operation.leaf_kind
 local PACK_TRUE = pack_(true)
 local ACT = {
   annotated = {}, and_then_prefix = {}, and_then_result = {}, choice = {}, exchange = {},
@@ -298,7 +292,7 @@ local ACT = {
 }
 
 local function unpack_pack(p)
-  return unpack_(p, 1, p.n or #p)
+  return unpack_(p, 1, p.n)
 end
 
 local function new_outcome(task, packed, wrap)
@@ -347,17 +341,8 @@ local function copy_array(xs, out)
   return out
 end
 
-local function new_segment(state, root, scope_path, source)
-  return state.journal:new_segment(root, scope_path, source)
-end
-
-local function merge_group_views(state, group)
-  local parent = group.parent_segment
-  local children = {}
-  for i = 1, group.count do
-    children[i] = group.lane_segments[i]
-  end
-  return Journal.join_segments(parent, children, group.mode)
+local function merge_group_views(group)
+  return Journal.join_segments(group.parent_segment, group.lane_segments, group.mode)
 end
 
 local function compose_wrap(inner, fn)
@@ -390,7 +375,9 @@ local function product_wrap(lane_outcomes)
   end
 end
 
-local function add_active(state, task)
+local function continue_task(state, task, expr, activation)
+  setv(state, task, 'expr', expr)
+  setv(state, task, 'activation', activation)
   setv(state, task, 'status', 'active')
   pushv(state, state.active, task)
 end
@@ -406,7 +393,7 @@ local function finish_group_lane(state, task, frame, outcome)
   if group.completed < group.count then
     return true
   end
-  if not merge_group_views(state, group) then
+  if not merge_group_views(group) then
     return false
   end
 
@@ -420,10 +407,6 @@ local function finish_group_lane(state, task, frame, outcome)
   setv(state, parent, 'activation', Activation.child_array(group.activation, ACT.product_result, activation_parts))
   setv(state, parent, 'status', 'active')
   return complete_task(state, parent, new_outcome(parent, pack_(rows), product_wrap(group.lane_outcomes)))
-end
-
-local function and_then_activation(frame, outcome)
-  return Activation.child(frame.activation, ACT.and_then_result, outcome.activation)
 end
 
 complete_task = function(state, task, outcome)
@@ -455,16 +438,14 @@ complete_task = function(state, task, outcome)
       end
       local next_op = frame.q
       local input_pack = pack_(unpack_pack(outcome.pack))
-      local next_activation = and_then_activation(frame, outcome)
+      local next_activation = Activation.child(frame.activation, ACT.and_then_result, outcome.activation)
       setv(state, task, 'guard_input_pack', input_pack)
       if next_op.kind == 'guard' then
         local request = task.root.request
         next_op = Activation.guard(state.engine, request, next_op, next_activation, true, input_pack)
         next_activation = Activation.child(next_activation, ACT.guard)
       end
-      setv(state, task, 'expr', next_op)
-      setv(state, task, 'activation', next_activation)
-      add_active(state, task)
+      continue_task(state, task, next_op, next_activation)
       return true
     elseif frame.kind == 'wrap' then
       outcome = new_outcome(task, outcome.pack, compose_wrap(outcome.wrap, frame.fn))
@@ -487,7 +468,7 @@ local function add_root(state, request, required_intents)
     required_intents = required_intents and copy_array(required_intents) or nil,
   }
   root.root = root
-  root.segment = new_segment(state, root, nil)
+  root.segment = state.journal:new_segment(root, nil)
   setv(state, state.roots, request, root)
   pushv(state, state.active, root)
   return true
@@ -502,7 +483,7 @@ local function start_product(state, task, op)
 
   for i = 1, #op.lanes do
     local path = Activation.scope_child(task.scope_path, group, op.mode, i)
-    local segment = new_segment(state, task.root, path, task.segment)
+    local segment = state.journal:new_segment(task.root, path, task.segment)
     group.lane_segments[i] = segment
     local activation = Activation.child(task.activation, ACT.product_lane, i)
     local child = {
@@ -514,10 +495,6 @@ local function start_product(state, task, op)
     }
     pushv(state, state.active, child)
   end
-end
-
-local function same_root_compatible(a, b)
-  return Activation.relation(a.root, a.scope_path, b.root, b.scope_path) == 'interacting'
 end
 
 local function intents_compatible(a, b)
@@ -533,7 +510,7 @@ local function intents_compatible(a, b)
   if a.root ~= b.root then
     return true
   end
-  return same_root_compatible(a, b)
+  return Activation.relation(a.root, a.scope_path, b.root, b.scope_path) == 'interacting'
 end
 
 local function root_requires(root, intent)
@@ -573,7 +550,7 @@ local function index_intent(state, intent)
   elseif intent.kind == 'choice' then
     pushv(state, ensure_table(state, 'choices'), intent)
   elseif intent.kind == 'transition' then
-    local rule = Operation.transition_behaviour(intent.spec)
+    local rule = intent.rule
     if rule.enumerable then
       pushv(state, ensure_table(state, 'witnesses'), intent)
     else
@@ -590,31 +567,35 @@ local function index_intent(state, intent)
   end
 end
 
+local function register_intent(state, task, intent)
+  setv(state, task, 'status', 'blocked')
+  pushv(state, ensure_table(state, 'intents'), intent)
+  bump(state, state, 'active_intent_count')
+  index_intent(state, intent)
+end
+
 local function remove_intents(state, intents)
   for i = 1, #intents do
     local intent = intents[i]
     if intent and intent.active then
       setv(state, intent, 'active', false)
       bump(state, state, 'active_intent_count', -1)
-      if intent.kind == 'transition' and Operation.transition_behaviour(intent.spec).accepts_supply then
+      if intent.rule and intent.rule.accepts_supply then
         bump(state, state, 'accepts_supply_count', -1)
       end
     end
   end
 end
 
-local function result_pack(leaf, value)
-  return Operation.result_pack(leaf, value)
-end
+local result_pack = Operation.result_pack
 
 local function block_intent(state, task, occurrence, observed_version)
   local leaf = occurrence.spec
-  local intents = ensure_table(state, 'intents')
-  local serial = #intents + 1
-  setv(state, task, 'status', 'blocked')
+  local serial = #(state.intents or EMPTY) + 1
   local intent = {}
   intent.serial, intent.kind = serial, leaf_kind(leaf)
   intent.task, intent.root, intent.request, intent.spec = task, task.root, task.root.request, leaf
+  if intent.kind == 'transition' then intent.rule = Operation.transition_behaviour(leaf) end
   intent.payload, intent.activation = occurrence.arg, task.activation
   intent.resource, intent.role, intent.value = leaf.resource, leaf.role, occurrence.arg
   intent.name = leaf.name
@@ -625,13 +606,10 @@ local function block_intent(state, task, occurrence, observed_version)
   local check = leaf.absence_check
   intent.absence_check = type(check) == 'function' and { validate = check } or check
   intent.observed_version = observed_version
-  pushv(state, intents, intent)
-  bump(state, state, 'active_intent_count')
-  index_intent(state, intent)
+  register_intent(state, task, intent)
 end
 local function block_choice(state, task, expr)
-  local intents = ensure_table(state, 'intents')
-  local serial = #intents + 1
+  local serial = #(state.intents or EMPTY) + 1
   local intent = {
     serial = serial,
     kind = 'choice',
@@ -650,10 +628,7 @@ local function block_choice(state, task, expr)
     required_intents = task.required_intents,
     active = true,
   }
-  setv(state, task, 'status', 'blocked')
-  pushv(state, intents, intent)
-  bump(state, state, 'active_intent_count')
-  index_intent(state, intent)
+  register_intent(state, task, intent)
   return true
 end
 
@@ -745,13 +720,13 @@ end
 
 local function resolve_serial_transitions(state, selected)
   table.sort(selected, function(left, right)
-    local a, b = Operation.transition_behaviour(left.spec).order, Operation.transition_behaviour(right.spec).order
+    local a, b = left.rule.order, right.rule.order
     return a ~= b and a < b or a == b and (left.serial or 0) < (right.serial or 0)
   end)
   local resolved = {}
   for i = 1, #selected do
     local intent, leaf = selected[i], selected[i].spec
-    local task, rule = intent.task, Operation.transition_behaviour(leaf)
+    local task, rule = intent.task, intent.rule
     local value = Journal.project_machine(task, leaf.location, function(candidate)
       return transition_ready(state, leaf, candidate, intent.payload)
     end, rule.accepts_supply)
@@ -800,10 +775,10 @@ local function resolve_transitions(state, intents)
 end
 
 local function witness_cursor(state, intent)
-  local leaf, task, rule = intent.spec, intent.task, Operation.transition_behaviour(intent.spec)
+  local leaf, task, rule = intent.spec, intent.task, intent.rule
   local value = Journal.project_machine(task, leaf.location, function(candidate)
     return transition_ready(state, leaf, candidate, intent.payload)
-  end, rule.accepts_supply, state.journal)
+  end, rule.accepts_supply)
   return Operation.transition_cursor(leaf, value, transition_context(state), nil, intent.payload)
 end
 
@@ -823,15 +798,7 @@ local function resolve_witness(state, intent, outcome, alternative_index)
       intent.observed_version or intent.spec.location.version or 0, alternative_index or 1
     )
   )
-  local packed = outcome.result
-  if not (type(packed) == 'table' and packed._fibers_pack == true) then
-    if type(packed) == 'table' and packed.n ~= nil then
-      packed._fibers_pack = true
-    else
-      packed = pack_(packed)
-    end
-  end
-  return complete_task(state, task, new_outcome(task, packed))
+  return complete_task(state, task, new_outcome(task, outcome.result))
 end
 
 local function resolve_claim_set(state, group, intents)
@@ -841,7 +808,7 @@ local function resolve_claim_set(state, group, intents)
   end
   for i = 1, #(group.intents or {}) do
     local intent = group.intents[i]
-    local rule = intent and Operation.transition_behaviour(intent.spec)
+    local rule = intent and intent.rule
     if rule and rule.serial and rule.total then
       selected[intent] = true
     end
@@ -940,9 +907,7 @@ local function execute_leaf(state, task, occurrence)
   end
 
   if kind == 'clock_now' then
-    local root = task.root
-    local request = root and root.request
-    local value = Activation.clock(state.engine, request, occurrence, task.activation)
+    local value = Activation.clock(state.engine, occurrence, task.activation)
     advance_activation(state, task, leaf)
     return complete_task(state, task, new_outcome(task, Operation.result_pack(leaf, value)))
   end
@@ -1015,7 +980,7 @@ local function supplier_score(state, request, intents)
   local exact = frontier and frontier_supply_score(frontier, intents) or 0
   local metadata = request.metadata or Operation.shape(request.op)
   request.metadata = metadata
-  local structural, certainty, reason = Operation.supply_score(Operation.active_shape(metadata), intents)
+  local structural = Operation.supply_score(Operation.active_shape(metadata), intents)
   if exact > 0 then
     return exact * 1000 + structural
   end
@@ -1246,9 +1211,7 @@ local function resolve_choice(state, intent, choice_index)
       for j = 1, #defeats do pushv(state, effects, defeats[j]) end
     end
   end
-  setv(state, task, 'expr', expr.choices[choice_index])
-  setv(state, task, 'activation', Activation.child(intent.activation, ACT.choice, choice_index))
-  add_active(state, task)
+  continue_task(state, task, expr.choices[choice_index], Activation.child(intent.activation, ACT.choice, choice_index))
   return true
 end
 
@@ -1293,9 +1256,7 @@ local function note_search_step(state)
   return true
 end
 
-local function merge_refutation(current, next_ref)
-  return Proof.merge(current, next_ref)
-end
+local merge_refutation = Proof.merge
 
 local function explore(state, apply)
   local mark = state.journal:mark()
@@ -1329,9 +1290,7 @@ end
 local function prefer(state, task, expr)
   local mark = state.journal:mark()
   state.search_depth = state.search_depth + 1
-  setv(state, task, 'expr', expr.p)
-  setv(state, task, 'activation', Activation.child(task.activation, ACT.preferred))
-  add_active(state, task)
+  continue_task(state, task, expr.p, Activation.child(task.activation, ACT.preferred))
   local candidate, preferred_refutation, unknown = search(state)
   state.search_depth = state.search_depth - 1
   if candidate then
@@ -1360,14 +1319,12 @@ local function prefer(state, task, expr)
     gate.membership_sensitive = true
   end
   setv(state, state, 'absence_gate', gate)
-  setv(state, task, 'expr', expr.q)
-  setv(
+  continue_task(
     state,
     task,
-    'activation',
+    expr.q,
     Activation.child_array(task.activation, ACT.fallback, Proof.gate_facts(preferred_refutation))
   )
-  add_active(state, task)
   local fallback, fallback_refutation, fallback_unknown = search(state)
   if fallback then return fallback, fallback_refutation, fallback_unknown end
   -- The preferred branch has been discarded as an active wait, but a newly
@@ -1387,30 +1344,22 @@ local function reduce_one(state, task)
     local parent = task.activation
     local request = task.root.request
     local residual = Activation.guard(state.engine, request, expr, parent, true, task.guard_input_pack)
-    setv(state, task, 'expr', residual)
-    setv(state, task, 'activation', Activation.child(parent, ACT.guard))
-    add_active(state, task)
+    continue_task(state, task, residual, Activation.child(parent, ACT.guard))
     return 'progress'
   elseif kind == 'map' then
     pushv(state, task.frames, { kind = 'map', fn = expr.fn })
-    setv(state, task, 'expr', expr.p)
-    setv(state, task, 'activation', Activation.child(task.activation, ACT.map))
-    add_active(state, task)
+    continue_task(state, task, expr.p, Activation.child(task.activation, ACT.map))
     return 'progress'
   elseif kind == 'and_then' then
     pushv(state, task.frames, { kind = 'bind', q = expr.q, activation = task.activation })
-    setv(state, task, 'expr', expr.p)
-    setv(state, task, 'activation', Activation.child(task.activation, ACT.and_then_prefix))
-    add_active(state, task)
+    continue_task(state, task, expr.p, Activation.child(task.activation, ACT.and_then_prefix))
     return 'progress'
   elseif kind == 'annotated' then
     local parent = task.activation
     if expr.post then
       pushv(state, task.frames, { kind = 'wrap', fn = expr.post })
     end
-    setv(state, task, 'expr', expr.p)
-    setv(state, task, 'activation', Activation.child(parent, ACT.annotated))
-    add_active(state, task)
+    continue_task(state, task, expr.p, Activation.child(parent, ACT.annotated))
     return 'progress'
   elseif kind == 'consequence' then
     pushv(state, ensure_table(state, 'effects'), expr.effect)
@@ -1724,18 +1673,18 @@ function Search:advance(max_work)
   self.unknown_reason = nil
   local instrumentation = self.engine.instrumentation
   if instrumentation then instrumentation:resume_search(self) end
-  local resumed = { coroutine.resume(self.thread) }
+  local ok, first, second, third = coroutine.resume(self.thread)
   if instrumentation then instrumentation:pause_search(self) end
-  if not resumed[1] then error(resumed[2], 0) end
+  if not ok then error(first, 0) end
 
   if coroutine.status(self.thread) ~= 'dead' then
     publish_frontiers(self, { unknown = true })
     if instrumentation then instrumentation:inc('retained_search_suspensions') end
-    self.unknown_reason = resumed[3] or self.unknown_reason or 'search_quantum'
-    return nil, resumed[2], true
+    self.unknown_reason = second or self.unknown_reason or 'search_quantum'
+    return nil, first, true
   end
 
-  local candidate, certificate, unknown = resumed[2], resumed[3], resumed[4]
+  local candidate, certificate, unknown = first, second, third
   if candidate then
     candidate._search = self
     self.candidate = candidate
@@ -1753,7 +1702,7 @@ function Search:discard(reason)
     finish_profile(self, nil, reason or 'invalidated')
   end
   self.thread = nil
-  if self.journal and self.journal.reset then self.journal:reset() end
+  if self.journal then self.journal:reset() end
   if self.candidate then self.candidate._search = nil end
   self.candidate, self.frontier_snapshot = nil, nil
 end

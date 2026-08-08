@@ -56,7 +56,7 @@ end
 local unpack_ = table.unpack or unpack
 local pack_ = Values.pack
 local function unpack_pack(p)
-  return unpack_(p, 1, p.n or #p)
+  return unpack_(p, 1, p.n)
 end
 
 local Cancellation = {}
@@ -196,6 +196,23 @@ function Runtime:_call_in_phase(name, kind, fn, ...)
 end
 function Runtime:_call_fatal_in_phase(name, kind, committed, fn, ...)
   return finish_phase_call(self, name, kind, true, committed, phase_pcall(self, name, fn, ...))
+end
+
+-- Trusted pre-commit authoring callbacks need stricter handling than ordinary
+-- speculative callbacks. A Fibers-generated structured error (notably a
+-- phase_error) retains its original classification, while an arbitrary callback
+-- failure is a fatal contract error before commit. This prevents an author bug
+-- from being mistaken for semantic candidate rejection.
+function Runtime:_call_contract_in_phase(name, kind, fn, ...)
+  local result = phase_pcall(self, name, fn, ...)
+  if result[1] then return unpack_(result, 2, result.n) end
+  local err = result[2]
+  if type(err) == 'table' and err._fibers_error then error(err, 0) end
+  return self:_fatal(kind or 'effect_contract_error', err, {
+    phase = name,
+    committed = false,
+    level = 0,
+  })
 end
 
 function Runtime.new(opts)

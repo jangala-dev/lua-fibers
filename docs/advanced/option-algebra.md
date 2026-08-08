@@ -368,14 +368,14 @@ A phase-1 callback may run zero, one or several times as search branches, backtr
 
 An effect kind has a pure `prepare` callback and a post-commit `discharge` callback.
 
-`prepare(runtime, payload)` may run several times and its result may be discarded. It must therefore be deterministic, non-yielding and free of observable mutation. It must not reserve host capacity, acquire an external resource, deliver an event, perform, spawn or yield. It may return:
+`prepare(runtime, payload)` may run several times and its result may be discarded. It must therefore be deterministic, non-yielding and free of observable mutation. It must not reserve host capacity, acquire an external resource, deliver an event, perform, spawn or yield. It returns exactly one of:
 
 ```text
 prepared_record
-nil, structured_refusal
+Effect.reject(structured_refusal)
 ```
 
-A prepared record must contain a `discharge` function. Preparation may depend only on the payload, captured runtime configuration and managed facts already represented in the candidate. In particular, refusal must not depend on unversioned volatile host state: such a refusal may reject the preferred side of `or_else`, so it must remain valid under the candidate's validation facts.
+A prepared record must contain a `discharge` function. Returning `nil`, a malformed prepared record, a NaN key, or a malformed merge result is an effect-authoring contract error and fails the Runtime before commit; it is not candidate rejection. Preparation may depend only on the payload, captured runtime configuration and managed facts already represented in the candidate. In particular, refusal must not depend on unversioned volatile host state: such a refusal may reject the preferred side of `or_else`, so it must remain valid under the candidate's validation facts.
 
 All effects are merged and prepared before resource state is installed. Once the candidate commits, each prepared `discharge` runs once in stable first-occurrence order. Discharge may perform the irreversible host action represented by the effect, but it may not call `perform`; failure is fatal and post-commit.
 

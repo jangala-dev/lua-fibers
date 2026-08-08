@@ -212,7 +212,16 @@ function Scope:_run_child_body(fn, task, opts)
     lifetime = task._lifetime,
   })
   return child:run(function(s)
-    return fn(s, task)
+    -- The Task body's execution result is a fact distinct from complete Lifetime
+    -- closure. Capture and publish it before ScopeClosure starts retiring roots.
+    -- Re-raise the original result afterwards so the Scope boundary retains its
+    -- existing success/failure/cancellation semantics.
+    local results = pack(Protected.pcall(fn, s, task))
+    task:_publish_protected_body_result(results, child.runtime or Runtime.current())
+    if results[1] then
+      return unpack_(results, 2, results.n)
+    end
+    error(results[2], 0)
   end)
 end
 

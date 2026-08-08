@@ -30,7 +30,7 @@ local function create(initial, minimum, maximum)
   end
 
   local counter = Facility.identity(setmetatable({ min = minimum, max = maximum }, Counter), Kind)
-  counter._location = Facility.location(counter, 'value', {
+  counter._location = Facility.location(counter, {
     algebra = 'add',
     domain = 'counter',
     value = initial,

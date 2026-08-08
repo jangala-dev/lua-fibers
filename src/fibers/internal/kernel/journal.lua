@@ -12,11 +12,12 @@ function Journal.new()
 end
 
 function Journal:mark()
-  local entries = self.entries
-  if not entries then
-    entries, self.entries, self.marks, self.parents = {}, {}, {}, {}
-    entries = self.entries
+  if not self.entries then
+    self.entries = {}
+    self.marks = {}
+    self.parents = {}
   end
+  local entries = self.entries
   local mark = self.next_mark + 1
   self.next_mark = mark
   self.marks[mark] = #entries
@@ -154,7 +155,6 @@ function Journal.new_location(opts)
   opts = opts or {}
   local algebra = Algebra.get(assert(opts.algebra, 'location algebra is required'))
   local location = {
-    name = opts.name,
     algebra = algebra,
     domain = opts.domain or 'plain',
     value = opts.value,
@@ -183,7 +183,7 @@ function Journal:new_segment(root, scope_path, source)
   return segment
 end
 
-local function observe(segment, location)
+function Journal.observe(segment, location)
   local journal = segment.journal
   local observed = journal.observed
   local version = observed[location]
@@ -195,10 +195,6 @@ local function observe(segment, location)
   return true
 end
 
-function Journal.observe(segment, location)
-  return observe(segment, location)
-end
-
 local function inherited_value(segment, location)
   local cached = segment.values[location]
   if cached ~= nil then return cached end
@@ -207,7 +203,7 @@ local function inherited_value(segment, location)
 end
 
 function Journal.read(segment, location)
-  observe(segment, location)
+  Journal.observe(segment, location)
   local value = inherited_value(segment, location)
   local summary = segment.delta[location]
   if summary and segment.values[location] == nil then
@@ -337,7 +333,7 @@ function Journal.join_segments(parent, children, mode)
 end
 
 function Journal:collect_candidate(root_segments)
-  local observations = root_segments[1] and root_segments[1].journal.observed or nil
+  local observations = self.observed
   local writes
   for i = 1, #root_segments do
     for location, patch in pairs(root_segments[i].delta) do

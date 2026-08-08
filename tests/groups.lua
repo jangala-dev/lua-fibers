@@ -150,6 +150,7 @@ return {
   reference = {
     'tests/reference/test_evaluator.lua',
     'tests/reference/test_frontier_conformance.lua',
+    'tests/reference/test_facility_authoring_conformance.lua',
   },
   case_studies = {
     'examples/case_studies/calendar/test_calendar.lua',

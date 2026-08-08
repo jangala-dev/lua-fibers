@@ -141,6 +141,7 @@ local function test_canonical_algebra_vocabulary()
   assert_eq(empty_each.kind, 'always', 'empty each accepts no arguments')
   assert_eq(empty_together.kind, 'always', 'empty together accepts no arguments')
   assert_eq(type(Op.named_each), 'function', 'named_each is the canonical named independent product')
+  assert_eq(type(Op.named_together), 'function', 'named_together is the canonical named interacting product')
 end
 
 local function test_always_and_never()
@@ -1122,6 +1123,22 @@ local function test_named_each_returns_record_values_and_raw_rows()
   assert_eq(r._rows.a[1], 'A')
 end
 
+local function test_named_together_returns_record_values_and_raw_rows()
+  local op = Op.named_together({
+    sent = Op.always('left'),
+    received = Op.always('right', nil),
+  })
+  local st, values = one_perform(op)
+  assert_eq(st.tag, 'found')
+  local r = values[1]
+  assert_eq(r.sent, 'left')
+  assert_truthy(type(r.received) == 'table' and r.received.n == 2,
+    'multi-valued named_together entry should keep its row pack')
+  assert_eq(r.received[1], 'right')
+  assert_eq(r.received.n, 2)
+  assert_truthy(type(r._rows.sent) == 'table', 'named_together keeps raw named rows')
+end
+
 local tests = {
   test_choice_normalises_nested_lists_and_choice_nodes,
   test_choice_seed_replays_unordered_selection,
@@ -1130,6 +1147,7 @@ local tests = {
   test_each_and_together_copy_their_validated_lanes,
   test_named_choice_tags_the_winning_branch,
   test_named_each_returns_record_values_and_raw_rows,
+  test_named_together_returns_record_values_and_raw_rows,
   test_canonical_algebra_vocabulary,
   test_always_and_never,
   test_multi_value_and_then_map_and_wrap_preserve_arity,
@@ -1888,6 +1906,9 @@ do
   end))
   assert(not pcall(function()
     return Op.named_each({ { 'ordered', Op.always('value') } })
+  end))
+  assert(not pcall(function()
+    return Op.named_together({ { 'ordered', Op.always('value') } })
   end))
 end
 

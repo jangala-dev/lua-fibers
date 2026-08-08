@@ -140,6 +140,10 @@ String-keyed independent conjunction. Returns a keyed result table with original
 
 Interacting conjunction. Returns an array of packed rows.
 
+### `Op.named_together(entries) -> Op`
+
+String-keyed interacting conjunction. Returns a keyed result table with original rows in `_rows`.
+
 ### `Op.guard(fn) -> Op`
 
 Constructs a dynamic residual option. Beneath `and_then`, `fn` receives provisional prefix values.
@@ -759,6 +763,9 @@ local Effect = require('fibers.effect')
 ### `Effect.of(kind, payload) -> Effect`
 ### `Effect.is_kind(value) -> boolean`
 ### `Effect.is_effect(value) -> boolean`
+### `Effect.reject([reason]) -> EffectRejection`
+### `Effect.is_rejection(value) -> boolean`
+### `Effect.rejection_reason(value) -> any`
 ### `Effect.interrupt(token [, reason]) -> Effect`
 ### `Effect.spawn(fn, id, scope, owner) -> Effect`
 

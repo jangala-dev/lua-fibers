@@ -53,7 +53,7 @@ RecoveryClaimKind = Effect.kind({
   name = 'closure.recovery_claim',
   key = function(payload) return payload.authority end,
   merge = function()
-    return nil, { kind = 'effect_conflict', message = 'duplicate closure recovery authority' }
+    return Effect.reject({ kind = 'effect_conflict', message = 'duplicate closure recovery authority' })
   end,
   prepare = function(_runtime, payload)
     return {

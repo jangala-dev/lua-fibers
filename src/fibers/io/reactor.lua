@@ -130,17 +130,17 @@ ControlKind = Effect.kind({
     if a.action == b.action then return a end
     if a.action == 'demand' then return b end
     if b.action == 'demand' then return a end
-    return nil, {
+    return Effect.reject({
       kind = 'effect_conflict',
       message = 'reactor registration and retirement cannot commit together',
-    }
+    })
   end,
   prepare = function(rt, payload)
     if payload.reactor.runtime ~= rt then
-      return nil, 'reactor belongs to another runtime'
+      error('reactor belongs to another runtime', 0)
     end
     if payload.entry.reactor ~= payload.reactor then
-      return nil, 'reactor entry mismatch'
+      error('reactor entry mismatch', 0)
     end
     return {
       kind = ControlKind,

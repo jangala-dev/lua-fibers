@@ -8,7 +8,7 @@ function Values.pack(...)
 end
 
 function Values.unpack(values, first, last)
-  return unpack_(values, first or 1, last or values.n or #values)
+  return unpack_(values, first or 1, last or values.n)
 end
 
 function Values.is(value)
@@ -18,7 +18,7 @@ end
 function Values.equal(left, right)
   if left == right then return true end
   if type(left) ~= 'table' or type(right) ~= 'table' then return false end
-  local ln, rn = left.n or #left, right.n or #right
+  local ln, rn = left.n, right.n
   if ln ~= rn then return false end
   for i = 1, ln do
     local a, b = left[i], right[i]

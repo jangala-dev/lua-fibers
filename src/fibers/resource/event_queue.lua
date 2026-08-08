@@ -105,7 +105,7 @@ function EventQueue.new(interest_factory)
     error('EventQueue.new expects an interest factory function or nil', 2)
   end
   local queue = Facility.identity(setmetatable({ _interest_factory = interest_factory }, EventQueue), Kind)
-  queue._location = Facility.location(queue, 'queue', {
+  queue._location = Facility.location(queue, {
     algebra = 'machine',
     domain = 'external',
     value = { count = 0, head = 1 },

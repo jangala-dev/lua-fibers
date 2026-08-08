@@ -145,7 +145,7 @@ function Petri.new(marking, name)
     _fibers_id = 'petri-' .. tostring(next_net_id),
     _fibers_kind = Kind,
   }, Petri)
-  net._location = Facility.location(net, 'marking', {
+  net._location = Facility.location(net, {
     algebra = 'machine',
     domain = 'plain',
     value = state,

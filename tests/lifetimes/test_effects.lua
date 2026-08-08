@@ -107,7 +107,7 @@ local function test_effect_keys_preserve_lua_identity()
       return payload.key
     end,
     merge = function(_a, _b)
-      return nil, { kind = 'effect_conflict', message = 'distinct typed keys were merged' }
+      return Effect.reject({ kind = 'effect_conflict', message = 'distinct typed keys were merged' })
     end,
     prepare = function(_rt, payload)
       return {
@@ -142,7 +142,7 @@ local function test_effect_keys_preserve_lua_identity()
   assert_eq(#calls, #effects, 'all distinct typed keys should discharge')
 end
 
-local function test_nan_effect_key_rejects_candidate()
+local function test_nan_effect_key_is_contract_error()
   local NaNKind
   NaNKind = Effect.kind({
     name = 'test.nan_key',
@@ -157,10 +157,12 @@ local function test_nan_effect_key_rejects_candidate()
     end,
   })
 
-  local st, vals, rt = one_perform(Op.emit(Effect.of(NaNKind, {})), { quiet_deadlock = true })
-  assert_uncommitted(st, 'NaN cannot be used as an effect identity key')
-  assert_eq(vals.n, 0, 'participant does not resume for an invalid key')
-  assert_eq(rt:failed(), nil, 'invalid key rejects the candidate without corrupting the runtime')
+  local ok, err = pcall(function()
+    one_perform(Op.emit(Effect.of(NaNKind, {})), { quiet_deadlock = true })
+  end)
+  assert_error_kind(ok, err, 'effect_contract_error', 'NaN effect key is an authoring contract error')
+  assert_eq(err.committed, false, 'key contract failure occurs before commit')
+  assert_eq(err.fatal, true, 'trusted effect contract failure is fatal to the runtime')
 end
 
 local function test_conflicting_obligations_reject_candidate_world()
@@ -176,7 +178,7 @@ local function test_conflicting_obligations_reject_candidate_world()
   assert_eq(vals.n, 0, 'participant does not resume')
 end
 
-local function test_prepare_must_return_discharge_record()
+local function test_malformed_prepare_is_contract_error()
   local InvalidKind
   InvalidKind = Effect.kind({
     name = 'test.invalid_prepare_record',
@@ -191,10 +193,91 @@ local function test_prepare_must_return_discharge_record()
     end,
   })
 
-  local st, vals, rt = one_perform(Op.emit(Effect.of(InvalidKind, {})), { quiet_deadlock = true })
-  assert_uncommitted(st, 'prepare must return a discharge record')
-  assert_eq(vals.n, 0, 'participant does not resume for an invalid prepared record')
-  assert_eq(rt:failed(), nil, 'invalid prepared record rejects the candidate')
+  local ok, err = pcall(function()
+    one_perform(Op.emit(Effect.of(InvalidKind, {})), { quiet_deadlock = true })
+  end)
+  assert_error_kind(ok, err, 'effect_contract_error', 'malformed prepare result is an authoring error')
+  assert_eq(err.committed, false)
+  assert_eq(err.fatal, true)
+end
+
+local function test_nil_prepare_is_contract_error_not_rejection()
+  local NilKind
+  NilKind = Effect.kind({
+    name = 'test.nil_prepare',
+    key = function() return 'nil-prepare' end,
+    merge = function(a, _b) return a end,
+    prepare = function() return nil, { kind = 'looks_like_rejection' } end,
+  })
+
+  local ok, err = pcall(function()
+    one_perform(Op.emit(Effect.of(NilKind, {})), { quiet_deadlock = true })
+  end)
+  assert_error_kind(ok, err, 'effect_contract_error', 'nil prepare cannot masquerade as semantic rejection')
+  assert_eq(err.committed, false)
+end
+
+local function test_nil_merge_is_contract_error_not_conflict()
+  local NilMergeKind
+  NilMergeKind = Effect.kind({
+    name = 'test.nil_merge',
+    key = function() return 'same' end,
+    merge = function() return nil, { kind = 'looks_like_conflict' } end,
+    prepare = function(_rt, payload)
+      return { payload = payload, discharge = function() end }
+    end,
+  })
+
+  local op = Op.each({
+    Op.emit(Effect.of(NilMergeKind, { value = 1 })),
+    Op.emit(Effect.of(NilMergeKind, { value = 2 })),
+  })
+  local ok, err = pcall(function() one_perform(op, { quiet_deadlock = true }) end)
+  assert_error_kind(ok, err, 'effect_contract_error', 'nil merge cannot masquerade as semantic conflict')
+  assert_eq(err.committed, false)
+end
+
+
+local function test_forged_rejection_shape_is_contract_error()
+  local ForgedKind
+  ForgedKind = Effect.kind({
+    name = 'test.forged_rejection',
+    key = function() return 'forged' end,
+    merge = function(a, _b) return a end,
+    prepare = function()
+      return { _fibers_effect_rejection = true, reason = { kind = 'forged' } }
+    end,
+  })
+
+  local ok, err = pcall(function()
+    one_perform(Op.emit(Effect.of(ForgedKind, {})), { quiet_deadlock = true })
+  end)
+  assert_error_kind(ok, err, 'effect_contract_error', 'only Effect.reject may reject a candidate')
+  assert_eq(err.committed, false)
+end
+
+local function test_prepare_callback_failure_is_not_candidate_rejection()
+  local BrokenKind
+  BrokenKind = Effect.kind({
+    name = 'test.broken_prepare',
+    key = function() return 'broken' end,
+    merge = function(a, _b) return a end,
+    prepare = function()
+      error('effect author bug')
+    end,
+  })
+
+  local ok, err = pcall(function()
+    one_perform(
+      Op.emit(Effect.of(BrokenKind, {}))
+        :and_then(Op.always('broken'))
+        :or_else(Op.always('alternative')),
+      { quiet_deadlock = true }
+    )
+  end)
+  assert_error_kind(ok, err, 'effect_contract_error', 'effect callback failure must abort search rather than backtrack')
+  assert_eq(err.committed, false)
+  assert_eq(err.fatal, true, 'trusted callback failure is fatal before commit')
 end
 
 local function test_prepare_refusal_is_candidate_rejection_not_runtime_failure()
@@ -277,9 +360,13 @@ local tests = {
   test_emit_accepts_only_typed_effects,
   test_duplicate_obligations_merge_to_one_discharge,
   test_effect_keys_preserve_lua_identity,
-  test_nan_effect_key_rejects_candidate,
+  test_nan_effect_key_is_contract_error,
   test_conflicting_obligations_reject_candidate_world,
-  test_prepare_must_return_discharge_record,
+  test_malformed_prepare_is_contract_error,
+  test_nil_prepare_is_contract_error_not_rejection,
+  test_nil_merge_is_contract_error_not_conflict,
+  test_forged_rejection_shape_is_contract_error,
+  test_prepare_callback_failure_is_not_candidate_rejection,
   test_prepare_refusal_is_candidate_rejection_not_runtime_failure,
   test_prepare_refusal_backtracks_to_other_worlds,
   test_discharge_failure_is_fatal_after_resource_commit,

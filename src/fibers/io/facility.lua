@@ -95,10 +95,11 @@ local function driver_exit_error(exit)
 end
 
 -- A host-backed facility is closed only after both its public terminal condition
--- and the complete body of its private structured driver have settled. The body
--- ordinarily wraps a private Scope, so observing its Exit also joins all private
--- descendants. opts.require_returned preserves facilities whose driver failure
--- is not already represented by the terminal operation.
+-- and the complete Lifetime of its private structured driver have settled. A
+-- Task body Exit is deliberately earlier than Lifetime outcome, so closure must
+-- join outcome explicitly rather than treating body_result_op as a structural
+-- join. opts.require_returned preserves facilities whose driver body failure is
+-- not already represented by the terminal operation.
 function IO.closed_after_driver_op(task, terminal_op, opts)
   if opts ~= nil and type(opts) ~= 'table' then
     error('closed_after_driver_op options must be a table', 2)
@@ -120,7 +121,10 @@ function IO.closed_after_driver_op(task, terminal_op, opts)
       local err = driver_exit_error(exit)
       if err ~= nil then return Op.always(nil, err) end
     end
-    return terminal_op
+    -- Keep the driver's structural join separate from its prompt body Exit.
+    -- and_then yields the terminal operation's values, preserving the public
+    -- closure result while requiring the complete driver Lifetime to settle.
+    return task:outcome_op():and_then(terminal_op)
   end))
 end
 
