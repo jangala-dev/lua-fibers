@@ -7,7 +7,6 @@
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
-local Context = require('fibers.internal.context')
 local Sleep = require('fibers.sleep')
 local StateMachine = require('fibers.resource.machine')
 local Address = require('fibers.net.address')
@@ -673,7 +672,7 @@ function Resolver:_tcp_exchange(server, wire, id, name, qtype, timeout, opts)
     return nil, IOError.normalise(dial_err, { domain = 'dns', action = 'tcp_dial', server = server })
   end
   local deadline = Runtime.current():now() + (opts.tcp_timeout or timeout or 5.0)
-  local connection, connect_err = perform_before(dial:result_op(Context.current_scope()), deadline)
+  local connection, connect_err = perform_before(dial:result_op(Runtime.current_scope()), deadline)
   if not connection then
     local primary = IOError.normalise(connect_err, { domain = 'dns', action = 'tcp_dial', server = server })
     return nil, cleanup_error('DNS TCP dial failed', primary, { { dial, 'dial' } })

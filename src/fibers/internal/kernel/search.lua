@@ -7,7 +7,6 @@
 local Values = require('fibers.internal.values')
 local Journal = require('fibers.internal.kernel.journal')
 local Candidate = require('fibers.internal.kernel.candidate')
-local Activation = require('fibers.internal.kernel.activation')
 local Proof = require('fibers.internal.proof')
 local Operation = require('fibers.internal.operation')
 local Algebra = require('fibers.internal.kernel.algebra')
@@ -285,6 +284,69 @@ end
 
 local unpack_ = table.unpack or unpack
 local pack_ = Values.pack
+local EMPTY_INPUT = pack_()
+local A_ID, A_ROOT, A_NEXT, A_GUARDS, A_CLOCKS = {}, {}, {}, {}, {}
+
+local function new_activation() return { [A_NEXT] = 1 } end
+local function activation_id(activation) return activation[A_ID] or 1 end
+
+local function activation_descend(parent, key)
+  if key == nil then error('activation fact is required', 3) end
+  local child = parent[key]
+  if not child then child = {}; parent[key] = child end
+  return child
+end
+
+local function activation_finish(parent, child)
+  if child[A_ID] then return child end
+  local root = parent[A_ROOT] or parent
+  root[A_NEXT] = root[A_NEXT] + 1
+  child[A_ID], child[A_ROOT] = root[A_NEXT], root
+  return child
+end
+
+local function activation_child(parent, ...)
+  if not parent then error('activation child requires a parent token', 2) end
+  local count = select('#', ...)
+  if count == 0 then error('activation fact is required', 2) end
+  local child = parent
+  for i = 1, count do child = activation_descend(child, select(i, ...)) end
+  return activation_finish(parent, child)
+end
+
+local function activation_child_array(parent, head, values)
+  if not parent or head == nil then error('activation fact is required', 2) end
+  local child = activation_descend(parent, head)
+  for i = 1, #values do child = activation_descend(child, values[i]) end
+  return activation_finish(parent, child)
+end
+
+local function activation_clock(engine, occurrence, activation)
+  local clocks = activation[A_CLOCKS]
+  if not clocks then clocks = {}; activation[A_CLOCKS] = clocks end
+  local value = clocks[occurrence]
+  if value ~= nil then return value end
+  value = engine.runtime:now()
+  clocks[occurrence] = value
+  return value
+end
+
+local function activation_guard(engine, request, guard, activation, input_pack)
+  local input = input_pack
+  if input == nil or input.n == 0 then input = EMPTY_INPUT end
+  local entries = activation[A_GUARDS]
+  if entries then
+    for i = 1, #entries, 2 do
+      if Values.equal(entries[i], input) then return entries[i + 1] end
+    end
+  end
+  local residual = engine.runtime:_call_in_phase('guard', 'callback_error', guard.fn, unpack_(input, 1, input.n))
+  if not Operation.is(residual) then error('guard callback must return an Op', 0) end
+  if not entries then entries = {}; activation[A_GUARDS] = entries end
+  entries[#entries + 1], entries[#entries + 2] = input, residual
+  if request.op == guard and activation == request.activation_root then request.metadata = Operation.shape(residual) end
+  return residual
+end
 local leaf_kind = Operation.leaf_kind
 local PACK_TRUE = pack_(true)
 local ACT = {
@@ -331,7 +393,7 @@ local function ensure_table(state, key)
 end
 
 local function advance_activation(state, task, ...)
-  setv(state, task, 'activation', Activation.child(task.activation, ...))
+  setv(state, task, 'activation', activation_child(task.activation, ...))
 end
 
 local function copy_array(xs)
@@ -405,7 +467,7 @@ local function finish_group_lane(state, task, frame, outcome)
   local parent = group.parent_task
   local activation_parts = {}
   for i = 1, group.count do activation_parts[i] = group.lane_outcomes[i].activation end
-  setv(state, parent, 'activation', Activation.child_array(group.activation, ACT.product_result, activation_parts))
+  setv(state, parent, 'activation', activation_child_array(group.activation, ACT.product_result, activation_parts))
   setv(state, parent, 'status', 'active')
   return complete_task(state, parent, new_outcome(parent, pack_(rows), product_wrap(group.lane_outcomes)))
 end
@@ -432,7 +494,7 @@ complete_task = function(state, task, outcome)
       )
     elseif frame.kind == 'bind' then
       local input_pack = pack_(unpack_pack(outcome.pack))
-      local next_activation = Activation.child(frame.activation, ACT.and_then_result, outcome.activation)
+      local next_activation = activation_child(frame.activation, ACT.and_then_result, outcome.activation)
       setv(state, task, 'guard_input_pack', input_pack)
       continue_task(state, task, frame.q, next_activation)
       return true
@@ -448,16 +510,16 @@ end
 
 local function add_root(state, request, required_intents)
   if not request or not request.pending or state.roots[request] then return request and request.pending or false end
-  if not request.activation_root then request.activation_root = Activation.new_request(request.order) end
+  if not request.activation_root then request.activation_root = new_activation() end
 
   local root = {
-    serial = request.activation_root.id, request = request, expr = request.op,
-    frames = {}, scope_path = nil, status = 'active',
+    serial = activation_id(request.activation_root), request = request, expr = request.op,
+    frames = {}, status = 'active',
     activation = request.activation_root,
     required_intents = required_intents,
   }
   root.root = root
-  root.segment = state.journal:new_segment(root, nil)
+  root.segment = state.journal:new_segment(root)
   setv(state, state.roots, request, root)
   pushv(state, state.active, root)
   return true
@@ -471,14 +533,13 @@ local function start_product(state, task, op)
   setv(state, task, 'status', 'waiting_group')
 
   for i = 1, #op.lanes do
-    local path = Activation.scope_child(task.scope_path, group, op.mode, i)
-    local segment = state.journal:new_segment(task.root, path, task.segment)
+    local segment = state.journal:new_segment(task.root, task.segment, group, i)
     group.lane_segments[i] = segment
-    local activation = Activation.child(task.activation, ACT.product_lane, i)
+    local activation = activation_child(task.activation, ACT.product_lane, i)
     local child = {
-      serial = activation.id, root = task.root, expr = op.lanes[i],
+      serial = activation_id(activation), root = task.root, expr = op.lanes[i],
       frames = { { kind = 'group_lane', group = group, lane = i } },
-      segment = segment, scope_path = path, status = 'active',
+      segment = segment, status = 'active',
       activation = activation,
       guard_input_pack = task.guard_input_pack,
     }
@@ -499,7 +560,7 @@ local function intents_compatible(a, b)
   if a.root ~= b.root then
     return true
   end
-  return Activation.relation(a.root, a.scope_path, b.root, b.scope_path) == 'interacting'
+  return Journal.relation(a.task.segment, b.task.segment) == 'interacting'
 end
 
 local function root_requires(root, intent)
@@ -588,7 +649,6 @@ local function block_intent(state, task, occurrence, observed_version)
   intent.payload, intent.activation = occurrence.arg, task.activation
   intent.resource, intent.role, intent.value = leaf.resource, leaf.role, occurrence.arg
   intent.name = leaf.name
-  intent.scope_path = task.scope_path
   intent.active = true
   intent.interest = type(leaf.interest) == 'function' and leaf.interest(state.engine.runtime, leaf)
     or leaf.interest
@@ -607,12 +667,11 @@ local function block_choice(state, task, expr)
     order = choice_indices(
       state.engine,
       task,
-      task.activation.id,
+      activation_id(task.activation),
       #expr.choices,
       state.choice_generation
     ),
     activation = task.activation,
-    scope_path = task.scope_path,
     required_intents = task.required_intents,
     active = true,
   }
@@ -633,9 +692,13 @@ local function match_intents(state, a, b)
   local put_task = put.task
   local get_task = get.task
   local left, right = a.activation, b.activation
-  if Activation.less(right, left) then left, right = right, left end
-  setv(state, put_task, 'activation', Activation.child(put_task.activation, ACT.exchange, left, right, a.resource))
-  setv(state, get_task, 'activation', Activation.child(get_task.activation, ACT.exchange, left, right, a.resource))
+  if b.request.order < a.request.order
+    or (b.request.order == a.request.order and activation_id(right) < activation_id(left))
+  then
+    left, right = right, left
+  end
+  setv(state, put_task, 'activation', activation_child(put_task.activation, ACT.exchange, left, right, a.resource))
+  setv(state, get_task, 'activation', activation_child(get_task.activation, ACT.exchange, left, right, a.resource))
   if not complete_task(state, put_task, new_outcome(put_task, PACK_TRUE)) then return false end
   if not complete_task(state, get_task, new_outcome(get_task, pack_(put.value))) then return false end
   return true
@@ -689,7 +752,7 @@ local function finish_transitions(state, selected, resolved)
   remove_intents(state, selected)
   for i = 1, #resolved do
     local row = resolved[i]
-    setv(state, row.task, 'activation', Activation.child_array(row.task.activation, ACT.transition, facts))
+    setv(state, row.task, 'activation', activation_child_array(row.task.activation, ACT.transition, facts))
     if not complete_task(state, row.task, new_outcome(row.task, row.result)) then
       return false
     end
@@ -779,7 +842,7 @@ local function resolve_witness(state, intent, outcome, alternative_index)
     state,
     task,
     'activation',
-    Activation.child(
+    activation_child(
       task.activation, ACT.witness, intent.activation, intent.spec.location,
       intent.observed_version or intent.spec.location.version or 0, alternative_index or 1
     )
@@ -869,7 +932,7 @@ local function execute_leaf(state, task, occurrence)
   end
 
   if kind == 'clock_now' then
-    local value = Activation.clock(state.engine, occurrence, task.activation)
+    local value = activation_clock(state.engine, occurrence, task.activation)
     advance_activation(state, task, leaf)
     return complete_task(state, task, new_outcome(task, Operation.result_pack(leaf, value)))
   end
@@ -1008,8 +1071,7 @@ local function exchange_partner_available(state, task, resource, role)
     kind = 'exchange',
     resource = resource,
     role = role,
-    root = task.root, request = task.root.request,
-    scope_path = task.scope_path,
+    task = task, root = task.root, request = task.root.request,
   }
   local bucket = state.exchange_buckets and state.exchange_buckets[resource]
   local opposite = role == 'put' and 'get' or 'put'
@@ -1171,7 +1233,7 @@ local function resolve_choice(state, intent, choice_index)
       for j = 1, #defeats do pushv(state, effects, defeats[j]) end
     end
   end
-  continue_task(state, task, expr.choices[choice_index], Activation.child(intent.activation, ACT.choice, choice_index))
+  continue_task(state, task, expr.choices[choice_index], activation_child(intent.activation, ACT.choice, choice_index))
   return true
 end
 
@@ -1250,7 +1312,7 @@ end
 local function prefer(state, task, expr)
   local mark = state.journal:mark()
   state.search_depth = state.search_depth + 1
-  continue_task(state, task, expr.p, Activation.child(task.activation, ACT.preferred))
+  continue_task(state, task, expr.p, activation_child(task.activation, ACT.preferred))
   local candidate, preferred_refutation, unknown = search(state)
   state.search_depth = state.search_depth - 1
   if candidate then
@@ -1282,7 +1344,7 @@ local function prefer(state, task, expr)
     state,
     task,
     expr.q,
-    Activation.child_array(task.activation, ACT.fallback, Proof.gate_facts(preferred_refutation))
+    activation_child_array(task.activation, ACT.fallback, Proof.gate_facts(preferred_refutation))
   )
   local fallback, fallback_refutation, fallback_unknown = search(state)
   if fallback then return fallback, fallback_refutation, fallback_unknown end
@@ -1302,23 +1364,23 @@ local function reduce_one(state, task)
   elseif kind == 'guard' then
     local parent = task.activation
     local request = task.root.request
-    local residual = Activation.guard(state.engine, request, expr, parent, task.guard_input_pack)
-    continue_task(state, task, residual, Activation.child(parent, ACT.guard))
+    local residual = activation_guard(state.engine, request, expr, parent, task.guard_input_pack)
+    continue_task(state, task, residual, activation_child(parent, ACT.guard))
     return 'progress'
   elseif kind == 'map' then
     pushv(state, task.frames, { kind = 'map', fn = expr.fn })
-    continue_task(state, task, expr.p, Activation.child(task.activation, ACT.map))
+    continue_task(state, task, expr.p, activation_child(task.activation, ACT.map))
     return 'progress'
   elseif kind == 'and_then' then
     pushv(state, task.frames, { kind = 'bind', q = expr.q, activation = task.activation })
-    continue_task(state, task, expr.p, Activation.child(task.activation, ACT.and_then_prefix))
+    continue_task(state, task, expr.p, activation_child(task.activation, ACT.and_then_prefix))
     return 'progress'
   elseif kind == 'annotated' then
     local parent = task.activation
     if expr.post then
       pushv(state, task.frames, { kind = 'wrap', fn = expr.post })
     end
-    continue_task(state, task, expr.p, Activation.child(parent, ACT.annotated))
+    continue_task(state, task, expr.p, activation_child(parent, ACT.annotated))
     return 'progress'
   elseif kind == 'consequence' then
     pushv(state, ensure_table(state, 'effects'), expr.effect)

@@ -25,8 +25,8 @@ end
 do
   local location = Journal.new_location({ algebra = 'add', value = 5 })
   local journal = Journal.new()
-  local parent = journal:new_segment(1, {}, nil)
-  local child = journal:new_segment(1, { { group_id = 1, mode = 'independent', lane = 1 } }, parent)
+  local parent = journal:new_segment(1)
+  local child = journal:new_segment(1, parent, { mode = 'independent' }, 1)
   Journal.stage(child, location, { kind = 'add', delta = -2 })
   eq(Journal.read(child, location), 3)
   eq(Journal.join_segments(parent, { child }, 'independent'), true)

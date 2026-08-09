@@ -91,7 +91,7 @@ eq(A.apply(overwrite, {}, interacting).x, 'b', 'interacting overwrite is ordered
 
 local lazy_writer_location = S.new_location({ algebra = 'replace', value = 0 })
 local lazy_journal = S.new()
-local lazy_writer_view = lazy_journal:new_segment(1, {}, nil)
+local lazy_writer_view = lazy_journal:new_segment(1)
 S.stage(lazy_writer_view, lazy_writer_location, { kind = 'replace', value = 1 })
 assert(next(lazy_journal.writers) == nil, 'ordinary writes should not activate the projection index')
 

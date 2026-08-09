@@ -51,7 +51,7 @@ do
       eq(handles[i].done, true, 'completed handle should report done')
       eq(handles[i].co, nil, 'completed handle should release its coroutine')
       eq(handles[i].scope, nil, 'completed handle should release its scope')
-      eq(handles[i].scope_stack, nil, 'completed handle should release its scope stack')
+      eq(handles[i].scope_stack, nil, 'fiber handles should not carry a scope stack')
     end
   end
 end

@@ -5,7 +5,6 @@ local Search = require('fibers.internal.kernel.search')
 local Proof = require('fibers.internal.proof')
 local Interest = require('fibers.embed.external').Interest
 local Operation = require('fibers.internal.operation')
-local Activation = require('fibers.internal.kernel.activation')
 local Label = require('fibers.internal.label')
 
 local Engine = {}
@@ -86,7 +85,6 @@ function Engine.admit(engine, fiber, op, interrupt)
   engine.next_request_order = engine.next_request_order + 1
   fiber.order = engine.next_request_order
   fiber.pending = true
-  fiber.activation_root = Activation.new_request(fiber.order)
   fiber.op = op
   fiber.interrupt = interrupt
   engine.pending[#engine.pending + 1] = fiber

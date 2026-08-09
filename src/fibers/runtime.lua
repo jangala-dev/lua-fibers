@@ -47,10 +47,11 @@ local next_runtime_id = 0
 
 Runtime.__index = Runtime
 function Runtime.current()
-  return Context.current_runtime()
+  return Context.runtime
 end
 function Runtime.current_scope()
-  return Context.current_scope()
+  local rt = Context.runtime
+  return rt and rt._current_fiber.scope or nil
 end
 
 local unpack_ = table.unpack or unpack
@@ -334,7 +335,6 @@ local function spawn_unchecked(self, fn, scope, subject)
     started = false,
     done = false,
     scope = scope,
-    scope_stack = scope and { scope } or nil,
   })
   self._ready_tail = self._ready_tail + 1
   self._ready_fibers[self._ready_tail] = fiber
@@ -399,7 +399,6 @@ function Runtime:_finish_fiber(fiber)
   -- its coroutine and dynamic scope graph must not be retained by the runtime.
   fiber.co = nil
   fiber.scope = nil
-  fiber.scope_stack = nil
   self._live_fibers = self._live_fibers - 1
   local instrumentation = self.instrumentation
   if instrumentation then
@@ -413,8 +412,8 @@ function Runtime:_resume_fiber(fiber, a, b, c)
   if instrumentation then
     instrumentation:inc('fiber_resumes')
   end
-  local context_token, previous_fiber = Context.enter(self, fiber.scope), self._current_fiber
-  self._current_fiber = fiber
+  local previous_runtime, previous_fiber = Context.runtime, self._current_fiber
+  Context.runtime, self._current_fiber = self, fiber
   local old_phase = self:_set_phase('fiber')
   if fiber.started then
     ok, yielded, yielded_op, yielded_interrupt = coroutine.resume(fiber.co, a, b, c)
@@ -423,8 +422,7 @@ function Runtime:_resume_fiber(fiber, a, b, c)
     ok, yielded, yielded_op, yielded_interrupt = coroutine.resume(fiber.co)
   end
   self:_restore_phase(old_phase)
-  Context.leave(context_token)
-  self._current_fiber = previous_fiber
+  self._current_fiber, Context.runtime = previous_fiber, previous_runtime
   if not ok then
     self:_finish_fiber(fiber)
     error(yielded, 0)

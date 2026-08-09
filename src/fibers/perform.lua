@@ -6,11 +6,11 @@
 local Context = require('fibers.internal.context')
 
 local function perform(option)
-  local rt = Context.current_runtime()
+  local rt = Context.runtime
   if not rt then
     error('fibers.perform must be called from a running fiber', 2)
   end
-  local scope = Context.current_scope()
+  local scope = rt._current_fiber.scope
   if scope and type(scope.perform) == 'function' then
     return scope:perform(option)
   end

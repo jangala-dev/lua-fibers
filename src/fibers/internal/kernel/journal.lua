@@ -1,6 +1,5 @@
 -- Speculative journal: rollback plus hierarchical transactional state.
 
-local Activation = require('fibers.internal.kernel.activation')
 local Algebra = require('fibers.internal.kernel.algebra')
 
 local Journal = { ABSENT = Algebra.ABSENT }
@@ -168,14 +167,16 @@ function Journal.new_location(opts)
   return location
 end
 
-function Journal:new_segment(root, scope_path, source)
+function Journal:new_segment(root, parent, group, lane)
   local segment = {
     journal = self,
-    parent = source,
+    parent = parent,
+    depth = parent and parent.depth + 1 or 0,
+    group = group,
+    lane = lane,
     values = {}, -- materialised values for locally written locations
     delta = {},
     root = root,
-    scope_path = scope_path,
     retired = false,
   }
   self.segments[#self.segments + 1] = segment
@@ -235,6 +236,22 @@ local function writers_for(journal, location)
   return writers
 end
 
+local function relation(left, right)
+  if left.root ~= right.root then return 'external' end
+  if left == right then return nil end
+  local a, b, da, db = left, right, left.depth, right.depth
+  while da > db do a, da = a.parent, da - 1 end
+  while db > da do b, db = b.parent, db - 1 end
+  if a == b then return nil end
+  while a and b and a.parent ~= b.parent do a, b = a.parent, b.parent end
+  if not a or not b or a.group ~= b.group or a.lane == b.lane then return nil end
+  return a.group.mode == 'interacting' and 'interacting' or 'independent'
+end
+
+function Journal.relation(left, right)
+  return relation(left, right)
+end
+
 local function visible_patch(location, patch, relation, orientation)
   if relation == 'external' or relation == 'interacting' then
     return patch
@@ -253,7 +270,7 @@ function Journal.project(task, location, orientation)
     local segment = writers[i]
     local patch = segment.delta[location]
     if segment ~= own and not segment.retired and patch then
-      local relation = Activation.relation(task.root, task.scope_path, segment.root, segment.scope_path)
+      local relation = relation(own, segment)
       local visible = visible_patch(location, patch, relation, orientation)
       if visible then
         local mode = relation == 'interacting' and 'interacting'
@@ -282,7 +299,7 @@ function Journal.project_machine(task, location, succeeds, accepts_supply)
     local segment = writers[i]
     local patch = segment.delta[location]
     if segment ~= own and not segment.retired and patch then
-      local relation = Activation.relation(task.root, task.scope_path, segment.root, segment.scope_path)
+      local relation = relation(own, segment)
       if relation == 'external' or relation == 'interacting' or relation == 'independent' then
         Algebra.serialise(location, patch, relation, steps)
       end

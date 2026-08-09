@@ -6,7 +6,6 @@
 -- which the driver applies through ordinary Ops.
 
 local Runtime = require('fibers.runtime')
-local Context = require('fibers.internal.context')
 local Protected = require('fibers.protected')
 local Exit = require('fibers.task').Exit
 local ScopeOutcome = require('fibers.scope.outcome')
@@ -389,6 +388,9 @@ function Driver.run(scope, fn, closure, on_body_exit)
   if type(fn) ~= 'function' then
     error('Scope:run expects a function', 2)
   end
+  if on_body_exit ~= nil and type(on_body_exit) ~= 'function' then
+    error('Scope closure body-exit hook must be a function or nil', 2)
+  end
   local rt = scope._lifetime._runtime or Runtime.current()
   if not rt then
     error('Scope:run requires a current runtime', 2)
@@ -400,7 +402,9 @@ function Driver.run(scope, fn, closure, on_body_exit)
   state.active = true
   state.closure = closure
 
-  local token = Context.push_scope(rt, scope)
+  local fiber = assert(rt._current_fiber, 'Scope:run requires a current fiber')
+  local previous_scope = fiber.scope
+  fiber.scope = scope
   local setup_ok, setup_err = Protected.pcall(function()
     account_existing_children(scope, state)
   end)
@@ -412,20 +416,9 @@ function Driver.run(scope, fn, closure, on_body_exit)
     body_results = pack(false, setup_err)
   end
   if on_body_exit ~= nil then
-    if type(on_body_exit) ~= 'function' then
-      error('Scope closure body-exit hook must be a function or nil', 2)
-    end
     local published, publish_err = Protected.pcall(on_body_exit, body_results, rt)
     if not published then
-      if token then
-        local pop_ok, pop_err = Protected.pcall(function()
-          return Context.pop_scope(rt, token)
-        end)
-        if not pop_ok then
-          error('body-exit hook failed: ' .. tostring(publish_err)
-            .. '; scope context pop also failed: ' .. tostring(pop_err), 0)
-        end
-      end
+      fiber.scope = previous_scope
       error(publish_err, 0)
     end
   end
@@ -481,17 +474,7 @@ function Driver.run(scope, fn, closure, on_body_exit)
     end
   end
 
-  local pop_ok, pop_err = true, nil
-  if token then
-    pop_ok, pop_err = Protected.pcall(function()
-      return Context.pop_scope(rt, token)
-    end)
-  end
-  if not pop_ok then
-    local primary = result.ok and pop_err or result.primary
-    result = failed_result(scope, result.ok and 'closure_failed' or result.reason,
-      primary, { pop_err }, { reason = 'scope_pop_failed' })
-  end
+  fiber.scope = previous_scope
   return result
 end
 

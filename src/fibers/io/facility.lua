@@ -6,7 +6,6 @@
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
-local Context = require('fibers.internal.context')
 local Stream = require('fibers.io.stream')
 local Task = require('fibers.task')
 local Scope = require('fibers.scope')
@@ -32,7 +31,7 @@ end
 
 function IO.current_scope(opts, label)
   opts = opts == nil and {} or Contract.table(opts, (label or 'operation') .. ' options', 3)
-  local scope = opts.scope or Context.current_scope()
+  local scope = opts.scope or Runtime.current_scope()
   if not Scope.is(scope) then
     error(label .. ' requires opts.scope or a current Scope', 3)
   end
