@@ -247,7 +247,7 @@ local function find_candidate(engine, focus, search_limit, requests, component, 
   )
 end
 
-local function suspension_error(engine, fiber, contract, reason)
+local function suspension_error(engine, fiber, reason)
   local op_label = Operation.diagnostic_label(fiber.op)
   local fiber_label = Label.describe(fiber._fibers_label_subject or fiber, fiber._fibers_id)
   local message = 'suspension prohibited in this region'
@@ -261,7 +261,7 @@ local function suspension_error(engine, fiber, contract, reason)
     operation_label = op_label,
     fiber = fiber,
     fiber_label = fiber_label,
-    region = contract,
+    region = { kind = 'without_suspension' },
     reason = reason or 'operation would suspend',
   })
 end
@@ -285,20 +285,18 @@ local function strict_component(engine, fiber)
   return requests, component, members, provisional_admission
 end
 
-local function resolve_without_suspension_impl(engine, fiber)
-  local runtime = engine.runtime
-  local contract = runtime:_suspension_contract(fiber)
+function Engine:resolve_without_suspension(fiber)
   local attempts = 0
   while fiber.pending do
     attempts = attempts + 1
-    local requests, component, members, provisional_admission = strict_component(engine, fiber)
+    local requests, component, members, provisional_admission = strict_component(self, fiber)
     local candidate, _, unknown = find_candidate(
-      engine, fiber, nil, requests, component, provisional_admission
+      self, fiber, nil, requests, component, provisional_admission
     )
 
     if candidate then
       if candidate_can_resume_first(candidate, fiber, members) then
-        local committed = candidate:settle(engine)
+        local committed = candidate:settle(self)
         if committed then return true end
       end
       candidate:discard('suspension-prohibited')
@@ -320,15 +318,11 @@ local function resolve_without_suspension_impl(engine, fiber)
   end
 
   if fiber.pending then
-    local reason = engine._last_search_unknown_reason or 'operation_not_immediately_committable'
-    engine:remove_small(1, fiber)
-    Engine.resume(engine, fiber, nil, suspension_error(engine, fiber, contract, reason))
+    local reason = self._last_search_unknown_reason or 'operation_not_immediately_committable'
+    self:remove_small(1, fiber)
+    Engine.resume(self, fiber, nil, suspension_error(self, fiber, reason))
   end
   return false
-end
-
-function Engine:resolve_without_suspension(fiber)
-  return resolve_without_suspension_impl(self, fiber)
 end
 
 local function pending_status(engine, refs, unknown)

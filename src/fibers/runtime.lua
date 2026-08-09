@@ -5,7 +5,6 @@ local Values = require('fibers.internal.values')
 local Protected = require('fibers.internal.protected')
 local Context = require('fibers.internal.context')
 local Engine = require('fibers.internal.engine')
-local Execution = require('fibers.internal.execution')
 local Label = require('fibers.internal.label')
 local Contract = require('fibers.internal.contract')
 
@@ -371,19 +370,6 @@ function Runtime:_discharge_interrupt(token, reason)
   return self.engine:interrupt(token, Runtime.cancelled(reason, token))
 end
 
-function Runtime:_enter_execution_contract(spec)
-  self:_require_perform_allowed(2)
-  return Execution.enter(self, spec)
-end
-
-function Runtime:_leave_execution_contract(token)
-  return Execution.leave(self, token)
-end
-
-function Runtime:_suspension_contract(fiber)
-  return Execution.suspension_contract(fiber or self._current_fiber)
-end
-
 function Runtime:_perform_current(op, interrupt, masked)
   if interrupt and interrupt.raised and not masked then
     error(Runtime.cancelled(interrupt.reason, interrupt), 0)
@@ -452,7 +438,7 @@ function Runtime:_resume_fiber(fiber, a, b, c)
     error('runtime received an unsupported coroutine yield', 0)
   end
   self.engine:admit(fiber, yielded_op, yielded_interrupt)
-  if Execution.suspension_forbidden(fiber) then
+  if fiber._suspension_forbidden then
     self.engine:resolve_without_suspension(fiber)
   end
 end

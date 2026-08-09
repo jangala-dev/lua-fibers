@@ -10,7 +10,6 @@ local Runtime = require('fibers.runtime')
 local Scope = require('fibers.scope')
 local perform = require('fibers.perform')
 local ScopeOutcome = require('fibers.scope.outcome')
-local Execution = require('fibers.internal.execution')
 local Contract = require('fibers.internal.contract')
 
 local M = { perform = perform }
@@ -183,13 +182,12 @@ function M.without_suspension(fn, ...)
   if not rt then
     error('fibers.without_suspension must be called from a running fiber', 2)
   end
-  local token = rt:_enter_execution_contract({
-    suspension = 'forbidden',
-    kind = 'without_suspension',
-    source = Execution.capture_source(2),
-  })
+  rt:_require_perform_allowed(2)
+  local fiber = rt._current_fiber
+  local previous = fiber._suspension_forbidden
+  fiber._suspension_forbidden = true
   local result = pack(Protected.pcall(fn, ...))
-  rt:_leave_execution_contract(token)
+  fiber._suspension_forbidden = previous
   if not result[1] then
     error(result[2], 0)
   end
