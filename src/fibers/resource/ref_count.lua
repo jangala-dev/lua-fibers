@@ -7,19 +7,22 @@ local Label = require('fibers.internal.label')
 local RefCount = {}
 local Handle = {}
 local next_id = 0
+local function true_() return true end
+local function false_() return false end
 
 RefCount.__index = RefCount
 Handle.__index = Handle
 
 local function handle(group, active)
   group._next_id = group._next_id + 1
-  local id = group._fibers_id .. ':handle-' .. tostring(group._next_id)
+  local suffix = 'handle-' .. tostring(group._next_id)
+  local id = group._fibers_id .. ':' .. suffix
   local value = Label.attach(setmetatable({
     _fibers_id = id,
     _group = group,
     _active = Cell.new(active),
   }, Handle))
-  Label.child(value, group, 'handle-' .. tostring(group._next_id))
+  Label.child(value, group, suffix)
   Label.child(value._active, value, 'active')
   return value
 end
@@ -67,13 +70,9 @@ function Handle:close_op()
   local close = self:active_op():and_then(Op.each(
       self._active:write_op(false),
       self._group._count:take_op(1)
-    ):map(function()
-      return true
-    end))
+    ):map(true_))
 
-  return close:or_else(self:inactive_op():map(function()
-    return false
-  end))
+  return close:or_else(self:inactive_op():map(false_))
 end
 
 RefCount.Handle = Handle

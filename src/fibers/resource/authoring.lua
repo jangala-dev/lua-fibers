@@ -30,10 +30,6 @@ local RULE_OPTIONS = {
   serial_order = true,
 }
 
-local function validate_keys(value, allowed, label, level)
-  return Contract.options(value, allowed, label, level or 3)
-end
-
 
 local LOCATION_OPTIONS = {
   algebra = true,
@@ -108,24 +104,11 @@ M.result = Operation.result
 M.pack = Values.pack
 M.unpack = Values.unpack
 
-local function is_pack(value)
-  return type(value) == 'table' and value._fibers_pack == true
-end
-
-function M.op(spec)
-  return Operation.op(spec)
-end
-
-function M.bind(spec, argument)
-  return Operation.bind(spec, argument)
-end
+M.op = Operation.op
+M.bind = Operation.bind
 
 function M.read(location, result, resource)
   return Operation.read(location, result or M.result.value, resource)
-end
-
-function M.write(location, patch, result, resource)
-  return Operation.patch(location, patch, result or M.result.boolean, resource)
 end
 
 function M.replace(location, result, resource)
@@ -158,35 +141,19 @@ function M.version_wait(location, resource)
   return Operation.version_wait(location, nil, resource)
 end
 
-function M.clock_now(resource)
-  return Operation.clock_now(resource)
-end
+M.clock_now = Operation.clock_now
 
 function M.outcome(patch, ...)
   return { patch = patch, result = Values.pack(...) }
 end
 
 function M.outcome_packed(patch, packed)
-  if not is_pack(packed) then error('packed outcome requires a Fibers value pack', 2) end
+  if not Values.is(packed) then error('packed outcome requires a Fibers value pack', 2) end
   return { patch = patch, result = packed }
 end
 
-local function state_spec(opts, transition, internal)
-  internal = internal or {}
-  return Operation.transition({
-    location = opts.location,
-    orientation = opts.demand,
-    argument = opts.payload,
-    resource = opts.resource,
-    interest = opts.wake,
-    absence_check = internal.absence_check,
-    name = internal.name,
-    transition = transition,
-  })
-end
-
 local function validate_rule(mode, opts, level)
-  validate_keys(opts, RULE_OPTIONS, mode .. ' rule options', (level or 2) + 1)
+  Contract.options(opts, RULE_OPTIONS, mode .. ' rule options', (level or 2) + 1)
   if opts.location == nil then error(mode .. ' rule requires location', (level or 2) + 1) end
   local has_step = type(opts.step) == 'function'
   local has_cursor = type(opts.cursor) == 'function'
@@ -226,19 +193,17 @@ local function make_rule(mode, opts, internal)
       and {}
       or Algebra.normalise_supply(opts.supply, mode .. ' rule supply', 3)
 
-  return state_spec(opts, {
-    serial = serial,
-    enumerable = opts.cursor ~= nil,
-    eager = internal.eager == true,
-    total = internal.total == true,
-    order = opts.serial_order or 0,
-    accepts_supply = visibility == 'together',
-    supplies = supplies,
-    writes = mode == 'change',
-    ready = internal.probe,
-    step = opts.step,
-    cursor = opts.cursor,
-  }, internal)
+  return Operation.transition({
+    location = opts.location, orientation = opts.demand, argument = opts.payload,
+    resource = opts.resource, interest = opts.wake, absence_check = internal.absence_check,
+    name = internal.name,
+    transition = {
+      serial = serial, enumerable = opts.cursor ~= nil, eager = internal.eager == true,
+      total = internal.total == true, order = opts.serial_order or 0,
+      accepts_supply = visibility == 'together', supplies = supplies, writes = mode == 'change',
+      ready = internal.probe, step = opts.step, cursor = opts.cursor,
+    },
+  })
 end
 
 M.rule = {}
@@ -251,9 +216,7 @@ function M.rule.change(opts)
   return make_rule('change', opts)
 end
 
-function M.rule.exchange(opts)
-  return Operation.exchange(opts)
-end
+M.rule.exchange = Operation.exchange
 
 -- Private compiler entry used by closed façades such as Machine and Clock.
 -- The public rule vocabulary does not expose totality, eagerness, probes or
@@ -265,19 +228,5 @@ function M._state_rule(mode, opts, internal)
   return make_rule(mode, opts, internal)
 end
 
--- Built-in clock waits are the sole ambient absence validator. Ordinary
--- external resources rely on managed-location versions instead.
-function M._clock_wait(opts)
-  return M.op(M._state_rule('inspect', {
-    location = assert(opts.location, 'clock wait requires location'),
-    payload = opts.payload,
-    resource = opts.resource,
-    wake = opts.wake,
-    visibility = 'own',
-    step = assert(opts.step, 'clock wait requires step'),
-  }, {
-    absence_check = assert(opts.absence_check, 'clock wait requires absence validation'),
-  }))
-end
 
 return M

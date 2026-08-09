@@ -25,6 +25,13 @@ local function clone(state)
   return { ready = state.ready, values = state.values }
 end
 
+local function wake(runtime, leaf)
+  local signal = leaf.resource
+  return External.Interest.external(signal, 'ready', {
+    external_kind = 'signal', feed = External.Feed.for_resource(runtime, signal),
+  })
+end
+
 function Signal.new()
   local signal = Facility.identity(setmetatable({}, Signal), Kind)
   signal._location = Facility.location(signal, {
@@ -34,14 +41,7 @@ function Signal.new()
     clone_value = clone,
   })
   External.attach(signal, signal._location, deliver, clear)
-  signal._wait_op = Facility.op(StateMachine._compile(signal._location, signal, Wait, {
-    wake = function(runtime)
-      return External.Interest.external(signal, 'ready', {
-        external_kind = 'signal',
-        feed = External.Feed.for_resource(runtime, signal),
-      })
-    end,
-  }))
+  signal._wait_op = Facility.op(StateMachine._compile(signal._location, signal, Wait, { wake = wake }))
   return signal
 end
 

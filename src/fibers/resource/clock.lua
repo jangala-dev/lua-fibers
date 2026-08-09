@@ -15,6 +15,19 @@ local function finite_number(value, name)
   return value
 end
 
+local function wake(runtime, leaf, deadline)
+  return Interest.timer(deadline, leaf.resource)
+end
+
+local function absent(runtime, deadline)
+  return runtime:now() < deadline
+end
+
+local function at(_, deadline, context)
+  local now = context.now()
+  if now >= deadline then return Facility.outcome(nil, now) end
+end
+
 function Clock.new()
   local c = Facility.identity(setmetatable({}, Clock), Kind)
   c._location = Facility.location(c, {
@@ -36,19 +49,15 @@ function Clock:now_op()
 end
 
 function Clock:at_op(deadline)
-  deadline = finite_number(deadline, 'Clock:at_op deadline')
-  return Facility._clock_wait({
-    location = self._location,
-    payload = deadline,
-    resource = self,
-    wake = Interest.timer(deadline, self),
-    absence_check = function(rt) return rt:now() < deadline end,
-    step = function(_, target, context)
-      local now = context.now()
-      if now < target then return nil end
-      return Facility.outcome(nil, now)
-    end,
-  })
+  finite_number(deadline, 'Clock:at_op deadline')
+  local spec = self._at_spec
+  if not spec then
+    spec = Facility._state_rule('inspect', {
+      location = self._location, resource = self, wake = wake, visibility = 'own', step = at,
+    }, { absence_check = absent })
+    self._at_spec = spec
+  end
+  return Facility.bind(spec, deadline)
 end
 
 function Clock:after_op(delay)

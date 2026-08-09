@@ -29,7 +29,7 @@ local function pop(entries, maximum)
       local better = rank ~= best_rank
         and (maximum and rank > best_rank or not maximum and rank < best_rank)
       if rank == best_rank then
-        local seq, best_seq = entry.seq or 0, best.seq or 0
+        local seq, best_seq = entry.seq, best.seq
         if seq == best_seq then error('index entries require unique (rank, sequence) pairs', 2) end
         better = maximum and seq > best_seq or not maximum and seq < best_seq
       end
@@ -41,8 +41,8 @@ local function pop(entries, maximum)
 end
 
 local function create(entries)
-  local index = Facility.identity(setmetatable({ _initial_entries = {}, _next_seq = 0 }, Index), Kind)
-  local order = {}
+  local index = Facility.identity(setmetatable({ _next_seq = 0 }, Index), Kind)
+  local initial, order = {}, {}
   for i = 1, #entries do
     local entry, key = entries[i], entries[i].key or i
     local rank = entry.rank or i
@@ -55,13 +55,12 @@ local function create(entries)
     if by_seq[seq] then error('index entries require unique (rank, sequence) pairs', 3) end
     by_seq[seq] = true
     if seq > index._next_seq then index._next_seq = seq end
-    index._initial_entries[key] = { key = key, rank = rank, value = entry.value, seq = seq }
+    initial[key] = { key = key, rank = rank, value = entry.value, seq = seq }
   end
   index._location = Facility.location(index, {
-    algebra = 'finite_map', domain = 'finite_map', value = index._initial_entries,
+    algebra = 'finite_map', domain = 'finite_map', value = initial,
     clone_value = copy_entry, put_equal = false, remove_idempotent = true,
   })
-  index._initial_entries = nil
   return index
 end
 

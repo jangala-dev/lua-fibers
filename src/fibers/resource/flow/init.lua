@@ -105,14 +105,9 @@ local function new_state()
   return {
     input_open = true,
     output_open = true,
-    input_error = nil,
-    output_error = nil,
     rope = Rope.new(),
-    lease = nil,
     next_lease = 0,
-    space = nil,
     next_space = 0,
-    settled_error = nil,
   }
 end
 
@@ -166,31 +161,17 @@ end
 
 -- Host notification ---------------------------------------------------------
 
-local Changed
-Changed = Effect.kind({
+local function discharge_changed(runtime, prepared)
+  local reactor = runtime.host_reactor
+  if reactor and reactor._notify_flow_changed then reactor:_notify_flow_changed(prepared.flow) end
+  return true
+end
+
+local Changed = Effect.kind({
   name = 'flow_changed',
-  key = function(payload) return payload.flow._fibers_id end,
+  key = function(payload) return payload.flow end,
   merge = function(first) return first end,
-  validate_payload = function(_, payload)
-    if type(payload.flow) ~= 'table' or payload.flow._fibers_id == nil then
-      return nil, { kind = 'invalid_effect_payload', message = 'flow_changed effect requires a Flow' }
-    end
-    return true
-  end,
-  prepare = function(_, payload)
-    return {
-      kind = Changed,
-      key = payload.flow._fibers_id,
-      payload = payload,
-      discharge = function(runtime, prepared)
-        local reactor = runtime.host_reactor
-        if reactor and reactor._notify_flow_changed then
-          reactor:_notify_flow_changed(prepared.payload.flow)
-        end
-        return true
-      end,
-    }
-  end,
+  prepare = function(_, payload) return { flow = payload.flow, discharge = discharge_changed } end,
 })
 
 local function transition(flow, rule, payload)
@@ -198,11 +179,11 @@ local function transition(flow, rule, payload)
   payload.flow = flow
   local option = flow._state:transition_op(rule, payload)
   if rule.rule_mode == 'inspect' then return option end
+  local effect = flow._changed_effect
+  if not effect then effect = Effect.of(Changed, { flow = flow }); flow._changed_effect = effect end
   return option:and_then(Op.guard(function(...)
     local result = Facility.pack(...)
-    return Op.emit(Effect.of(Changed, { flow = flow })):map(function()
-      return Facility.unpack(result, 1, result.n)
-    end)
+    return Op.emit(effect):map(function() return Facility.unpack(result, 1, result.n) end)
   end))
 end
 

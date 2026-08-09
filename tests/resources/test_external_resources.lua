@@ -265,6 +265,31 @@ do
   assert_eq(got, 'time', 'matured primary should beat stale fallback proof')
 end
 
+-- A shared compiled clock check must retain the bound deadline in absence proofs.
+-- Put the later deadline first so function-only check deduplication would keep
+-- the wrong proof and could allow a stale fallback after the earlier deadline.
+do
+  local now = 0
+  local clock = Clock.new():label('clock-shared-check-payload')
+  local rt = Runtime.new({ host = {
+    now = function() return now end,
+  } })
+  local got
+  rt:spawn_raw(function()
+    got = rt:perform(Op.choice(
+      clock:at_op(10):map(function() return 'late' end),
+      clock:at_op(5):map(function() return 'early' end)
+    ):or_else(Op.always('fallback')))
+  end):label('clock-shared-check-waiter')
+  rt:step({ max_work = 1 })
+  now = 5
+  for _ = 1, 40 do
+    rt:step({ max_work = 1 })
+    if got then break end
+  end
+  assert_eq(got, 'early', 'bound deadline must participate in absence validation')
+end
+
 -- External feeds are resource-generic capabilities rather than resource-kind checks.
 do
   local ExternalModule = require('fibers.embed.external')

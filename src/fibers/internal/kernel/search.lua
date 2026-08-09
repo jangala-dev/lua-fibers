@@ -650,7 +650,7 @@ local function block_intent(state, task, occurrence, observed_version)
   intent.resource, intent.role, intent.value = leaf.resource, leaf.role, occurrence.arg
   intent.name = leaf.name
   intent.active = true
-  intent.interest = type(leaf.interest) == 'function' and leaf.interest(state.engine.runtime, leaf)
+  intent.interest = type(leaf.interest) == 'function' and leaf.interest(state.engine.runtime, leaf, occurrence.arg)
     or leaf.interest
   intent.absence_check = leaf.absence_check
   intent.observed_version = observed_version

@@ -91,10 +91,10 @@ local function interest(queue, runtime)
   })
 end
 
+local function wake(runtime, leaf) return interest(leaf.resource, runtime) end
+
 local function option(queue, transition)
-  return Facility.op(StateMachine._compile(queue._location, queue, transition, {
-    wake = function(runtime) return interest(queue, runtime) end,
-  }))
+  return Facility.op(StateMachine._compile(queue._location, queue, transition, { wake = wake }))
 end
 
 function EventQueue.new(interest_factory)

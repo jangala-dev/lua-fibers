@@ -7,6 +7,7 @@
 local M = {}
 local EMPTY = {}
 local DEPS, INTERESTS, CHECKS, ACTIVATIONS = 1, 2, 3, 4
+local NIL_PAYLOAD = {}
 
 local function table_field(value, field)
   local out = value[field]
@@ -36,11 +37,14 @@ local function add_dependency(certificate, source, request, class, object, quali
   values[n + 5], values[n + 6], values[n + 7] = qualifier or false, version or false, latent or false
 end
 
-local function add_check(certificate, check, activation)
+local function add_check(certificate, check, payload, activation)
+  payload = payload == nil and NIL_PAYLOAD or payload
   local values = certificate[CHECKS]
   if not values then values = {}; certificate[CHECKS] = values end
-  for i = 1, #values, 2 do if values[i] == check then return false end end
-  values[#values + 1], values[#values + 2] = check, activation
+  for i = 1, #values, 3 do
+    if values[i] == check and values[i + 1] == payload then return false end
+  end
+  values[#values + 1], values[#values + 2], values[#values + 3] = check, payload, activation
   return true
 end
 
@@ -52,7 +56,7 @@ function M.merge(dst, src)
     add_dependency(dst, deps[i], deps[i + 1], deps[i + 2], deps[i + 3], deps[i + 4], deps[i + 5], deps[i + 6])
   end
   for i = 1, #(src[INTERESTS] or EMPTY) do add_value(dst, INTERESTS, src[INTERESTS][i]) end
-  for i = 1, #(src[CHECKS] or EMPTY), 2 do add_check(dst, src[CHECKS][i], src[CHECKS][i + 1]) end
+  for i = 1, #(src[CHECKS] or EMPTY), 3 do add_check(dst, src[CHECKS][i], src[CHECKS][i + 1], src[CHECKS][i + 2]) end
   for i = 1, #(src[ACTIVATIONS] or EMPTY) do add_value(dst, ACTIVATIONS, src[ACTIVATIONS][i]) end
   dst.membership_sensitive = dst.membership_sensitive or src.membership_sensitive
   return dst
@@ -129,7 +133,7 @@ local function add_intent(certificate, activation, intent)
 
   local check = intent.absence_check
   if check then
-    add_check(certificate, check, intent.activation)
+    add_check(certificate, check, intent.payload, intent.activation)
     activation[#activation + 1], activation[#activation + 2] = CHECK_FACT, intent.activation
   end
 
@@ -453,8 +457,11 @@ local function add_location(snapshot, location, version)
   if locations[location] == nil then locations[location] = version or location.version or 0 end
 end
 
-local function add_check(snapshot, check)
-  if check then local out = table_field(snapshot, 'checks'); out[#out + 1] = check end
+local function add_snapshot_check(snapshot, check, payload)
+  if check then
+    local out = table_field(snapshot, 'checks')
+    out[#out + 1], out[#out + 2] = check, payload == nil and NIL_PAYLOAD or payload
+  end
 end
 
 local function add_timer(snapshot, interest)
@@ -505,7 +512,7 @@ function M.capture(engine, state, certificate)
         add_bucket(snapshot, value.potential_resource[object])
       end
     end
-    for i = 1, #(proof[CHECKS] or EMPTY), 2 do add_check(snapshot, proof[CHECKS][i]) end
+    for i = 1, #(proof[CHECKS] or EMPTY), 3 do add_snapshot_check(snapshot, proof[CHECKS][i], proof[CHECKS][i + 1]) end
     for i = 1, #(proof[INTERESTS] or EMPTY) do add_timer(snapshot, proof[INTERESTS][i]) end
   end
   for i = 1, #(state.intents or EMPTY) do
@@ -522,7 +529,7 @@ function M.capture(engine, state, certificate)
         local resource = intent.resource or (leaf and leaf.resource)
         if resource then add_bucket(snapshot, value.potential_resource[resource]) end
       end
-      add_check(snapshot, intent.absence_check)
+      add_snapshot_check(snapshot, intent.absence_check, intent.payload)
       add_timer(snapshot, intent.interest)
     end
   end
@@ -543,9 +550,9 @@ function M.valid(engine, snapshot)
   for bucket, generation in pairs(snapshot.buckets or EMPTY) do
     if bucket.generation ~= generation then return false end
   end
-  for i = 1, #(snapshot.checks or EMPTY) do
-    local check = snapshot.checks[i]
-    if not check(engine.runtime) then return false end
+  for i = 1, #(snapshot.checks or EMPTY), 2 do
+    local payload = snapshot.checks[i + 1]
+    if not snapshot.checks[i](engine.runtime, payload == NIL_PAYLOAD and nil or payload) then return false end
   end
   local now
   for i = 1, #(snapshot.timers or EMPTY) do

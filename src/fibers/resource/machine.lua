@@ -139,7 +139,6 @@ end
 function Machine.new(value)
   local machine = Facility.identity(setmetatable({}, Machine), Kind)
   Cell._init(machine, value, 'machine')
-  machine._transition_specs = setmetatable({}, { __mode = 'kv' })
   return machine
 end
 
@@ -150,11 +149,10 @@ end
 function Machine:transition_op(transition, payload)
   assert(transition and transition._fibers_transition_rule, 'machine transition expected')
   if transition.validate then transition.validate(payload) end
-  local spec = self._transition_specs[transition]
-  if not spec then
-    spec = compile_transition(self._location, self, transition)
-    self._transition_specs[transition] = spec
-  end
+  local specs = self._transition_specs
+  if not specs then specs = setmetatable({}, { __mode = 'kv' }); self._transition_specs = specs end
+  local spec = specs[transition]
+  if not spec then spec = compile_transition(self._location, self, transition); specs[transition] = spec end
   return Facility.bind(spec, payload)
 end
 
