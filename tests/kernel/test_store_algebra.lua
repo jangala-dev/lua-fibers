@@ -182,4 +182,39 @@ local maximum_leaf = Extreme.spec({
 local maximum = Operation.transition_cursor(maximum_leaf, extreme_value, {}, nil):next()
 eq(maximum.result[1].value, 'd', 'maximum selection order changed')
 
+
+local custom = {
+  name = 'custom',
+  clone = function(patch) return { kind = 'custom', delta = patch.delta } end,
+  apply = function(_, value, patch) return value + patch.delta end,
+  stage = function(summary, patch)
+    return { kind = 'custom', delta = (summary and summary.delta or 0) + patch.delta }
+  end,
+  join = function(_, left, right)
+    return { kind = 'custom', delta = left.delta + right.delta }
+  end,
+  constraint = function(_, patch) return { kind = 'custom', delta = patch.delta } end,
+  supplies = function() return {} end,
+}
+local custom_location = S.new_location({ algebra = custom, value = 0 })
+local custom_joined = A.join(custom_location, nil, { kind = 'custom', delta = 3 }, 'independent')
+eq(custom_joined.delta, 3, 'custom algebra clone must dispatch through the location algebra')
+
+local nil_argument_leaf = Operation.transition({
+  location = add,
+  argument = 'default',
+  transition = {
+    writes = false,
+    step = function(_, argument)
+      return { result = require('fibers.internal.values').pack(argument) }
+    end,
+  },
+})
+local nil_argument_op = Operation.bind(nil_argument_leaf, nil)
+local nil_argument_outcome = Operation.transition_cursor(
+  nil_argument_leaf, 0, {}, nil, nil_argument_op.arg
+):next()
+eq(nil_argument_outcome.result.n, 1, 'explicit nil argument preserves arity')
+eq(nil_argument_outcome.result[1], nil, 'explicit nil argument must not fall back to the leaf default')
+
 print('tests/test_store_algebra.lua: ok')

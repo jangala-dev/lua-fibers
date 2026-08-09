@@ -43,6 +43,8 @@ local function frontier_active(intent)
 end
 
 local BULK_MATCH_THRESHOLD = 32
+local EXCHANGE_ROLES = { 'put', 'get' }
+local function serial_less(a, b) return a.serial < b.serial end
 
 -- Return one complete left-to-right matching, or nil. Edges may be stored
 -- in a map keyed by the left item or in a named field on each left row.
@@ -188,7 +190,7 @@ local function exchange_frontier(state, compatible, closed)
 
   local selected, selected_degree, zero_domains = nil, nil, 0
   for _, bucket in pairs(state.exchange_buckets or EMPTY) do
-    for _, role in ipairs({ 'put', 'get' }) do
+    for _, role in ipairs(EXCHANGE_ROLES) do
       for i = 1, #(bucket[role] or EMPTY) do
         local intent = frontier_active(bucket[role][i])
         if intent then
@@ -317,7 +319,6 @@ end
 
 local function bump(state, target, key, amount)
   setv(state, target, key, (target[key] or 0) + (amount or 1))
-  return target[key]
 end
 
 local function ensure_table(state, key)
@@ -333,8 +334,8 @@ local function advance_activation(state, task, ...)
   setv(state, task, 'activation', Activation.child(task.activation, ...))
 end
 
-local function copy_array(xs, out)
-  out = out or {}
+local function copy_array(xs)
+  local out = {}
   for i = 1, #(xs or {}) do
     out[i] = xs[i]
   end
@@ -424,28 +425,16 @@ complete_task = function(state, task, outcome)
     setv(state, task.frames, n, nil)
 
     if frame.kind == 'map' then
-      if outcome.wrap then
-        error('transactional map attempted to consume a wrapped result', 0)
-      end
       outcome = new_outcome(
         task,
         pack_(state.engine.runtime:_call_in_phase('map', 'callback_error', frame.fn, unpack_pack(outcome.pack))),
         nil
       )
     elseif frame.kind == 'bind' then
-      if outcome.wrap then
-        error('and_then right-hand operation attempted to consume a wrapped result', 0)
-      end
-      local next_op = frame.q
       local input_pack = pack_(unpack_pack(outcome.pack))
       local next_activation = Activation.child(frame.activation, ACT.and_then_result, outcome.activation)
       setv(state, task, 'guard_input_pack', input_pack)
-      if next_op.kind == 'guard' then
-        local request = task.root.request
-        next_op = Activation.guard(state.engine, request, next_op, next_activation, true, input_pack)
-        next_activation = Activation.child(next_activation, ACT.guard)
-      end
-      continue_task(state, task, next_op, next_activation)
+      continue_task(state, task, frame.q, next_activation)
       return true
     elseif frame.kind == 'wrap' then
       outcome = new_outcome(task, outcome.pack, compose_wrap(outcome.wrap, frame.fn))
@@ -465,7 +454,7 @@ local function add_root(state, request, required_intents)
     serial = request.activation_root.id, request = request, expr = request.op,
     frames = {}, scope_path = nil, status = 'active',
     activation = request.activation_root,
-    required_intents = required_intents and copy_array(required_intents) or nil,
+    required_intents = required_intents,
   }
   root.root = root
   root.segment = state.journal:new_segment(root, nil)
@@ -524,8 +513,8 @@ local function obligated_pair(a, b)
   return root_requires(a and a.root, b) or root_requires(b and b.root, a)
 end
 
-local function active_intents(state, out)
-  out = out or {}
+local function active_intents(state)
+  local out = {}
   local n = 0
   for i = 1, #(state.intents or EMPTY) do
     local intent = state.intents[i]
@@ -574,17 +563,17 @@ local function register_intent(state, task, intent)
   index_intent(state, intent)
 end
 
-local function remove_intents(state, intents)
-  for i = 1, #intents do
-    local intent = intents[i]
-    if intent and intent.active then
-      setv(state, intent, 'active', false)
-      bump(state, state, 'active_intent_count', -1)
-      if intent.rule and intent.rule.accepts_supply then
-        bump(state, state, 'accepts_supply_count', -1)
-      end
-    end
+local function remove_intent(state, intent)
+  if not intent or not intent.active then return end
+  setv(state, intent, 'active', false)
+  bump(state, state, 'active_intent_count', -1)
+  if intent.rule and intent.rule.accepts_supply then
+    bump(state, state, 'accepts_supply_count', -1)
   end
+end
+
+local function remove_intents(state, intents)
+  for i = 1, #intents do remove_intent(state, intents[i]) end
 end
 
 local result_pack = Operation.result_pack
@@ -595,7 +584,7 @@ local function block_intent(state, task, occurrence, observed_version)
   local intent = {}
   intent.serial, intent.kind = serial, leaf_kind(leaf)
   intent.task, intent.root, intent.request, intent.spec = task, task.root, task.root.request, leaf
-  if intent.kind == 'transition' then intent.rule = Operation.transition_behaviour(leaf) end
+  if intent.kind == 'transition' then intent.rule = leaf.transition end
   intent.payload, intent.activation = occurrence.arg, task.activation
   intent.resource, intent.role, intent.value = leaf.resource, leaf.role, occurrence.arg
   intent.name = leaf.name
@@ -603,8 +592,7 @@ local function block_intent(state, task, occurrence, observed_version)
   intent.active = true
   intent.interest = type(leaf.interest) == 'function' and leaf.interest(state.engine.runtime, leaf)
     or leaf.interest
-  local check = leaf.absence_check
-  intent.absence_check = type(check) == 'function' and { validate = check } or check
+  intent.absence_check = leaf.absence_check
   intent.observed_version = observed_version
   register_intent(state, task, intent)
 end
@@ -620,7 +608,7 @@ local function block_choice(state, task, expr)
       state.engine,
       task,
       task.activation.id,
-      #(expr.choices or {}),
+      #expr.choices,
       state.choice_generation
     ),
     activation = task.activation,
@@ -636,7 +624,8 @@ local function match_intents(state, a, b)
   if not a or not b or not a.active or not b.active then return false end
   local satisfy_a = root_requires(a.root, b)
   local satisfy_b = root_requires(b.root, a)
-  remove_intents(state, { a, b })
+  remove_intent(state, a)
+  remove_intent(state, b)
   if satisfy_a then setv(state, a.root, 'required_intents', nil) end
   if satisfy_b then setv(state, b.root, 'required_intents', nil) end
   local put = a.role == 'put' and a or b
@@ -714,7 +703,7 @@ local function selected_intents(intents)
     local intent = intents[i]
     if intent and intent.active then selected[#selected + 1] = intent end
   end
-  table.sort(selected, function(a, b) return a.serial < b.serial end)
+  table.sort(selected, serial_less)
   return selected
 end
 
@@ -745,7 +734,7 @@ local function resolve_transitions(state, intents)
   if #selected == 0 then
     return false
   end
-  if Operation.transition_behaviour(selected[1].spec).serial then
+  if selected[1].spec.transition.serial then
     return resolve_serial_transitions(state, selected)
   end
   local resolved, remaining = {}, copy_array(selected)
@@ -754,8 +743,8 @@ local function resolve_transitions(state, intents)
     for i = 1, #remaining do
       local intent, leaf = remaining[i], remaining[i].spec
       local task = intent.task
-      local value = Journal.project(task, leaf.location, leaf.orientation)
-      if value ~= nil then
+      local value, projected = Journal.project(task, leaf.location, leaf.orientation)
+      if projected then
         local outcome = transition_outcome(state, leaf, value, nil, intent.payload)
         if outcome then
           chosen_index, chosen_outcome, chosen_task = i, outcome, task
@@ -783,12 +772,9 @@ local function witness_cursor(state, intent)
 end
 
 local function resolve_witness(state, intent, outcome, alternative_index)
-  if not intent or not outcome then
-    return false
-  end
   local task = intent.task
   stage_outcome(state, task, intent.spec, outcome)
-  remove_intents(state, { intent })
+  remove_intent(state, intent)
   setv(
     state,
     task,
@@ -817,48 +803,34 @@ local function resolve_claim_set(state, group, intents)
   for intent in pairs(selected) do
     expanded[#expanded + 1] = intent
   end
-  table.sort(expanded, function(a, b) return a.serial < b.serial end)
+  table.sort(expanded, serial_less)
   return resolve_transitions(state, expanded)
 end
 
 local function final_candidate(state)
-  local participant_count, participant_1, participant_2, participants = 0
-  for request in pairs(state.roots) do
-    participant_count = participant_count + 1
-    if participant_count == 1 then participant_1 = request
-    elseif participant_count == 2 then participant_2 = request
-    else
-      participants = participants or { participant_1, participant_2 }
-      participants[participant_count] = request
-    end
+  local participants = {}
+  for request in pairs(state.roots) do participants[#participants + 1] = request end
+  if #participants > 1 then
+    table.sort(participants, function(a, b) return a.order < b.order end)
   end
-  local function earlier(a, b) return a.order < b.order end
-  if participants then table.sort(participants, earlier)
-  elseif participant_count == 2 and earlier(participant_2, participant_1) then participant_1, participant_2 = participant_2, participant_1 end
 
-  local observations, writes, collect_err
-  if participant_count == 1 then
-    local root = state.roots[participant_1]
+  local observations, writes
+  if #participants == 1 then
+    local root = state.roots[participants[1]]
     if not root.done or (state.active_intent_count or 0) > 0 then return nil end
     observations = next(state.journal.observed) and state.journal.observed or nil
     writes = next(root.segment.delta) and root.segment.delta or nil
   else
     local root_views = {}
-    local function add_participant(index, request)
-      local root = state.roots[request]
-      if not root.done then return false end
-      root_views[index] = root.segment
-      return true
-    end
-    if participants then
-      for i = 1, participant_count do if not add_participant(i, participants[i]) then return nil end end
-    else
-      if participant_1 and not add_participant(1, participant_1) then return nil end
-      if participant_2 and not add_participant(2, participant_2) then return nil end
+    for i = 1, #participants do
+      local root = state.roots[participants[i]]
+      if not root.done then return nil end
+      root_views[i] = root.segment
     end
     if (state.active_intent_count or 0) > 0 then return nil end
-    observations, writes, collect_err = state.journal:collect_candidate(root_views)
-    if collect_err then return nil end
+    local collected
+    observations, writes, collected = state.journal:collect_candidate(root_views)
+    if not collected then return nil end
   end
   observations = observations and next(observations) and observations or nil
   writes = writes and next(writes) and writes or nil
@@ -870,22 +842,16 @@ local function final_candidate(state)
     end
   end
 
+  local outcomes = {}
+  for i = 1, #participants do outcomes[i] = state.roots[participants[i]].outcome end
   local candidate = Candidate.new({
-    participant_count = participant_count, participant_1 = participant_1, participant_2 = participant_2,
-    participants = participants, observations = observations, writes = writes,
+    participants = participants,
+    outcomes = outcomes,
+    observations = observations,
+    writes = writes,
     effects = state.effects and #state.effects > 0 and copy_array(state.effects) or nil,
     absence_gate = state.absence_gate,
   })
-  if participants then
-    candidate.outcomes = {}
-    for i = 1, participant_count do
-      local request = participants[i]
-      candidate.outcomes[request] = state.roots[request].outcome
-    end
-  else
-    candidate.outcome_1 = participant_1 and state.roots[participant_1].outcome or nil
-    candidate.outcome_2 = participant_2 and state.roots[participant_2].outcome or nil
-  end
   if candidate.absence_gate then
     Proof.ensure(state.engine); Proof.acknowledge(state.engine, state)
     candidate.absence_gate.snapshot = Proof.capture(state.engine, state, candidate.absence_gate)
@@ -896,10 +862,6 @@ end
 
 local function execute_leaf(state, task, occurrence)
   local leaf = occurrence.spec
-  if not leaf or leaf._fibers_leaf_spec ~= true then
-    error('primitive payload is not an executable leaf specification', 0)
-  end
-
   local kind = leaf_kind(leaf)
   if kind == 'exchange' then
     block_intent(state, task, occurrence)
@@ -939,7 +901,7 @@ local function execute_leaf(state, task, occurrence)
   end
 
   if kind == 'transition' then
-    local rule = Operation.transition_behaviour(leaf)
+    local rule = leaf.transition
     if rule.eager then
       local value = Journal.read(view, loc)
       local outcome = transition_outcome(state, leaf, value, 'eager', occurrence.arg)
@@ -1017,11 +979,11 @@ local function collect_defeat_effects(expr, out)
     end
     return collect_defeat_effects(expr.p, out)
   elseif kind == 'product' then
-    for i = 1, #(expr.lanes or {}) do
+    for i = 1, #expr.lanes do
       collect_defeat_effects(expr.lanes[i], out)
     end
   elseif kind == 'choice' then
-    for i = 1, #(expr.choices or {}) do
+    for i = 1, #expr.choices do
       collect_defeat_effects(expr.choices[i], out)
     end
   elseif kind == 'or_else' then
@@ -1200,12 +1162,10 @@ local function ranked_choice_order(state, intent, rank_partners, preferred_index
 end
 
 local function resolve_choice(state, intent, choice_index)
-  if not intent then return false end
   local expr, task = intent.expr, intent.task
-  if not choice_index or not task then return false end
-  remove_intents(state, { intent })
+  remove_intent(state, intent)
   local effects = ensure_table(state, 'effects')
-  for i = 1, #(expr.choices or {}) do
+  for i = 1, #expr.choices do
     if i ~= choice_index then
       local defeats = collect_defeat_effects(expr.choices[i])
       for j = 1, #defeats do pushv(state, effects, defeats[j]) end
@@ -1269,7 +1229,7 @@ local function explore(state, apply)
   local candidate, refutation, unknown = search(state)
   state.search_depth = state.search_depth - 1
   if candidate then
-    return candidate, refutation, unknown, mark
+    return candidate, refutation, unknown
   end
   state.journal:rollback(mark)
   return nil, refutation, unknown
@@ -1303,7 +1263,6 @@ local function prefer(state, task, expr)
 
   local previous_gate = state.absence_gate
   local gate = Proof.merge(Proof.copy(previous_gate), preferred_refutation)
-  gate.membership_sensitive = previous_gate and previous_gate.membership_sensitive or false
   Proof.mark_absence_gate_frontier(gate)
   -- A proof may stop at a deferred choice before branch-local frontiers are
   -- materialised.  The immutable preferred shape is used only to decide whether
@@ -1343,7 +1302,7 @@ local function reduce_one(state, task)
   elseif kind == 'guard' then
     local parent = task.activation
     local request = task.root.request
-    local residual = Activation.guard(state.engine, request, expr, parent, true, task.guard_input_pack)
+    local residual = Activation.guard(state.engine, request, expr, parent, task.guard_input_pack)
     continue_task(state, task, residual, Activation.child(parent, ACT.guard))
     return 'progress'
   elseif kind == 'map' then

@@ -203,7 +203,7 @@ local function find_candidate_impl(engine, focus, search_limit, requests, compon
 
     local retained = focus and focus._retained_search
   if retained then
-    local valid, reason = Proof.valid(engine, retained.frontier_snapshot)
+    local valid = Proof.valid(engine, retained.frontier_snapshot)
     if valid then
       if instrumentation then instrumentation:inc('retained_search_resumes') end
       local hit, certificate, unknown = retained:advance(search_limit or engine.search_limit)
@@ -241,9 +241,10 @@ local function find_candidate_impl(engine, focus, search_limit, requests, compon
 end
 
 local function find_candidate(engine, focus, search_limit, requests, component, provisional_admission)
-  return engine.runtime:_call_in_phase('search', 'search_error', function()
-    return find_candidate_impl(engine, focus, search_limit, requests, component, provisional_admission)
-  end)
+  return engine.runtime:_call_in_phase(
+    'search', 'search_error', find_candidate_impl,
+    engine, focus, search_limit, requests, component, provisional_admission
+  )
 end
 
 local function suspension_error(engine, fiber, contract, reason)
@@ -287,8 +288,6 @@ end
 local function resolve_without_suspension_impl(engine, fiber)
   local runtime = engine.runtime
   local contract = runtime:_suspension_contract(fiber)
-  if not contract or not fiber.pending then return true end
-
   local attempts = 0
   while fiber.pending do
     attempts = attempts + 1
@@ -329,9 +328,7 @@ local function resolve_without_suspension_impl(engine, fiber)
 end
 
 function Engine:resolve_without_suspension(fiber)
-  local result = { pcall(resolve_without_suspension_impl, self, fiber) }
-  if not result[1] then error(result[2], 0) end
-  return result[2]
+  return resolve_without_suspension_impl(self, fiber)
 end
 
 local function pending_status(engine, refs, unknown)

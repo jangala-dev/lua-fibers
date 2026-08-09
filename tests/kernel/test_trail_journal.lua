@@ -58,6 +58,7 @@ assert(record.value == 0 and #values == 0)
 do
   local add = {
     name = 'test-add',
+    clone = function(patch) return { delta = patch.delta } end,
     apply = function(_, value, patch) return value + patch.delta end,
     stage = function(_, patch) return patch end,
     join = function(_, left, right)
@@ -68,6 +69,7 @@ do
   }
   local fail = {
     name = 'test-fail',
+    clone = add.clone,
     apply = function() error('deliberate commit calculation failure', 0) end,
     stage = add.stage,
     join = add.join,

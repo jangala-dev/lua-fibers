@@ -13,7 +13,7 @@ Op.__index = Op
 local leaf_op_cache = setmetatable({}, { __mode = 'kv' })
 
 local function children_have(items, field)
-  for i = 1, #(items or {}) do
+  for i = 1, #items do
     if items[i][field] == true then return true end
   end
   return false
@@ -29,10 +29,9 @@ local function structural_wrap(kind, fields)
 end
 
 function Operation.new(kind, fields)
-  local value = fields or {}
-  value.kind = kind
-  value.has_wrap = structural_wrap(kind, value)
-  return setmetatable(value, Op)
+  fields.kind = kind
+  fields.has_wrap = structural_wrap(kind, fields)
+  return setmetatable(fields, Op)
 end
 
 function Operation.is(value)
@@ -79,10 +78,9 @@ local function copy(fields)
 end
 
 local function spec(kind, fields)
-  local value = copy(fields)
-  value._fibers_leaf_spec = true
-  value.kind = kind
-  return value
+  fields._fibers_leaf_spec = true
+  fields.kind = kind
+  return fields
 end
 
 
@@ -159,16 +157,6 @@ function Operation.transition_behaviour(leaf)
   return leaf.transition
 end
 
-function Operation.argument(leaf, occurrence)
-  if type(occurrence) == 'table' and occurrence.kind == 'primitive' and occurrence.spec == leaf then
-    return occurrence.arg
-  end
-  if occurrence ~= nil then
-    return leaf.bind and leaf.bind(occurrence, leaf) or occurrence
-  end
-  return leaf.argument
-end
-
 function Operation.result_pack(leaf, value)
   local result = leaf.result
   if result == RESULT_BOOLEAN then
@@ -195,8 +183,8 @@ local function none()
 end
 
 function Operation.transition_cursor(leaf, value, context, phase, occurrence)
-  local transition = Operation.transition_behaviour(leaf)
-  local argument = Operation.argument(leaf, occurrence)
+  local transition = leaf.transition
+  local argument = occurrence
   context, phase = context or {}, phase or 'domain'
   if transition.cursor then
     local cursor = transition.cursor(value, argument, context, phase, leaf)
@@ -223,8 +211,8 @@ function Operation.transition_cursor(leaf, value, context, phase, occurrence)
 end
 
 function Operation.transition_ready(leaf, value, context, occurrence)
-  local transition = Operation.transition_behaviour(leaf)
-  local argument = Operation.argument(leaf, occurrence)
+  local transition = leaf.transition
+  local argument = occurrence
   if transition.ready then
     local ready = transition.ready(value, argument, context or {}, leaf)
     return ready ~= nil and ready ~= false
@@ -310,7 +298,7 @@ local function leaf_shape(op, out)
     mark_location(out, location, { read = true, wait = true })
     out.external = true
   elseif kind == 'transition' then
-    local transition = Operation.transition_behaviour(leaf)
+    local transition = leaf.transition
     mark_location(out, location, {
       read = true,
       write = transition.writes,
@@ -350,9 +338,9 @@ local function describe_mode(op, seen, mode)
   if kind == 'primitive' then
     leaf_shape(op, out)
   elseif kind == 'choice' then
-    for i = 1, #(op.choices or {}) do merge(out, describe_mode(op.choices[i], seen, mode)) end
+    for i = 1, #op.choices do merge(out, describe_mode(op.choices[i], seen, mode)) end
   elseif kind == 'product' then
-    for i = 1, #(op.lanes or {}) do merge(out, describe_mode(op.lanes[i], seen, mode)) end
+    for i = 1, #op.lanes do merge(out, describe_mode(op.lanes[i], seen, mode)) end
   elseif kind == 'or_else' then
     merge(out, describe_mode(op.p, seen, mode))
     if mode ~= 'preferred' then merge(out, describe_mode(op.q, seen, mode)) end

@@ -136,9 +136,8 @@ local function add_intent(certificate, activation, intent)
 
   local check = intent.absence_check
   if check then
-    local key = check.id or check.validate or check
-    M.add(certificate, 'check', { identity = key, value = check })
-    activation[#activation + 1], activation[#activation + 2] = CHECK_FACT, check.id or intent.activation
+    M.add(certificate, 'check', { identity = check, value = check })
+    activation[#activation + 1], activation[#activation + 2] = CHECK_FACT, intent.activation
   end
 
   local location = intent.spec and intent.spec.location
@@ -190,7 +189,7 @@ function M.frontiers(intents, roots, inherited)
       add_intent(frontier.certificate, activations[intent.request], intent)
       if intent.kind == 'exchange' then
         observe(frontier.dependencies, 'exchange', intent.resource, intent.role)
-      elseif intent.kind == 'choice' or intent.kind == 'witness' or intent.kind == 'transition' then
+      elseif intent.kind == 'choice' or intent.kind == 'transition' then
         frontier.complete = false
       end
       local leaf = intent.spec
@@ -310,7 +309,7 @@ local function index_potential(value, request)
   return shape, lifetime
 end
 
-function M.remove_request(engine, request, quiet)
+function M.remove_request(engine, request)
   local value = engine.proof_graph
   if not request or not value then return end
   local memberships = request._potential_memberships
@@ -321,7 +320,7 @@ function M.remove_request(engine, request, quiet)
   local proof = request._proof
   if proof then remove_memberships(proof.memberships, request); request._proof = nil end
   value.dirty[request] = nil
-  if not quiet then mark_bucket(value, value.potential_dynamic, 'pending-root-removed') end
+  mark_bucket(value, value.potential_dynamic, 'pending-root-removed')
 end
 
 function M.add_request(engine, request, quiet_admission)
@@ -390,7 +389,6 @@ end
 function M.publish(engine, request, frontier)
   if not request or not request.pending then return nil end
   local value = M.ensure(engine)
-  if not request._potential_memberships then M.add_request(engine, request, true) end
   local old = request._proof
   if not same_frontier(old, frontier) then
     if old then remove_memberships(old.memberships, request) end
@@ -422,7 +420,7 @@ local function row_description(request)
   local frontier = request and request._proof
   if frontier and frontier.complete then return frontier.dependencies, false end
   local shape, lifetime = potential_shape(request)
-  return shape or (frontier and frontier.dependencies) or { exchanges = {}, locations = {}, resources = {}, dynamic = true }, true, lifetime
+  return shape, true, lifetime
 end
 
 function M.component(engine, focus)
@@ -537,7 +535,6 @@ function M.capture(engine, state, certificate, frontiers)
           add_bucket(snapshot, value.potential_location[intent.spec.location])
         end
         local check = intent.absence_check
-        if type(check) == 'function' then check = { validate = check } end
         if check then snapshot.checks[#snapshot.checks + 1] = check end
         local interest = intent.interest
         if interest and interest.kind == 'timer' and type(interest.deadline) == 'number' then snapshot.timers[#snapshot.timers + 1] = interest.deadline end
@@ -550,25 +547,25 @@ end
 
 function M.valid(engine, snapshot)
   local value = engine.proof_graph
-  if not snapshot then return false, 'missing-frontier-snapshot' end
+  if not snapshot then return false end
   for request, op in pairs(snapshot.requests or EMPTY) do
-    if not request.pending or request.op ~= op then return false, 'request' end
-    if value and value.dirty[request] then return false, 'frontier-dirty' end
+    if not request.pending or request.op ~= op then return false end
+    if value and value.dirty[request] then return false end
   end
   for location, version in pairs(snapshot.locations or EMPTY) do
-    if (location.version or 0) ~= version then return false, 'location-version' end
+    if (location.version or 0) ~= version then return false end
   end
   for bucket, generation in pairs(snapshot.buckets or EMPTY) do
-    if bucket.generation ~= generation then return false, 'frontier-bucket' end
+    if bucket.generation ~= generation then return false end
   end
   for i = 1, #(snapshot.checks or EMPTY) do
     local check = snapshot.checks[i]
-    if type(check.validate) == 'function' and not check.validate(engine.runtime, check) then return false, 'frontier-check' end
+    if not check(engine.runtime) then return false end
   end
   local now
   for i = 1, #(snapshot.timers or EMPTY) do
     now = now or engine.runtime:now()
-    if now >= snapshot.timers[i] then return false, 'timer' end
+    if now >= snapshot.timers[i] then return false end
   end
   return true
 end

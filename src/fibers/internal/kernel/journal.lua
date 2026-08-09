@@ -165,7 +165,6 @@ function Journal.new_location(opts)
     put_equal = opts.put_equal == true,
     remove_idempotent = opts.remove_idempotent ~= false,
   }
-  location.tags = { stock = {}, present = {}, absent = {} }
   return location
 end
 
@@ -186,13 +185,9 @@ end
 function Journal.observe(segment, location)
   local journal = segment.journal
   local observed = journal.observed
-  local version = observed[location]
-  if version == nil then
+  if observed[location] == nil then
     journal:set(observed, location, location.version or 0)
-  elseif version ~= (location.version or 0) then
-    return false, 'observation-conflict'
   end
-  return true
 end
 
 local function inherited_value(segment, location)
@@ -266,7 +261,7 @@ function Journal.project(task, location, orientation)
           or 'independent'
         combined = Algebra.join(location, combined, visible, mode)
         if not combined then
-          return nil, nil, 'projection-conflict'
+          return nil, false
         end
       end
     end
@@ -274,7 +269,7 @@ function Journal.project(task, location, orientation)
   if combined then
     value = Algebra.apply(location, value, combined)
   end
-  return value
+  return value, true
 end
 
 function Journal.project_machine(task, location, succeeds, accepts_supply)
@@ -300,8 +295,8 @@ function Journal.project_machine(task, location, succeeds, accepts_supply)
     local step = steps[i]
     local restricted = step.relation == 'independent' or not accepts_supply
     if restricted then
-      local before = succeeds and succeeds(value) or false
-      local after = succeeds and succeeds(step.value) or false
+      local before = succeeds(value)
+      local after = succeeds(step.value)
       if before or not after then
         value = step.value
       end
@@ -312,17 +307,21 @@ function Journal.project_machine(task, location, succeeds, accepts_supply)
   return value
 end
 
-function Journal.join_segments(parent, children, mode)
+local function merge_segments(segments, mode)
   local writes = {}
-  for i = 1, #children do
-    for location, patch in pairs(children[i].delta) do
-      local merged, err = Algebra.join(location, writes[location], patch, mode or 'independent')
-      if not merged then
-        return false, err
-      end
+  for i = 1, #segments do
+    for location, patch in pairs(segments[i].delta) do
+      local merged = Algebra.join(location, writes[location], patch, mode)
+      if not merged then return nil end
       writes[location] = merged
     end
   end
+  return writes
+end
+
+function Journal.join_segments(parent, children, mode)
+  local writes = merge_segments(children, mode)
+  if not writes then return false end
   for location, patch in pairs(writes) do
     Journal.stage(parent, location, patch)
   end
@@ -333,25 +332,15 @@ function Journal.join_segments(parent, children, mode)
 end
 
 function Journal:collect_candidate(root_segments)
-  local observations = self.observed
-  local writes
-  for i = 1, #root_segments do
-    for location, patch in pairs(root_segments[i].delta) do
-      writes = writes or {}
-      local merged, err = Algebra.join(location, writes[location], patch, 'external')
-      if not merged then
-        return nil, nil, err
-      end
-      writes[location] = merged
-    end
-  end
-  return observations, writes
+  local writes = merge_segments(root_segments, 'external')
+  if not writes then return nil, nil, false end
+  return self.observed, writes, true
 end
 
 function Journal.validate(observations)
   for location, version in pairs(observations or {}) do
     if (location.version or 0) ~= version then
-      return false, 'stale-location'
+      return false
     end
   end
   return true
@@ -366,8 +355,8 @@ function Journal.commit(writes)
     prepared[n + 3] = (location.version or 0) + 1
   end
   for i = 1, #prepared, 3 do
-    rawset(prepared[i], 'value', prepared[i + 1])
-    rawset(prepared[i], 'version', prepared[i + 2])
+    prepared[i].value = prepared[i + 1]
+    prepared[i].version = prepared[i + 2]
   end
 end
 

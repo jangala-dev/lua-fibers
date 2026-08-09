@@ -408,16 +408,13 @@ function Runtime:perform(op, opts)
 end
 
 function Runtime:_finish_fiber(fiber)
-  if fiber.done then
-    return
-  end
   fiber.done = true
   -- A completed fiber handle remains useful for identity and diagnostics, but
   -- its coroutine and dynamic scope graph must not be retained by the runtime.
   fiber.co = nil
   fiber.scope = nil
   fiber.scope_stack = nil
-  self._live_fibers = math.max(self._live_fibers - 1, 0)
+  self._live_fibers = self._live_fibers - 1
   local instrumentation = self.instrumentation
   if instrumentation then
     instrumentation:inc('fibers_completed')

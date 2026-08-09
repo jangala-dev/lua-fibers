@@ -33,7 +33,7 @@ function M.normalise_supply(value, label, level)
     if not VALID[key] then
       fail(label, 'contains unknown direction ' .. tostring(key), (level or 1) + 1)
     end
-    if present ~= true and present ~= false and present ~= nil then
+    if type(present) ~= 'boolean' then
       fail(label, 'direction ' .. tostring(key) .. ' must be boolean', (level or 1) + 1)
     end
     if present then
@@ -48,10 +48,8 @@ end
 
 function M.merge_supply(dst, src)
   dst = dst or {}
-  for key in pairs(src or {}) do
-    if VALID[key] then
-      dst[key] = true
-    end
+  for key in pairs(src) do
+    dst[key] = true
   end
   return dst
 end
@@ -84,7 +82,7 @@ end
 
 local function copy_operations(ops)
   local out = {}
-  for i = 1, #(ops or {}) do
+  for i = 1, #ops do
     out[i] = copy_operation(ops[i])
   end
   return out
@@ -92,7 +90,7 @@ end
 
 local function clone_machine(patch)
   local steps = {}
-  for i = 1, #(patch.steps or {}) do
+  for i = 1, #patch.steps do
     local step = patch.steps[i]
     steps[i] = { serial = step.serial, value = step.value }
   end
@@ -105,15 +103,16 @@ end
 
 local function clone_map_value(location, value)
   local out = {}
-  for key, item in pairs(value or {}) do
-    out[key] = location.clone_value and location.clone_value(item) or item
+  local clone = location.clone_value
+  for key, item in pairs(value) do
+    if clone then item = clone(item) end
+    out[key] = item
   end
   return out
 end
 
 local function merge_steps(left, right)
   local out, i, j = {}, 1, 1
-  left, right = left or {}, right or {}
   while i <= #left and j <= #right do
     local take_left = left[i].serial <= right[j].serial
     local step = take_left and left[i] or right[j]
@@ -137,7 +136,7 @@ end
 
 local function filter_operations(patch, direction)
   local ops = {}
-  for i = 1, #(patch.ops or {}) do
+  for i = 1, #patch.ops do
     local op = patch.ops[i]
     local up = op.op == 'put'
     local down = op.op == 'remove' or op.op == 'take'
@@ -150,7 +149,7 @@ end
 
 local function log_supplies(patch)
   local out = {}
-  for i = 1, #(patch.ops or {}) do
+  for i = 1, #patch.ops do
     local op = patch.ops[i].op
     if op == 'put' then
       out.up = true
@@ -183,7 +182,7 @@ local function stage_log(summary, patch, trail)
   if not summary then
     return clone_log(patch)
   end
-  for i = 1, #(patch.ops or {}) do
+  for i = 1, #patch.ops do
     push(trail, summary.ops, copy_operation(patch.ops[i]))
   end
   return summary
@@ -212,7 +211,7 @@ function Replace.stage(summary, patch, trail)
 end
 function Replace.join(_, left, right)
   if left.value ~= right.value then
-    return nil, 'replace-conflict'
+    return nil
   end
   return Replace.clone(left)
 end
@@ -261,7 +260,7 @@ end
 local Machine = { name = 'machine' }
 Machine.clone = clone_machine
 function Machine.apply(_, value, patch)
-  local steps = patch.steps or {}
+  local steps = patch.steps
   if #steps == 0 then
     return value
   end
@@ -271,11 +270,11 @@ function Machine.stage(summary, patch, trail)
   if not summary then
     return Machine.clone(patch)
   end
-  local last, first = summary.steps[#summary.steps], patch.steps and patch.steps[1]
+  local last, first = summary.steps[#summary.steps], patch.steps[1]
   if last and first and last.serial >= first.serial then
     error('machine steps must be staged in increasing serial order', 3)
   end
-  for i = 1, #(patch.steps or {}) do
+  for i = 1, #patch.steps do
     local step = patch.steps[i]
     push(trail, summary.steps, { serial = step.serial, value = step.value })
   end
@@ -291,7 +290,7 @@ function Machine.supplies()
   return { any = true }
 end
 function Machine.serialise(patch, relation, out)
-  for i = 1, #(patch.steps or {}) do
+  for i = 1, #patch.steps do
     local step = patch.steps[i]
     out[#out + 1] = { serial = step.serial, value = step.value, relation = relation }
   end
@@ -303,7 +302,7 @@ end
 local Presence = { name = 'presence' }
 Presence.clone = clone_log
 function Presence.apply(_, value, patch)
-  for i = 1, #(patch.ops or {}) do
+  for i = 1, #patch.ops do
     local op = patch.ops[i]
     if op.op == 'put' then
       value = op.value
@@ -317,13 +316,13 @@ function Presence.apply(_, value, patch)
 end
 Presence.stage = stage_log
 function Presence.join(_, left, right)
-  if #(left.ops or {}) ~= 1 or #(right.ops or {}) ~= 1 then
-    return nil, 'presence-complex-parallel-conflict'
+  if #left.ops ~= 1 or #right.ops ~= 1 then
+    return nil
   end
   local a, b = left.ops[1], right.ops[1]
   if a.op == 'put' and b.op == 'put' then
     if a.value ~= b.value then
-      return nil, 'presence-put-conflict'
+      return nil
     end
     return { kind = 'presence', ops = { { op = 'put', value = a.value } } }
   end
@@ -336,7 +335,7 @@ function Presence.join(_, left, right)
   if a.op == 'remove' and b.op == 'remove' then
     return { kind = 'presence', ops = { { op = 'remove' } } }
   end
-  return nil, 'presence-parallel-conflict'
+  return nil
 end
 Presence.constraint = constrain_log
 Presence.supplies = log_supplies
@@ -353,7 +352,7 @@ local function merge_map_operation(location, left, right, composition, key)
     then
       return { copy_operation(right) }
     end
-    return nil, 'finite-map-put-conflict'
+    return nil
   end
   if (left.op == 'put' and right.op == 'take') or (left.op == 'take' and right.op == 'put') then
     local put = left.op == 'put' and left or right
@@ -362,17 +361,19 @@ local function merge_map_operation(location, left, right, composition, key)
   if left.op == 'remove' and right.op == 'remove' and location.remove_idempotent then
     return { copy_operation(left) }
   end
-  return nil, 'finite-map-parallel-conflict'
+  return nil
 end
 
 local FiniteMap = { name = 'finite_map' }
 FiniteMap.clone = clone_log
 function FiniteMap.apply(location, value, patch)
   local out = clone_map_value(location, value)
-  for i = 1, #(patch.ops or {}) do
+  for i = 1, #patch.ops do
     local op = patch.ops[i]
     if op.op == 'put' then
-      out[op.key] = location.clone_value and location.clone_value(op.value) or op.value
+      local item = op.value
+      if location.clone_value then item = location.clone_value(item) end
+      out[op.key] = item
     elseif op.op == 'remove' or op.op == 'take' then
       out[op.key] = nil
     else
@@ -383,13 +384,13 @@ function FiniteMap.apply(location, value, patch)
 end
 FiniteMap.stage = stage_log
 function FiniteMap.join(location, left, right, composition)
-  local a, b = left.ops or {}, right.ops or {}
+  local a, b = left.ops, right.ops
   if #a == 1 and #b == 1 then
     if a[1].key ~= b[1].key then
       return { kind = 'finite_map', ops = { copy_operation(a[1]), copy_operation(b[1]) } }
     end
-    local ops, err = merge_map_operation(location, a[1], b[1], composition, a[1].key)
-    return ops and { kind = 'finite_map', ops = ops } or nil, err
+    local ops = merge_map_operation(location, a[1], b[1], composition, a[1].key)
+    return ops and { kind = 'finite_map', ops = ops } or nil
   end
   local by_left, by_right, keys = {}, {}, {}
   local function index(src, dst)
@@ -408,7 +409,7 @@ function FiniteMap.join(location, left, right, composition)
   index(b, by_right)
   local out = {}
   local function append(values)
-    for i = 1, #(values or {}) do
+    for i = 1, #values do
       out[#out + 1] = copy_operation(values[i])
     end
   end
@@ -419,13 +420,11 @@ function FiniteMap.join(location, left, right, composition)
     elseif not y then
       append(x)
     elseif #x == 1 and #y == 1 then
-      local merged, err = merge_map_operation(location, x[1], y[1], composition, key)
-      if not merged then
-        return nil, err
-      end
+      local merged = merge_map_operation(location, x[1], y[1], composition, key)
+      if not merged then return nil end
       append(merged)
     else
-      return nil, 'finite-map-complex-parallel-conflict'
+      return nil
     end
   end
   return { kind = 'finite_map', ops = out }
@@ -441,12 +440,20 @@ local BY_NAME = {
   finite_map = FiniteMap,
 }
 
+local REQUIRED_ALGEBRA_METHODS = { 'clone', 'apply', 'stage', 'join', 'constraint', 'supplies' }
+
 function M.get(value)
-  if type(value) == 'table' and value.apply and value.stage and value.join then
-    return value
-  end
   if type(value) == 'table' and value.algebra then
     return value.algebra
+  end
+  if type(value) == 'table' then
+    for i = 1, #REQUIRED_ALGEBRA_METHODS do
+      local method = REQUIRED_ALGEBRA_METHODS[i]
+      if type(value[method]) ~= 'function' then
+        error('custom location algebra requires ' .. method, 3)
+      end
+    end
+    return value
   end
   local algebra = BY_NAME[value]
   if not algebra then
@@ -455,16 +462,12 @@ function M.get(value)
   return algebra
 end
 
-local function clone_patch(patch)
-  return patch and M.get(patch.kind).clone(patch) or nil
-end
-
 function M.apply(location, value, patch)
-  return M.get(location).apply(location, value, patch)
+  return location.algebra.apply(location, value, patch)
 end
 
 function M.stage(location, summary, patch, trail)
-  local algebra = M.get(location)
+  local algebra = location.algebra
   if patch.kind ~= algebra.name then
     error(algebra.name .. ' location requires ' .. algebra.name .. ' patch', 3)
   end
@@ -472,25 +475,26 @@ function M.stage(location, summary, patch, trail)
 end
 
 function M.join(location, left, right, composition)
+  local algebra = location.algebra
   if not left then
-    return clone_patch(right)
+    return right and algebra.clone(right) or nil
   end
   if not right then
-    return clone_patch(left)
+    return algebra.clone(left)
   end
-  return M.get(location).join(location, left, right, composition)
+  return algebra.join(location, left, right, composition)
 end
 
 function M.constraint(location, patch, orientation)
-  return M.get(location).constraint(location, patch, orientation)
+  return location.algebra.constraint(location, patch, orientation)
 end
 
 function M.supplies(location, patch)
-  return M.get(location).supplies(patch)
+  return location.algebra.supplies(patch)
 end
 
 function M.serialise(location, summary, relation, out)
-  local serialise = M.get(location).serialise
+  local serialise = location.algebra.serialise
   if serialise then
     serialise(summary, relation, out)
   end
@@ -498,7 +502,7 @@ function M.serialise(location, summary, relation, out)
 end
 
 function M.machine_change(location, serial, value)
-  local change = M.get(location).change
+  local change = location.algebra.change
   if not change then
     error('location algebra does not accept machine changes', 3)
   end

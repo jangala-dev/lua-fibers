@@ -140,7 +140,22 @@ local function test_shared_change_leaf_keeps_occurrence_state_separate()
 end
 
 
+
+local function test_expect_nil_is_a_valid_projected_value()
+  local rt = Runtime.new()
+  local cell = Cell.new(nil):label('nil-cell')
+  local matched
+
+  rt:spawn_raw(function()
+    matched = rt:perform(cell:expect_op(nil))
+  end):label('nil-cell-observer')
+
+  H.assert_status(rt:run(), 'found')
+  H.assert_eq(matched, true)
+end
+
 local tests = {
+  test_expect_nil_is_a_valid_projected_value,
   test_shared_change_leaf_keeps_occurrence_state_separate,
   test_wait_until_and_match_contracts,
   test_resource_observation_retries_independent_cell_updates,
