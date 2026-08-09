@@ -31,7 +31,7 @@ end):label('reader')
 rt:_resume_fiber(reader)
 local reader_request = rt.engine.pending[#rt.engine.pending]
 local fallback = assert(rt.engine:find_candidate(reader_request))
-eq(fallback:is_fallback(), true, 'read should initially plan fallback')
+eq(fallback.absence_gate ~= nil, true, 'read should initially plan fallback')
 
 local writer = rt:spawn_raw(function()
   written = rt:perform(flow:inlet():write_op('x'))
@@ -44,7 +44,7 @@ eq(written, 1)
 
 eq(fallback:settle(rt.engine), false, 'flow mutation must invalidate prior fallback proof')
 local refreshed = assert(rt.engine:find_candidate(reader_request))
-eq(refreshed:is_fallback(), false, 'refreshed reader should select primary')
+eq(refreshed.absence_gate ~= nil, false, 'refreshed reader should select primary')
 assert(refreshed:settle(rt.engine))
 eq(got, 'x')
 

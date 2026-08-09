@@ -23,21 +23,19 @@ local function scratch(engine, field)
 end
 
 function Engine.new(scheduler, opts)
-  local search_limit = opts.search_limit or 1000000
-  local choice_seed = opts.choice_seed or 1
   return setmetatable({
     runtime = scheduler,
     instrumentation = scheduler.instrumentation,
     pending = {},
     next_request_order = 0,
     quiet_deadlock = opts.quiet_deadlock == true,
-    search_limit = search_limit,
+    search_limit = opts.search_limit or 1000000,
     search_total_limit = opts.search_total_limit,
     search_trail_limit = opts.search_trail_limit,
     search_depth_limit = opts.search_depth_limit,
     cycle_work_limit = opts.cycle_work_limit,
     cycle_focus_limit = opts.cycle_focus_limit,
-    choice_seed = choice_seed,
+    choice_seed = opts.choice_seed or 1,
     explicit_search_limit = opts.search_limit ~= nil,
     pending_generation = 0,
     epoch = 0,
@@ -117,41 +115,55 @@ function Engine.interrupt(engine, token, cancelled)
   return true
 end
 
-local function take_search(request)
-  local search = request and request._retained_search
-  if search then request._retained_search = nil end
-  return search
-end
-
 local function discard_search(engine, request, reason)
-  local search = take_search(request)
+  local search = request and request._retained_search
   if not search then return end
+  request._retained_search = nil
   search:discard(reason or 'invalidated')
   if engine.instrumentation then engine.instrumentation:inc('retained_search_invalidations') end
 end
 
-local function retain_search(engine, request, search)
-  request._retained_search = search
-  if engine.instrumentation then engine.instrumentation:inc('retained_search_stores') end
+local function finish_search(engine, focus, search, hit, certificate, unknown, retained)
+  if not search then return hit, certificate, unknown end
+  if unknown then
+    local reason = search.unknown_reason or 'search_quantum'
+    engine._last_search_unknown_reason = reason
+    if search.hard_limit or not search.frontier_snapshot then
+      if retained then focus._retained_search = nil end
+      search:discard(search.hard_limit and reason or 'unretained')
+    elseif not retained then
+      focus._retained_search = search
+      if engine.instrumentation then engine.instrumentation:inc('retained_search_stores') end
+    end
+  else
+    if retained then focus._retained_search = nil end
+    if hit == nil then search:discard('completed-retry') end
+  end
+  return hit, certificate, unknown
 end
 
-local function remove_selected(engine, count, request1, request2, requests)
+local function remove_requests(engine, requests, one)
+  local count = requests and #requests or 1
   local remove
   if requests and count > 4 then
     remove = scratch(engine, '_remove_pending_scratch')
     for i = 1, count do remove[requests[i]] = true end
   end
-  local function selected(request)
-    if not requests then return request == request1 or (count == 2 and request == request2) end
-    if remove then return remove[request] == true end
-    for i = 1, count do if requests[i] == request then return true end end
-    return false
-  end
 
   local write, total = 1, #engine.pending
   for read = 1, total do
     local request = engine.pending[read]
-    if selected(request) then
+    local selected = request == one
+    if requests then
+      if remove then
+        selected = remove[request] == true
+      else
+        for i = 1, count do
+          if requests[i] == request then selected = true; break end
+        end
+      end
+    end
+    if selected then
       request.pending = nil
       if engine.proof_graph then Proof.remove_request(engine, request) end
       discard_search(engine, request, 'removed')
@@ -166,24 +178,15 @@ local function remove_selected(engine, count, request1, request2, requests)
   if engine.instrumentation then engine.instrumentation:inc('pending_removed', count) end
 end
 
-function Engine:remove_small(count, request1, request2)
-  return remove_selected(self, count, request1, request2)
-end
-
-function Engine:remove(requests)
-  return remove_selected(self, #requests, nil, nil, requests)
-end
+function Engine:remove_one(request) return remove_requests(self, nil, request) end
+function Engine:remove(requests) return remove_requests(self, requests) end
 
 local function component_requests(engine, focus, provisional_admission)
-  local active = engine.proof_graph ~= nil
-  if not provisional_admission and #engine.pending > 1 then
-    Proof.ensure(engine)
-    active = true
-  end
-  if active then return Proof.component(engine, focus) end
+  if not provisional_admission and #engine.pending > 1 then Proof.ensure(engine) end
+  if engine.proof_graph then return Proof.component(engine, focus) end
   local requests = {}
   for i = 1, #engine.pending do requests[engine.pending[i]] = true end
-  return requests, nil
+  return requests
 end
 
 local function find_candidate_impl(engine, focus, search_limit, requests, component, provisional_admission)
@@ -191,31 +194,17 @@ local function find_candidate_impl(engine, focus, search_limit, requests, compon
   if not focus or not focus.pending then return nil end
   if not requests then requests, component = component_requests(engine, focus, provisional_admission) end
 
-  local instrumentation = engine.instrumentation
   if engine.proof_graph then
     local retry = Proof.retry(engine, focus)
-    if retry then
-      return nil, retry, false
-    end
+    if retry then return nil, retry, false end
   end
 
-    local retained = focus and focus._retained_search
+  local retained = focus._retained_search
   if retained then
-    local valid = Proof.valid(engine, retained.frontier_snapshot)
-    if valid then
-      if instrumentation then instrumentation:inc('retained_search_resumes') end
+    if Proof.valid(engine, retained.frontier_snapshot) then
+      if engine.instrumentation then engine.instrumentation:inc('retained_search_resumes') end
       local hit, certificate, unknown = retained:advance(search_limit or engine.search_limit)
-      if unknown and retained.hard_limit then
-        engine._last_search_unknown_reason = retained.unknown_reason or 'search_quantum'
-        take_search(focus)
-        retained:discard(engine._last_search_unknown_reason)
-      elseif unknown then
-        engine._last_search_unknown_reason = retained.unknown_reason or 'search_quantum'
-      else
-        take_search(focus)
-        if hit == nil then retained:discard('completed-retry') end
-      end
-      return hit, certificate, unknown
+      return finish_search(engine, focus, retained, hit, certificate, unknown, true)
     end
     discard_search(engine, focus, 'invalidated')
   end
@@ -223,19 +212,7 @@ local function find_candidate_impl(engine, focus, search_limit, requests, compon
   local hit, certificate, unknown, search = Search.search(
     engine, requests, focus, search_limit, component, provisional_admission
   )
-  if unknown and search then
-    engine._last_search_unknown_reason = search.unknown_reason or 'search_quantum'
-    if search.hard_limit then
-      search:discard(engine._last_search_unknown_reason)
-    elseif search.frontier_snapshot then
-      retain_search(engine, focus, search)
-    else
-      search:discard('unretained')
-    end
-  elseif hit == nil and search then
-    search:discard('completed-retry')
-  end
-  return hit, certificate, unknown
+  return finish_search(engine, focus, search, hit, certificate, unknown, false)
 end
 
 local function find_candidate(engine, focus, search_limit, requests, component, provisional_admission)
@@ -264,11 +241,20 @@ local function suspension_error(engine, fiber, reason)
   })
 end
 
-local function candidate_can_resume_first(candidate, fiber, members)
-  if not candidate or candidate:participant(1) ~= fiber then return false end
-  if candidate:is_fallback() and candidate:membership_sensitive() then
-    return candidate:covers(members)
+local function candidate_covers(candidate, members)
+  local participants, index = candidate.participants, 1
+  for i = 1, #members do
+    local member = members[i]
+    while participants[index] and participants[index].order < member.order do index = index + 1 end
+    if participants[index] ~= member then return false end
   end
+  return true
+end
+
+local function candidate_can_resume_first(candidate, fiber, members)
+  if not candidate or candidate.participants[1] ~= fiber then return false end
+  local gate = candidate.absence_gate
+  if gate and gate.membership_sensitive then return candidate_covers(candidate, members) end
   return true
 end
 
@@ -317,7 +303,7 @@ function Engine:resolve_without_suspension(fiber)
 
   if fiber.pending then
     local reason = self._last_search_unknown_reason or 'operation_not_immediately_committable'
-    self:remove_small(1, fiber)
+    self:remove_one(fiber)
     Engine.resume(self, fiber, nil, suspension_error(self, fiber, reason))
   end
   return false
@@ -379,7 +365,7 @@ local function scan_components(engine, pending, start, search_limit, refs)
         local request = pending[member_index]
         if request.pending and requests[request] then
           members[#members + 1] = request
-          positions[request] = member_index
+          positions[#members] = member_index
           processed[request] = true
         end
       end
@@ -387,13 +373,13 @@ local function scan_components(engine, pending, start, search_limit, refs)
       local suspended = false
       for i = 1, #members do
         local focus = members[i]
-        local member_index = positions[focus]
+        local member_index = positions[i]
         local candidate, ref, unknown = find_candidate(engine, focus, search_limit, requests, component)
         refs[#refs + 1] = ref
         if unknown then any_unknown, suspended = true, true; break end
 
-        if candidate and candidate:is_fallback() then
-          if candidate:covers(members) and candidate:settle(engine) then
+        if candidate and candidate.absence_gate then
+          if candidate_covers(candidate, members) and candidate:settle(engine) then
             discard_candidates(fallbacks)
             return member_index, any_unknown
           end
@@ -404,7 +390,7 @@ local function scan_components(engine, pending, start, search_limit, refs)
             candidate, ref, unknown = find_candidate(engine, focus, search_limit)
             refs[#refs + 1] = ref
             if unknown then any_unknown, suspended = true, true; break end
-            if candidate and candidate:is_fallback() then
+            if candidate and candidate.absence_gate then
               delay_candidate(fallbacks, candidate, focus, member_index)
             elseif candidate then
               committed = candidate:settle(engine)
@@ -448,7 +434,6 @@ local function scan_pending(engine, cursor, search_limit)
 end
 
 local function step(engine, opts)
-  engine._last_search_unknown_reason = nil
   local search_limit = opts.max_work
 
   local fiber = engine.runtime:_start_one()
@@ -458,7 +443,7 @@ local function step(engine, opts)
   if fiber then
     local request, candidate, ref, unknown = search_admitted(engine, fiber, search_limit)
     if not request then return { tag = 'pending', kind = 'started' } end
-    if candidate and not candidate:is_fallback() and candidate:settle(engine) then
+    if candidate and not candidate.absence_gate and candidate:settle(engine) then
       return { tag = 'found', kind = 'commit', value = true }
     end
     local refs = scratch(engine, '_driver_refs')
@@ -481,9 +466,8 @@ local function step(engine, opts)
 end
 
 local function run(engine, opts)
-  engine._last_search_unknown_reason = nil
   if opts.max_work then return step(engine, opts) end
-  local committed, last_refs, last_unknown = false, {}, false
+  local committed, last_refs, last_unknown = false
 
   while true do
     local fiber = engine.runtime:_start_one()
@@ -491,8 +475,8 @@ local function run(engine, opts)
     if engine.pending[#engine.pending] == fiber and #engine.pending == 1 then
       local request, candidate = search_admitted(engine, fiber)
       if candidate
-        and (not candidate:is_fallback() or not candidate:membership_sensitive())
-        and candidate:is_single(request)
+        and (not candidate.absence_gate or not candidate.absence_gate.membership_sensitive)
+        and #candidate.participants == 1 and candidate.participants[1] == request
         and candidate:settle(engine)
       then
         committed = true
@@ -519,6 +503,7 @@ end
 
 function Engine:advance(mode, opts)
   begin_call(self)
+  self._last_search_unknown_reason = nil
   local result
   if mode == 'step' then result = step(self, opts)
   elseif mode == 'run' then result = run(self, opts)

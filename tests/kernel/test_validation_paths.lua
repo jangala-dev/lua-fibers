@@ -33,7 +33,7 @@ do
   local receiver_request = rt.engine.pending[#rt.engine.pending]
 
   local fallback_plan = assert(rt.engine:find_candidate(receiver_request))
-  assert_eq(fallback_plan:is_fallback(), true, 'initial plan should be fallback')
+  assert_eq(fallback_plan.absence_gate ~= nil, true, 'initial plan should be fallback')
 
   local sender = rt:spawn_raw(function()
     sender_result = rt:perform(ch:put_op('primary'))
@@ -44,7 +44,7 @@ do
   assert_eq(committed, false, 'stale negative plan must not commit')
 
   local refreshed = assert(rt.engine:find_candidate(receiver_request))
-  assert_eq(refreshed:is_fallback(), false, 'refreshed plan should use primary')
+  assert_eq(refreshed.absence_gate ~= nil, false, 'refreshed plan should use primary')
   assert(refreshed:settle(rt.engine))
   assert_eq(receiver_result, 'primary')
   assert_eq(sender_result, true)
@@ -88,7 +88,7 @@ do
   assert_eq(second_plan:settle(rt.engine), false, 'second snapshot plan should be stale')
 
   local refreshed = assert(rt.engine:find_candidate(second_request))
-  assert_eq(refreshed:is_fallback(), false, 'stale primary refresh must remain primary')
+  assert_eq(refreshed.absence_gate ~= nil, false, 'stale primary refresh must remain primary')
   assert(refreshed:settle(rt.engine))
 
   assert_eq(first_result, 1)

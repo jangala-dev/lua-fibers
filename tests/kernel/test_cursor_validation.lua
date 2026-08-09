@@ -24,7 +24,7 @@ do
   rt:_resume_fiber(receiver)
   local receiver_request = rt.engine.pending[1]
   local fallback = assert(rt.engine:find_candidate(receiver_request))
-  assert(fallback:is_fallback())
+  assert(fallback.absence_gate ~= nil)
 
   local producer = rt:spawn_raw(function()
     rt:perform(net:put_op('p', 'primary'))
@@ -36,7 +36,7 @@ do
   assert(fallback:settle(rt.engine) == false)
 
   local refreshed = assert(rt.engine:find_candidate(receiver_request))
-  assert(not refreshed:is_fallback())
+  assert(refreshed.absence_gate == nil)
   assert(refreshed:settle(rt.engine))
   assert(receiver_result == 'primary')
 end
@@ -53,7 +53,7 @@ do
   rt:_resume_fiber(reserver)
   local reserver_request = rt.engine.pending[1]
   local fallback = assert(rt.engine:find_candidate(reserver_request))
-  assert(fallback:is_fallback())
+  assert(fallback.absence_gate ~= nil)
 
   local canceller = rt:spawn_raw(function()
     rt:perform(cal:cancel_op(1))
@@ -64,7 +64,7 @@ do
   assert(fallback:settle(rt.engine) == false)
 
   local refreshed = assert(rt.engine:find_candidate(reserver_request))
-  assert(not refreshed:is_fallback())
+  assert(refreshed.absence_gate == nil)
   assert(refreshed:settle(rt.engine))
   assert(result == 'primary')
 end

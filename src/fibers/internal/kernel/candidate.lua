@@ -9,45 +9,7 @@ Candidate.__index = Candidate
 local EMPTY = {}
 local NIL_EFFECT_KEY = {}
 
-function Candidate.new(fields)
-  return setmetatable(fields, Candidate)
-end
-
-function Candidate:count()
-  return #self.participants
-end
-
-function Candidate:participant(index)
-  return self.participants[index]
-end
-
-function Candidate:outcome(index)
-  return self.outcomes[index]
-end
-
-function Candidate:is_fallback()
-  return self.absence_gate ~= nil
-end
-
-function Candidate:membership_sensitive()
-  return self.absence_gate and self.absence_gate.membership_sensitive == true or false
-end
-
-function Candidate:is_single(request)
-  return self:count() == 1 and self:participant(1) == request
-end
-
-function Candidate:covers(members)
-  local candidate_index = 1
-  for member_index = 1, #members do
-    local member = members[member_index]
-    while candidate_index <= self:count() and self:participant(candidate_index).order < member.order do
-      candidate_index = candidate_index + 1
-    end
-    if self:participant(candidate_index) ~= member then return false end
-  end
-  return true
-end
+function Candidate.new(fields) return setmetatable(fields, Candidate) end
 
 function Candidate:discard(reason)
   local search = self._search
@@ -127,23 +89,18 @@ function Candidate:prepare(engine)
   return prepared
 end
 
-function Candidate:validate(engine)
-  for i = 1, #self.participants do
-    if not self.participants[i].pending then return false end
-  end
-  if not Journal.validate(self.observations) then return false end
-  local gate = self.absence_gate
-  if gate then return Proof.valid(engine, gate.snapshot) end
-  return true
-end
 
 function Candidate:settle(engine)
-  local runtime, instrumentation = engine.runtime, engine.instrumentation
-  if not self:validate(engine) then
+  for i = 1, #self.participants do
+    if not self.participants[i].pending then self:discard('stale-hit'); return false end
+  end
+  local gate = self.absence_gate
+  if not Journal.validate(self.observations) or (gate and not Proof.valid(engine, gate.snapshot)) then
     self:discard('stale-hit')
     return false
   end
 
+  local runtime, instrumentation = engine.runtime, engine.instrumentation
   local prepared = self.prepared_effects
 
   Journal.commit(self.writes)
