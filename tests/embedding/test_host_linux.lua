@@ -102,4 +102,59 @@ do
   assert_truthy(type(AutoIO.cffi_linux) == 'function', 'AutoIO.cffi_linux helper should exist')
 end
 
+
+-- Fd.new owns a raw descriptor once wrapping begins.  If descriptor
+-- configuration fails, the wrapping path closes it exactly once; callers must
+-- not repeat raw cleanup after Fd.new reports the failure.
+do
+  local Posix = require('fibers.io.posix')
+  local Address = require('fibers.net.address')
+  local closes = 0
+  local binding = {
+    name = 'ownership_probe',
+    family = 'ownership_probe',
+    time = { now = function() return 0 end, sleep = function() return true end },
+    poll = { wait = function() return {} end },
+    errors = {},
+    fd = {
+      supported = function() return true end,
+      validate = function(value) return value end,
+      close = function()
+        closes = closes + 1
+        return true
+      end,
+      set_nonblocking = function() return nil, 22, 'configuration failed' end,
+    },
+    net = {
+      supports = function() return true end,
+      encode = function() return { family = 'inet4', native = {} } end,
+      decode = function(value) return value end,
+      is_unix = function() return false end,
+      open = function() return {} end,
+      query = function() return nil end,
+      bind = function() return true end,
+      listen = function() return true end,
+      connect = function() return true end,
+      socket_error = function() return 0 end,
+    },
+  }
+  local host = Posix.define(binding).new()
+  local listener, err = host:create_listener(Address.ipv4('127.0.0.1', 0), {})
+  assert_truthy(listener == nil and err ~= nil, 'configuration failure should reject listener')
+  assert_eq(closes, 1, 'failed descriptor wrapping must close the raw value exactly once')
+
+  binding.fd.set_nonblocking = function() return true end
+  binding.fd.close = function()
+    closes = closes + 1
+    return nil, 5, 'close failed'
+  end
+  binding.net.bind = function() return nil, 98, 'bind failed' end
+  local failed, setup_err = host:create_listener(Address.ipv4('127.0.0.1', 0), {})
+  assert_truthy(failed == nil and setup_err and setup_err.kind == 'protocol',
+    'socket setup should retain a simultaneous close failure')
+  assert_truthy(type(setup_err.errors) == 'table' and #setup_err.errors == 2,
+    'socket setup error should contain primary and cleanup failures')
+  assert_eq(closes, 2, 'socket setup cleanup should attempt one close')
+end
+
 print('tests/test_host_linux.lua: ok')

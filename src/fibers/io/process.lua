@@ -8,6 +8,7 @@ local Op = require('fibers.op')
 local HostOffer = require('fibers.io.offer')
 
 local M = {}
+local REQUIRED_PROCESS_METHODS = { 'open_exit_op', 'exit_op', 'signal', 'close' }
 
 
 local function close_returned(value, reason, errors, role)
@@ -54,9 +55,8 @@ function M.start(host, spec)
     return nil, nil, dispose_invalid_return(process, nil, host, 'endpoints')
   end
 
-  local required = { 'open_exit_op', 'exit_op', 'signal', 'close' }
-  for i = 1, #required do
-    local name = required[i]
+  for i = 1, #REQUIRED_PROCESS_METHODS do
+    local name = REQUIRED_PROCESS_METHODS[i]
     if type(process[name]) ~= 'function' then
       return nil, nil, dispose_invalid_return(process, endpoints, host, name)
     end
@@ -241,6 +241,10 @@ do
   local M = ProcessIO
   local STREAMS = { 'stdin', 'stdout', 'stderr' }
 
+  function M.close_all(values, close_raw)
+    for _, value in pairs(values or {}) do close_raw(value) end
+  end
+
   function M.open(spec, open_pipe, close_raw)
     local stdio = { all = {} }
     local parents = {}
@@ -251,9 +255,7 @@ do
       if mode == 'pipe' then
         local reader, writer, err, extra = open_pipe(which)
         if not reader then
-          for j = 1, #stdio.all do
-            close_raw(stdio.all[j])
-          end
+          M.close_all(stdio.all, close_raw)
           return nil, nil, err, extra
         end
         stdio.all[#stdio.all + 1] = reader

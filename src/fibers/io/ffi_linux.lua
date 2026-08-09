@@ -433,32 +433,14 @@ function M.new(opts)
     number = fd_number,
     read = function(fd, maximum)
       maximum = math.max(0, tonumber(maximum) or 4096)
-      if maximum == 0 then
-        return ''
-      end
+      if maximum == 0 then return '' end
       local buffer = ffi.new('char[?]', maximum)
-      while true do
-        local count = number(C.read(fd, buffer, maximum))
-        if count >= 0 then
-          return count == 0 and '' or ffi.string(buffer, count)
-        end
-        local errno = native.errno()
-        if errno ~= EINTR then
-          return nil, errno, message(errno)
-        end
-      end
+      local count, errno, detail = retry_call(function() return C.read(fd, buffer, maximum) end)
+      if count == nil then return nil, errno, detail end
+      return count == 0 and '' or ffi.string(buffer, count)
     end,
     write = function(fd, bytes)
-      while true do
-        local count = number(C.write(fd, bytes, #bytes))
-        if count >= 0 then
-          return count
-        end
-        local errno = native.errno()
-        if errno ~= EINTR then
-          return nil, errno, message(errno)
-        end
-      end
+      return retry_call(function() return C.write(fd, bytes, #bytes) end)
     end,
     close = function(fd)
       local ok, errno = native.close_fd(fd)
@@ -702,35 +684,17 @@ function M.new(opts)
       local buffer = ffi.new('unsigned char[?]', math.max(1, maximum))
       local storage = ffi.new('struct sockaddr_storage[1]')
       local length = ffi.new('unsigned int[1]', ffi.sizeof('struct sockaddr_storage'))
-      while true do
-        local count =
-          number(C.recvfrom(fd, buffer, maximum, MSG_TRUNC, ffi.cast('struct sockaddr *', storage), length))
-        if count >= 0 then
-          local copied = math.min(count, maximum)
-          return copied > 0 and ffi.string(buffer, copied) or '',
-            decode_storage(storage, number(length[0])),
-            {
-              truncated = count > maximum,
-              original_size = count > maximum and count or nil,
-            }
-        end
-        local errno = native.errno()
-        if errno ~= EINTR then
-          return nil, nil, nil, errno, message(errno)
-        end
-      end
+      local count, errno, detail = retry_call(function()
+        return C.recvfrom(fd, buffer, maximum, MSG_TRUNC, ffi.cast('struct sockaddr *', storage), length)
+      end)
+      if count == nil then return nil, nil, nil, errno, detail end
+      local copied = math.min(count, maximum)
+      return copied > 0 and ffi.string(buffer, copied) or '',
+        decode_storage(storage, number(length[0])),
+        { truncated = count > maximum, original_size = count > maximum and count or nil }
     end,
     send = function(fd, data, address)
-      while true do
-        local count = number(C.sendto(fd, data, #data, 0, address.pointer, address.length))
-        if count >= 0 then
-          return count
-        end
-        local errno = native.errno()
-        if errno ~= EINTR then
-          return nil, errno, message(errno)
-        end
-      end
+      return retry_call(function() return C.sendto(fd, data, #data, 0, address.pointer, address.length) end)
     end,
   }
 

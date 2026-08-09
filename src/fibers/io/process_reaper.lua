@@ -247,9 +247,7 @@ function Reaper.new(spec)
     end
 
     close(launch_write)
-    for i = 1, #stdio.all do
-      close(stdio.all[i])
-    end
+    IO.close_all(stdio.all, close)
     local line = ''
     while not line:find('\n', 1, true) do
       local chunk = read_chunk(launch_read, 256)
@@ -460,9 +458,7 @@ function Reaper.new(spec)
     end
     local status_read, status_write, status_err = make_pipe('status_pipe')
     if not status_read then
-      for i = 1, #stdio.all do
-        close(stdio.all[i])
-      end
+      IO.close_all(stdio.all, close)
       return nil, nil, status_err
     end
     local blocking, errno, message = spec.set_blocking(status_read, true)
@@ -498,9 +494,7 @@ function Reaper.new(spec)
     local pid, buffer, startup_err = read_startup(status_read, process_spec)
     if not pid then
       close(status_read)
-      for _, value in pairs(parents) do
-        close(value)
-      end
+      IO.close_all(parents, close)
       Core.wait(spec, reaper, false)
       return nil, nil, startup_err
     end

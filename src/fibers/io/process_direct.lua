@@ -143,18 +143,14 @@ function Direct.new(spec)
 
     local error_read, error_write, pipe_errno, pipe_message = spec.pipe()
     if not error_read then
-      for i = 1, #stdio.all do
-        close(stdio.all[i])
-      end
+      IO.close_all(stdio.all, close)
       return nil, nil, error_value(spec, 'exec_pipe', pipe_errno, pipe_message)
     end
     local cloexec, cloexec_errno, cloexec_message = spec.set_cloexec(error_write, true)
     if not cloexec then
       close(error_read)
       close(error_write)
-      for i = 1, #stdio.all do
-        close(stdio.all[i])
-      end
+      IO.close_all(stdio.all, close)
       return nil, nil, error_value(spec, 'exec_pipe', cloexec_errno, cloexec_message)
     end
 
@@ -162,9 +158,7 @@ function Direct.new(spec)
     if not pid then
       close(error_read)
       close(error_write)
-      for i = 1, #stdio.all do
-        close(stdio.all[i])
-      end
+      IO.close_all(stdio.all, close)
       return nil, nil, error_value(spec, 'fork', fork_errno, fork_message)
     end
 
@@ -225,16 +219,12 @@ function Direct.new(spec)
     close(error_read)
     if handshake == nil then
       kill_and_reap(pid)
-      for _, value in pairs(parents) do
-        close(value)
-      end
+      IO.close_all(parents, close)
       return nil, nil, error_value(spec, 'exec_handshake', read_errno, read_message)
     end
     if handshake ~= '' then
       Core.wait(spec, pid, false)
-      for _, value in pairs(parents) do
-        close(value)
-      end
+      IO.close_all(parents, close)
       local stage, number = handshake:match('^([%w_]+):(%d+)\n?$')
       if not stage then
         return nil,

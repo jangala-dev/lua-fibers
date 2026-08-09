@@ -18,8 +18,15 @@ local next_id = 0
 
 local function close_value(value, close, reason)
   if value == nil then return true end
-  Contract.func(close, 'host-hold closer', 3)
   return close(value, reason)
+end
+
+local function safe_close(value, close, reason)
+  local called, ok, err = Protected.pcall(close_value, value, close, reason)
+  if not called then
+    return nil, IOError.protocol('host_hold', 'close', 'held value close raised', { cause = ok })
+  end
+  return ok, err
 end
 
 function HostHold.new()
@@ -59,7 +66,7 @@ function HostHold:hold(key, value, close)
   Contract.func(close, 'host-hold closer', 2)
 
   if self.closed or self.values[key] ~= nil or self.taken[key] then
-    local closed, close_err = close_value(value, close, 'host hold refused')
+    local closed, close_err = safe_close(value, close, 'host hold refused')
     if not closed then
       return nil, IOError.protocol('host_hold', 'hold', 'host-hold key is unavailable and refused value failed to close', {
         key = key,
@@ -107,7 +114,7 @@ function HostHold:hold_many(entries)
         self.values[inserted_key] = nil
         if rec then
           IOAudit.release(rec.value, self)
-          local closed, close_err = close_value(rec.value, rec.close, 'host hold batch rolled back')
+          local closed, close_err = safe_close(rec.value, rec.close, 'host hold batch rolled back')
           if not closed then
             rollback_errors[#rollback_errors + 1] = { key = inserted_key, error = close_err }
           end
@@ -157,13 +164,7 @@ function HostHold:discard(key, expected, reason)
   self.taken[key] = true
   IOAudit.release(rec.value, self)
 
-  local called, ok, err = Protected.pcall(close_value, rec.value, rec.close, reason or 'host value discarded')
-  if not called then
-    return nil, IOError.protocol('host_hold', 'discard', 'held value close raised', {
-      key = key,
-      cause = ok,
-    })
-  end
+  local ok, err = safe_close(rec.value, rec.close, reason or 'host value discarded')
   if not ok then
     return nil, IOError.protocol('host_hold', 'discard', 'held value failed to close', {
       key = key,
@@ -198,7 +199,7 @@ function HostHold:close(reason)
     self.values[key] = nil
     if rec then
       IOAudit.release(rec.value, self)
-      local ok, err = close_value(rec.value, rec.close, reason)
+      local ok, err = safe_close(rec.value, rec.close, reason)
       if not ok then errors[#errors + 1] = { key = key, error = err } end
     end
   end

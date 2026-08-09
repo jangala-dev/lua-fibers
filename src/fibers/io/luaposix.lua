@@ -52,6 +52,24 @@ local function split(a, b)
   return native_error.split(a, b)
 end
 
+local function native_result(value, a, b)
+  if value ~= nil then return value end
+  local message, number = split(a, b)
+  return nil, number, message
+end
+
+local function native_status(value, a, b)
+  if value ~= nil then return true end
+  local message, number = split(a, b)
+  return nil, number, message
+end
+
+local function truthy_result(value, a, b)
+  if value then return value end
+  local message, number = split(a, b)
+  return nil, number, message
+end
+
 local function message(number)
   if number == nil then
     return nil
@@ -61,18 +79,10 @@ local function message(number)
 end
 
 local function set_flag(fd, get_cmd, set_cmd, flag, enabled)
-  local current, a, b = fcntl.fcntl(fd, get_cmd)
-  if current == nil then
-    local msg, eno = split(a, b)
-    return nil, eno, msg
-  end
+  local current, a, b = native_result(fcntl.fcntl(fd, get_cmd))
+  if current == nil then return nil, a, b end
   local next_flags = enabled and bit.bor(current, flag) or bit.band(current, bit.bnot(flag))
-  local ok, x, y = fcntl.fcntl(fd, set_cmd, next_flags)
-  if ok == nil then
-    local msg, eno = split(x, y)
-    return nil, eno, msg
-  end
-  return true
+  return native_status(fcntl.fcntl(fd, set_cmd, next_flags))
 end
 
 local function normalise_address(address)
@@ -233,40 +243,14 @@ binding.fd = {
   end,
   poll_value = fd_number,
   number = fd_number,
-  read = function(fd, maximum)
-    local value, a, b = unistd.read(fd, maximum)
-    if value ~= nil then
-      return value
-    end
-    local msg, eno = split(a, b)
-    return nil, eno, msg
-  end,
-  write = function(fd, bytes)
-    local value, a, b = unistd.write(fd, bytes)
-    if value ~= nil then
-      return value
-    end
-    local msg, eno = split(a, b)
-    return nil, eno, msg
-  end,
-  close = function(fd)
-    local ok, a, b = unistd.close(fd)
-    if ok ~= nil then
-      return true
-    end
-    local msg, eno = split(a, b)
-    return nil, eno, msg
-  end,
+  read = function(fd, maximum) return native_result(unistd.read(fd, maximum)) end,
+  write = function(fd, bytes) return native_result(unistd.write(fd, bytes)) end,
+  close = function(fd) return native_status(unistd.close(fd)) end,
   shutdown = function(fd, mode)
     if type(socket.shutdown) ~= 'function' then
       return true
     end
-    local ok, a, b = socket.shutdown(fd, mode == 'read' and (socket.SHUT_RD or 0) or (socket.SHUT_WR or 1))
-    if ok ~= nil then
-      return true
-    end
-    local msg, eno = split(a, b)
-    return nil, eno, msg
+    return native_status(socket.shutdown(fd, mode == 'read' and (socket.SHUT_RD or 0) or (socket.SHUT_WR or 1)))
   end,
   set_nonblocking = function(fd, enabled)
     return set_flag(fd, fcntl.F_GETFL, fcntl.F_SETFL, fcntl.O_NONBLOCK or 0, enabled)
@@ -319,13 +303,9 @@ binding.net = {
     end
   end,
   open = function(family, kind)
-    local value, a, b =
-      socket.socket(family, kind == 'datagram' and socket.SOCK_DGRAM or socket.SOCK_STREAM, 0)
-    if value then
-      return value
-    end
-    local msg, eno = split(a, b)
-    return nil, eno, msg
+    return truthy_result(socket.socket(
+      family, kind == 'datagram' and socket.SOCK_DGRAM or socket.SOCK_STREAM, 0
+    ))
   end,
   set_option = function(fd, level, name, value)
     local native_level = level == 'tcp' and socket.IPPROTO_TCP or socket.SOL_SOCKET
@@ -333,29 +313,10 @@ binding.net = {
     if native_level == nil or native_name == nil or type(socket.setsockopt) ~= 'function' then
       return nil, nil, 'socket option unavailable'
     end
-    local ok, a, b = socket.setsockopt(fd, native_level, native_name, value and 1 or 0)
-    if ok ~= nil then
-      return true
-    end
-    local msg, eno = split(a, b)
-    return nil, eno, msg
+    return native_status(socket.setsockopt(fd, native_level, native_name, value and 1 or 0))
   end,
-  bind = function(fd, address)
-    local ok, a, b = socket.bind(fd, address)
-    if ok ~= nil then
-      return true
-    end
-    local msg, eno = split(a, b)
-    return nil, eno, msg
-  end,
-  listen = function(fd, backlog)
-    local ok, a, b = socket.listen(fd, backlog)
-    if ok ~= nil then
-      return true
-    end
-    local msg, eno = split(a, b)
-    return nil, eno, msg
-  end,
+  bind = function(fd, address) return native_status(socket.bind(fd, address)) end,
+  listen = function(fd, backlog) return native_status(socket.listen(fd, backlog)) end,
   accept = function(fd)
     while true do
       local child, peer, eno = socket.accept(fd)
@@ -367,14 +328,7 @@ binding.net = {
       end
     end
   end,
-  connect = function(fd, address)
-    local ok, a, b = socket.connect(fd, address)
-    if ok ~= nil then
-      return true
-    end
-    local msg, eno = split(a, b)
-    return nil, eno, msg
-  end,
+  connect = function(fd, address) return native_status(socket.connect(fd, address)) end,
   socket_error = function(fd)
     local value, a, b = socket.getsockopt(fd, socket.SOL_SOCKET, socket.SO_ERROR)
     if value == nil then
@@ -394,12 +348,9 @@ binding.net = {
     return nil, nil, nil, eno, peer
   end,
   send = function(fd, data, address)
-    local count, a, b = socket.sendto(fd, data, address)
-    if count ~= nil then
-      return tonumber(count) or #data
-    end
-    local msg, eno = split(a, b)
-    return nil, eno, msg
+    local count, errno, message = native_result(socket.sendto(fd, data, address))
+    if count ~= nil then return tonumber(count) or #data end
+    return nil, errno, message
   end,
 }
 
@@ -535,39 +486,11 @@ binding.process = function(Fd)
     read = binding.fd.read,
     write = binding.fd.write,
     set_cloexec = binding.fd.set_cloexec,
-    fork = function()
-      local pid, a, b = unistd.fork()
-      if pid ~= nil then
-        return pid
-      end
-      local msg, eno = split(a, b)
-      return nil, eno, msg
-    end,
+    fork = function() return native_result(unistd.fork()) end,
     exit = unistd._exit,
-    chdir = function(path)
-      local ok, a, b = unistd.chdir(path)
-      if ok ~= nil then
-        return true
-      end
-      local _, eno = split(a, b)
-      return nil, eno
-    end,
-    setsid = function()
-      local ok, a, b = unistd.setpid('s', 0)
-      if ok ~= nil then
-        return true
-      end
-      local _, eno = split(a, b)
-      return nil, eno
-    end,
-    setpgid = function(pid, group)
-      local ok, a, b = unistd.setpid('p', pid, group)
-      if ok ~= nil then
-        return true
-      end
-      local _, eno = split(a, b)
-      return nil, eno
-    end,
+    chdir = function(path) return native_status(unistd.chdir(path)) end,
+    setsid = function() return native_status(unistd.setpid('s', 0)) end,
+    setpgid = function(pid, group) return native_status(unistd.setpid('p', pid, group)) end,
     environment = environment,
     stdio = {
       targets = { stdin = 0, stdout = 1, stderr = 2 },
@@ -575,14 +498,7 @@ binding.process = function(Fd)
       same = function(a, b)
         return a == b
       end,
-      duplicate = function(source, target)
-        local ok, a, b = unistd.dup2(source, target)
-        if ok ~= nil then
-          return true
-        end
-        local _, eno = split(a, b)
-        return nil, eno
-      end,
+      duplicate = function(source, target) return native_status(unistd.dup2(source, target)) end,
       open_null = function(which)
         local value, a, b = fcntl.open('/dev/null', which == 'stdin' and fcntl.O_RDONLY or fcntl.O_WRONLY, 0)
         if value ~= nil then
@@ -649,14 +565,7 @@ binding.process = function(Fd)
       end
       return nil, errno.EINVAL, 'unexpected wait status ' .. tostring(how)
     end,
-    kill = function(pid, number)
-      local ok, a, b = signal.kill(pid, number)
-      if ok ~= nil then
-        return true
-      end
-      local msg, eno = split(a, b)
-      return nil, eno, msg
-    end,
+    kill = function(pid, number) return native_status(signal.kill(pid, number)) end,
   })
 end
 

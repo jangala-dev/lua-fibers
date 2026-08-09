@@ -140,6 +140,15 @@ local function make_fd(binding)
     return true
   end
 
+  local function configuration_failed(handle, err, errno)
+    local primary = IOError.normalise(err, { domain = 'descriptor', action = 'configure', number = errno })
+    local cleanup = {}
+    IOError.capture_cleanup(cleanup, 'descriptor', 'configuration_close', { provider = binding.name },
+      handle.close, handle, 'descriptor configuration failed')
+    return nil, IOError.with_cleanup(primary, 'descriptor', 'configure',
+      'descriptor configuration and cleanup both failed', cleanup), errno
+  end
+
   function Fd.is_supported()
     return raw.supported == nil or raw.supported()
   end
@@ -190,16 +199,12 @@ local function make_fd(binding)
     if opts.cloexec ~= false and raw.set_cloexec then
       local ok, errno, message = raw.set_cloexec(value, true)
       if not ok then
-        handle:close('descriptor configuration failed')
-        return nil, error_detail(binding, errno, message), errno
+        return configuration_failed(handle, error_detail(binding, errno, message), errno)
       end
     end
     if opts.nonblocking ~= false then
       local ok, err, extra = handle:set_nonblocking(true)
-      if not ok then
-        handle:close('descriptor configuration failed')
-        return nil, err, extra
-      end
+      if not ok then return configuration_failed(handle, err, extra) end
     end
     return handle
   end
@@ -262,15 +267,12 @@ local function make_network(binding, Fd)
     return address and net.decode(address, family) or nil
   end
 
-  local function close_raw(value)
-    pcall(binding.fd.close, value)
-  end
-
   local function close_failed(handle, err)
-    if handle then
-      handle:close(err)
-    end
-    return nil, err
+    if not handle then return nil, err end
+    local cleanup = {}
+    IOError.capture_cleanup(cleanup, 'socket', 'setup_close', nil, handle.close, handle, err)
+    return nil, IOError.with_cleanup(err, 'socket', 'setup',
+      'socket setup and cleanup both failed', cleanup)
   end
 
   local function option(value, level, name, enabled, action, fields)
@@ -296,6 +298,20 @@ local function make_network(binding, Fd)
     return handle
   end
 
+  local function open_stream(host, address, label, action)
+    local endpoint, err = net.encode(address)
+    if not endpoint then return nil, err end
+    if not net.supports(endpoint.family) then
+      return nil, IOError.unsupported('socket', action, { address = address })
+    end
+    local value, errno, message = net.open(endpoint.family, 'stream', host)
+    if not value then return nil, socket_error('socket', errno, message) end
+    local handle
+    handle, err = wrap(value, host, label, endpoint.family)
+    if not handle then return nil, err end
+    return handle, value, endpoint
+  end
+
   function Network.supports_ipv4()
     return net.supports('inet4')
   end
@@ -307,23 +323,11 @@ local function make_network(binding, Fd)
   end
   function Network.create_listener(host, address, opts)
     local backlog = opts.backlog == nil and 128 or opts.backlog
-    local endpoint, err = net.encode(address)
-    if not endpoint then
-      return nil, err
-    end
-    if not net.supports(endpoint.family) then
-      return nil, IOError.unsupported('socket', 'listen', { address = address })
-    end
-    local value, errno, message = net.open(endpoint.family, 'stream', host)
-    if not value then
-      return nil, socket_error('socket', errno, message)
-    end
-    local handle
-    handle, err = wrap(value, host, opts.label or (binding.name .. '-listener'), endpoint.family)
-    if not handle then
-      close_raw(value)
-      return nil, err
-    end
+    local handle, value, endpoint = open_stream(
+      host, address, opts.label or (binding.name .. '-listener'), 'listen'
+    )
+    if not handle then return nil, value end
+    local err, errno, message
     if not net.is_unix(endpoint.family) and opts.reuse_address ~= false then
       local ok
       ok, err = option(value, 'socket', 'reuse_address', true, 'setsockopt_reuseaddr', { address = address })
@@ -367,10 +371,7 @@ local function make_network(binding, Fd)
         (opts.label or 'listener') .. ':accepted',
         endpoint.family
       )
-      if not child then
-        close_raw(child_raw)
-        return nil, nil, child_err
-      end
+      if not child then return nil, nil, child_err end
       if not net.is_unix(endpoint.family) and opts.nodelay ~= false then
         local set, nodelay_err = option(
           child_raw,
@@ -397,23 +398,11 @@ local function make_network(binding, Fd)
   end
 
   function Network.start_dial(host, address, opts)
-    local endpoint, err = net.encode(address)
-    if not endpoint then
-      return nil, err
-    end
-    if not net.supports(endpoint.family) then
-      return nil, IOError.unsupported('socket', 'dial', { address = address })
-    end
-    local value, errno, message = net.open(endpoint.family, 'stream', host)
-    if not value then
-      return nil, socket_error('socket', errno, message)
-    end
-    local handle
-    handle, err = wrap(value, host, opts.label or (binding.name .. '-dial'), endpoint.family)
-    if not handle then
-      close_raw(value)
-      return nil, err
-    end
+    local handle, value, endpoint = open_stream(
+      host, address, opts.label or (binding.name .. '-dial'), 'dial'
+    )
+    if not handle then return nil, value end
+    local err
     if opts.local_address then
       local local_endpoint, local_err = net.encode(opts.local_address)
       if not local_endpoint then
@@ -522,9 +511,7 @@ local function make_network(binding, Fd)
         nonblocking = true,
         cloexec = true,
       })
-      if not handle then
-        return fail(err)
-      end
+      if not handle then return nil, err end
       local function raw_of(self)
         return self._handle
       end

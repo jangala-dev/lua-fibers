@@ -63,11 +63,7 @@ local function mark_hint(self, mode)
 end
 
 local function callback(self, name, ...)
-  local f = self['_' .. name]
-  if type(f) == 'function' then
-    return f(self, ...)
-  end
-  return nil, IOError.unsupported('handle', name, { handle = Label.describe(self, self._fibers_id) })
+  return self['_' .. name](self, ...)
 end
 
 local HANDLE_OPTIONS = {

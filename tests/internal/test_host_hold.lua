@@ -63,6 +63,23 @@ assert(closed[2] == 'b:host hold batch rolled back')
 assert(closed[3] == 'a:host hold batch rolled back')
 assert(rollback:is_empty())
 
+
+-- HostHold cleanup is a return-value protocol even when a provider closer
+-- raises.  A refusal reports the cleanup failure, and closing the hold
+-- aggregates it instead of escaping the closer exception.
+do
+  local raising = HostHold.new():label('raising')
+  local function raise_close()
+    error('close exploded')
+  end
+  assert(raising:hold('item', 'first', raise_close))
+  local refused_value, refused_err = raising:hold('item', 'second', raise_close)
+  assert(refused_value == nil and refused_err and refused_err.kind == 'protocol')
+  assert(refused_err.close_error and refused_err.close_error.kind == 'protocol')
+  local closed_ok, closed_err = raising:close('raising cleanup')
+  assert(closed_ok == nil and closed_err and closed_err.kind == 'protocol')
+end
+
 local values
 fibers.run(function()
   local completion = Completion.new():label('multi-value')

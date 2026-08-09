@@ -51,23 +51,29 @@ function Error.unsupported(domain, action, fields)
   )
 end
 
-local SIMPLE = {
+local DEFAULTS = {
   would_block = { domain = 'io', temporary = true, message = 'I/O action would block' },
   eof = { domain = 'io', action = 'read', message = 'end of file' },
   closed = { domain = 'io', message = 'resource is closed' },
   broken_pipe = { domain = 'io', action = 'write', message = 'pipe reader is closed' },
+  invalid_argument = { domain = 'host', code = 'invalid_argument', message = 'invalid I/O action argument' },
+  message_too_large = {
+    domain = 'datagram', action = 'send', code = 'message_too_large',
+    message = 'datagram exceeds the supported message size',
+  },
+  truncated = {
+    domain = 'datagram', action = 'receive', code = 'truncated', message = 'datagram was truncated',
+  },
 }
-for kind, defaults in pairs(SIMPLE) do
+for kind, defaults in pairs(DEFAULTS) do
   Error[kind] = function(domain, action, fields)
-    return Error.new(
-      kind,
-      copy_fields({
-        domain = domain or defaults.domain,
-        action = action or defaults.action,
-        temporary = defaults.temporary,
-        message = defaults.message,
-      }, fields)
-    )
+    return Error.new(kind, copy_fields({
+      domain = domain or defaults.domain,
+      action = action or defaults.action,
+      code = defaults.code,
+      temporary = defaults.temporary,
+      message = defaults.message,
+    }, fields))
   end
 end
 
@@ -82,39 +88,6 @@ function Error.system(domain, action, message, code, number, fields)
       message = message or code or 'I/O system error',
     }, fields)
   )
-end
-
-local CODED = {
-  invalid_argument = {
-    domain = 'host',
-    code = 'invalid_argument',
-    message = 'invalid I/O action argument',
-  },
-  message_too_large = {
-    domain = 'datagram',
-    action = 'send',
-    code = 'message_too_large',
-    message = 'datagram exceeds the supported message size',
-  },
-  truncated = {
-    domain = 'datagram',
-    action = 'receive',
-    code = 'truncated',
-    message = 'datagram was truncated',
-  },
-}
-for kind, defaults in pairs(CODED) do
-  Error[kind] = function(domain, action, fields)
-    return Error.new(
-      kind,
-      copy_fields({
-        domain = domain or defaults.domain,
-        action = action or defaults.action,
-        code = defaults.code,
-        message = defaults.message,
-      }, fields)
-    )
-  end
 end
 
 function Error.protocol(domain, action, message, fields)

@@ -40,6 +40,18 @@ local function split(a, b)
   return message, number
 end
 
+local function native_result(value, a, b)
+  if value ~= nil and value ~= false then return value end
+  local message, number = split(a, b)
+  return nil, number, message
+end
+
+local function native_status(value, a, b)
+  if value ~= nil and value ~= false then return true end
+  local message, number = split(a, b)
+  return nil, number, message
+end
+
 local function no_error(a, b)
   if a == nil and b == nil then
     return true
@@ -294,10 +306,7 @@ binding.fd = {
     if not value or type(value.shutdown) ~= 'function' then
       error('nixio descriptor does not support shutdown', 2)
     end
-    local ok, a, b = value:shutdown(mode == 'read' and 'rd' or 'wr')
-    if ok ~= nil and ok ~= false then return true end
-    local message, number = split(a, b)
-    return nil, number, message
+    return native_status(value:shutdown(mode == 'read' and 'rd' or 'wr'))
   end,
   close = function(value)
     if not value or type(value.close) ~= 'function' then
@@ -315,10 +324,7 @@ binding.fd = {
     if not value or type(value.setblocking) ~= 'function' then
       error('nixio descriptor does not support nonblocking mode', 2)
     end
-    local ok, a, b = value:setblocking(not enabled)
-    if ok ~= nil and ok ~= false then return true end
-    local message, number = split(a, b)
-    return nil, number, message
+    return native_status(value:setblocking(not enabled))
   end,
   pipe = function()
     local reader, writer, a, b = nixio.pipe()
@@ -373,41 +379,17 @@ binding.net = {
     end
   end,
   open = function(family, kind)
-    local value, a, b = nixio.socket(family, kind == 'datagram' and 'dgram' or 'stream')
-    if value then
-      return value
-    end
-    local message, number = split(a, b)
-    return nil, number, message
+    return native_result(nixio.socket(family, kind == 'datagram' and 'dgram' or 'stream'))
   end,
   set_option = function(value, level, name, enabled)
     if type(value.setopt) ~= 'function' then
       return true
     end
     local native_name = ({ reuse_address = 'reuseaddr', nodelay = 'nodelay' })[name] or name
-    local ok, a, b = value:setopt(level, native_name, enabled and 1 or 0)
-    if ok ~= nil and ok ~= false then
-      return true
-    end
-    local message, number = split(a, b)
-    return nil, number, message
+    return native_status(value:setopt(level, native_name, enabled and 1 or 0))
   end,
-  bind = function(value, address)
-    local ok, a, b = value:bind(address.host, address.port)
-    if ok then
-      return true
-    end
-    local message, number = split(a, b)
-    return nil, number, message
-  end,
-  listen = function(value, backlog)
-    local ok, a, b = value:listen(backlog)
-    if ok then
-      return true
-    end
-    local message, number = split(a, b)
-    return nil, number, message
-  end,
+  bind = function(value, address) return native_status(value:bind(address.host, address.port)) end,
+  listen = function(value, backlog) return native_status(value:listen(backlog)) end,
   accept = function(value)
     while true do
       local child, a, b = value:accept()
@@ -420,14 +402,7 @@ binding.net = {
       end
     end
   end,
-  connect = function(value, address)
-    local ok, a, b = value:connect(address.host, address.port)
-    if ok then
-      return true
-    end
-    local message, number = split(a, b)
-    return nil, number, message
-  end,
+  connect = function(value, address) return native_status(value:connect(address.host, address.port)) end,
   socket_error = function(value)
     if type(value.getopt) ~= 'function' then
       return 0
@@ -492,12 +467,7 @@ binding.resolver = {
   query = function(_host, endpoint, opts)
     local requested = opts.family or endpoint.family_hint
     local family = requested == 'inet4' and 'inet' or requested == 'inet6' and 'inet6' or 'any'
-    local records, a, b = nixio.getaddrinfo(endpoint.host, family, tostring(endpoint.service))
-    if records then
-      return records
-    end
-    local message, number = split(a, b)
-    return nil, number, message
+    return native_result(nixio.getaddrinfo(endpoint.host, family, tostring(endpoint.service)))
   end,
   records = pairs,
   address = function(value, service)
@@ -612,43 +582,17 @@ binding.process = function(Fd)
       if type(value.setblocking) ~= 'function' then
         return true
       end
-      local ok, a, b = value:setblocking(blocking)
-      if ok ~= nil and ok ~= false then
-        return true
-      end
-      local message, number = split(a, b)
-      return nil, number, message
+      return native_status(value:setblocking(blocking))
     end,
-    environment = function()
-      local value, a, b = nixio.getenv()
-      if value then
-        return value
-      end
-      local message, number = split(a, b)
-      return nil, number, message
-    end,
+    environment = function() return native_result(nixio.getenv()) end,
     getcwd = nixio.getcwd,
-    stat = function(path)
-      local kind, a, b = fs.stat(path, 'type')
-      if kind then
-        return kind
-      end
-      local message, number = split(a, b)
-      return nil, number, message
-    end,
+    stat = function(path) return native_result(fs.stat(path, 'type')) end,
     access = function(path)
       local ok = fs.access(path, 'f', 'x')
       return not not ok
     end,
     pipe = binding.fd.pipe,
-    fork = function()
-      local pid, a, b = nixio.fork()
-      if pid ~= nil then
-        return pid
-      end
-      local message, number = split(a, b)
-      return nil, number, message
-    end,
+    fork = function() return native_result(nixio.fork()) end,
     wait = wait,
     exec = function(path, argv, env)
       local args = {}
@@ -658,22 +602,8 @@ binding.process = function(Fd)
       return nixio.exece(path, args, env)
     end,
     exit = os.exit,
-    chdir = function(path)
-      local ok, a, b = nixio.chdir(path)
-      if ok then
-        return true
-      end
-      local _, number = split(a, b)
-      return nil, number
-    end,
-    setsid = function()
-      local ok, a, b = nixio.setsid()
-      if ok then
-        return true
-      end
-      local _, number = split(a, b)
-      return nil, number
-    end,
+    chdir = function(path) return native_status(nixio.chdir(path)) end,
+    setsid = function() return native_status(nixio.setsid()) end,
     stdio = {
       targets = { stdin = nixio.stdin, stdout = nixio.stdout, stderr = nixio.stderr },
       stdout = nixio.stdout,
@@ -681,32 +611,15 @@ binding.process = function(Fd)
         return a == b
       end,
       duplicate = function(source, target)
-        local value, a, b = nixio.dup(source, target)
-        if value then
-          return true
-        end
-        local message, number = split(a, b)
-        return nil, number, message
+        return native_status(nixio.dup(source, target))
       end,
       open_null = function(which)
-        local value, a, b = nixio.open('/dev/null', which == 'stdin' and 'r' or 'w')
-        if value then
-          return value
-        end
-        local message, number = split(a, b)
-        return nil, number, message
+        return native_result(nixio.open('/dev/null', which == 'stdin' and 'r' or 'w'))
       end,
     },
     open_objects = list_open_objects,
     number = binding.fd.number,
-    kill = function(pid, number)
-      local ok, a, b = nixio.kill(pid, number)
-      if ok then
-        return true
-      end
-      local message, errno = split(a, b)
-      return nil, errno, message
-    end,
+    kill = function(pid, number) return native_status(nixio.kill(pid, number)) end,
   })
 end
 

@@ -633,7 +633,7 @@ function Reactor:_service_offer(entry)
   local ok, value, err = call_nonyielding_pull(self, source._pull, entry.handle)
   if not ok then
     release_offer_slot(self, source)
-    local failure = IOError.is(value) and value or IOError.protocol(source.domain, source.action, tostring(value), {
+    local failure = IOError.is(value) and value or IOError.protocol(source._domain, source._action, tostring(value), {
       cause = value,
     })
     entry.retire_state = { kind = 'failed', error = failure }
@@ -672,12 +672,12 @@ function Reactor:_service_offer(entry)
   end
 
   if IOError.is(err, 'closed') or IOError.is_eof(err) then
-    source.error = source._closed_error and source._closed_error(err) or err
+    source._error = source._closed_error and source._closed_error(err) or err
     entry.retire_state = { kind = 'succeeded', reason = 'host source closed' }
     return self:_retire_entry(entry, 'host source closed')
   end
 
-  local failure = IOError.normalise(err, { domain = source.domain, action = source.action })
+  local failure = IOError.normalise(err, { domain = source._domain, action = source._action })
   entry.retire_state = { kind = 'failed', error = failure }
   return self:_retire_entry(entry, 'host source failed')
 end

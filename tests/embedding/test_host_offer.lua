@@ -111,6 +111,31 @@ do
   end, { host = host })
 end
 
+
+-- A provider-specific closed_error is the authoritative terminal error for
+-- result observers after the host reports closure.
+do
+  local host = SimulatedHost.new()
+  fibers.run(function(scope)
+    local translated = HostError.closed('socket', 'accept', { reason = 'translated closure' })
+    local source = HostOffer.new({
+      label = 'translated-closure-offer',
+      handle = readiness_handle(host, 'translated-closure-handle'),
+      mode = 'read',
+      pull = function()
+        return nil, HostError.closed('host', 'read', { reason = 'raw closure' })
+      end,
+      closed_error = function()
+        return translated
+      end,
+    })
+    fibers.perform(source:open_op(scope))
+    local value, err = fibers.perform(source:result_op())
+    assert_eq(value, nil)
+    assert_eq(err, translated, 'closed_error translation should reach result_op')
+  end, { host = host })
+end
+
 -- Retirement attempts every disposal, restores capacity and publishes terminal
 -- state even when disposal callbacks raise.  The same accumulated error reaches
 -- terminal observers, closed_op and structural Closure.

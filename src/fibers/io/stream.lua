@@ -14,6 +14,12 @@ local Contract = require('fibers.internal.contract')
 local HostStream = {}
 setmetatable(HostStream, { __index = Stream })
 
+local OPEN_OPTIONS = {
+  scope = true, label = true, read = true, write = true,
+  read_capacity = true, write_capacity = true,
+  read_chunk_size = true, write_chunk_size = true,
+}
+
 local function host_stream(label, opts)
   local read_flow = opts.read and Flow.new(opts.read_capacity):label(label .. ':rx') or nil
   local write_flow = opts.write and Flow.new(opts.write_capacity):label(label .. ':tx') or nil
@@ -51,16 +57,7 @@ local function attach_direction(stream, side, reactor, handle, registrations, ch
 end
 
 local function open_in_op(scope, handle, opts)
-  opts = Contract.options(opts, {
-    scope = true,
-    label = true,
-    read = true,
-    write = true,
-    read_capacity = true,
-    write_capacity = true,
-    read_chunk_size = true,
-    write_chunk_size = true,
-  }, 'Stream.open_op options', 3)
+  opts = Contract.options(opts, OPEN_OPTIONS, 'Stream.open_op options', 3)
   if not (scope and scope._fibers_scope) then
     error('Stream.open_op scope must be a Scope', 3)
   end
@@ -106,16 +103,7 @@ local function open_in_op(scope, handle, opts)
 end
 
 function HostStream.open_op(handle, opts)
-  opts = Contract.options(opts, {
-    scope = true,
-    label = true,
-    read = true,
-    write = true,
-    read_capacity = true,
-    write_capacity = true,
-    read_chunk_size = true,
-    write_chunk_size = true,
-  }, 'Stream.open_op options', 2)
+  opts = Contract.options(opts, OPEN_OPTIONS, 'Stream.open_op options', 2)
   local scope = opts.scope or (Runtime.current_scope and Runtime.current_scope())
   if not scope then
     error('Stream.open_op requires opts.scope or a current Scope', 2)
