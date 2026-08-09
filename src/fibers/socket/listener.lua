@@ -6,6 +6,7 @@
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
+local Address = require('fibers.net.address')
 local IOError = require('fibers.io.error')
 local HostHold = require('fibers.io.internal.host_hold')
 local IO = require('fibers.io.facility')
@@ -93,15 +94,15 @@ end
 
 local function host_handle(listener)
   local state = listener._lifecycle.state._location.value
-  return state and state.handle or nil
+  return state.handle
 end
 
 local function accept_to_scope_op(listener, target_scope)
-  local accepted = listener._offers:result_op():wrap(function(offer, source_err)
+  return listener._offers:result_op():wrap(function(offer, source_err)
     if not offer then return nil, source_err end
-    local rt = Runtime.current()
-    local connection, err = Connection.from_host_hold(
-      rt,
+    local address = local_address_now(listener)
+    return Connection.from_host_hold(
+      Runtime.current(),
       target_scope,
       listener._accepted_hold,
       offer.key,
@@ -109,15 +110,12 @@ local function accept_to_scope_op(listener, target_scope)
       Connection.options(listener._options, {
         label = Label.describe(listener, listener._fibers_id) .. ':connection',
         action = 'open_accepted_stream',
-        address = local_address_now(listener),
-        local_address = local_address_now(listener),
+        address = address,
+        local_address = address,
         peer_address = offer.peer,
       })
     )
-    return connection, err
   end)
-
-  return accepted
 end
 
 function Listener:accept_op(target)
@@ -134,7 +132,7 @@ end
 
 function Listener:close_op(reason)
   reason = reason or 'listener closed'
-  return self._lifecycle:request_stop_op(reason):wrap(function(first, state)
+  return self._lifecycle:request_stop_op(reason):wrap(function(_, state)
     if self._offers then
       local requested, request_err = perform(self._offers:close_op(reason))
       if not requested then return nil, request_err end
@@ -164,7 +162,7 @@ local function retire_listener(listener, rt, source_state)
   local reason = source_state.reason or 'listener offer source stopped'
   local err = source_state.kind == 'failed' and source_state.error or nil
   local fatal = err ~= nil and not IOError.is(err)
-  local first, state = IO.masked_perform(rt, listener._lifecycle:request_stop_op(reason, err, fatal))
+  local _, state = IO.masked_perform(rt, listener._lifecycle:request_stop_op(reason, err, fatal))
   local close_error
   if state.handle and not listener._handle_closed then
     listener._handle_closed = true
@@ -203,7 +201,6 @@ local function accepted_offers(listener, opts)
       return { key = key, handle = handle, peer = peer }
     end,
     dispose = function(offer, reason)
-      if type(offer) ~= 'table' then return end
       local discarded, discard_err = listener._accepted_hold:discard(
         offer.key,
         offer.handle,
@@ -224,6 +221,7 @@ local function accepted_offers(listener, opts)
 end
 
 function Module.listen_op(address, opts)
+  address = Address.validate(address, 'socket.listen_op')
   opts = validate_listen_options(opts)
   local scope = IO.current_scope(opts, 'socket.listen_op')
   next_listener = next_listener + 1
@@ -272,12 +270,17 @@ function Module.listen_op(address, opts)
     listener._offers = accepted_offers(listener, opts)
     local opened, open_err = perform(listener._offers:open_op(private_scope))
     if not opened then
-      retire_listener(listener, Runtime.current(), {
-        kind = 'failed',
-        reason = 'listener offer source failed to open',
-        error = open_err,
-      })
-      return nil, open_err
+      local cleanup = {}
+      IOError.capture_cleanup(cleanup, 'socket', 'listener_start_cleanup', { address = address },
+        retire_listener, listener, Runtime.current(), {
+          kind = 'failed',
+          reason = 'listener offer source failed to open',
+          error = open_err,
+        })
+      return nil, IOError.with_cleanup(
+        open_err, 'socket', 'listen',
+        'listener start and cleanup both failed', cleanup, { address = address }
+      )
     end
     return listener
   end)

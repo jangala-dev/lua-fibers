@@ -151,4 +151,29 @@ do
   end, { host = host })
 end
 
+
+-- A resolver may expose only the family-oriented interface; it must not be
+-- silently ignored in favour of a host fallback.
+do
+  local calls = 0
+  local family_resolver = {
+    resolve_family = function(_self, endpoint, family)
+      calls = calls + 1
+      if family == 'inet4' then
+        return { socket.ipv4_address('192.0.2.44', endpoint.port) }
+      end
+      return {}
+    end,
+  }
+  fibers.run(function()
+    local query = socket.resolve_name('family-only.test', 9443, {
+      resolver = family_resolver,
+    })
+    local addresses = assert(query:result())
+    assert_eq(#addresses, 1)
+    assert_eq(addresses[1].kind, 'inet4')
+    assert_eq(calls, 2, 'family-only resolver should service both families')
+  end, { host = SimulatedHost.new({ resolver = false }) })
+end
+
 print('tests/io/test_resolver.lua: ok')

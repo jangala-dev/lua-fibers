@@ -8,10 +8,29 @@ local Common = require('fibers.socket.lifecycle')
 
 local Ready = StateMachine.Ready
 local copy = Common.copy
-local wait_for = Common.wait_for
 
 local Dial = {}
 Dial.__index = Dial
+
+local function enrich(current, payload)
+  local next_state = current
+  local function write()
+    if next_state == current then next_state = copy(current) end
+  end
+  if current.error == nil and payload.error ~= nil then
+    write()
+    next_state.error = payload.error
+  end
+  if not current.fatal and payload.fatal then
+    write()
+    next_state.fatal = true
+  end
+  if current.report == nil and payload.report ~= nil then
+    write()
+    next_state.report = payload.report
+  end
+  return next_state
+end
 
 local Connected = StateMachine.isolated_update('socket.dial.connected', function(current, payload)
   if current.kind ~= 'starting' then
@@ -32,23 +51,15 @@ local Failed = StateMachine.isolated_update('socket.dial.failed', function(curre
     return Ready.same(false, current)
   end
   if current.kind == 'closing' then
-    local next_state = copy(current)
-    if next_state.error == nil then
-      next_state.error = payload.error
-    end
-    if payload.fatal == true then
-      next_state.fatal = true
-    end
-    if payload.report ~= nil and next_state.report == nil then
-      next_state.report = payload.report
-    end
-    return Ready.write(next_state, false, next_state)
+    local next_state = enrich(current, payload)
+    if next_state ~= current then return Ready.write(next_state, false, next_state) end
+    return Ready.same(false, current)
   end
   local next_state = {
     kind = 'failed',
     address = current.address,
     error = payload.error,
-    fatal = payload.fatal == true,
+    fatal = payload.fatal,
     connection = current.connection,
     source_scope = current.source_scope,
     report = payload.report or current.report,
@@ -75,7 +86,7 @@ local RequestClose = StateMachine.isolated_update('socket.dial.request_close', f
       address = current.address,
       reason = payload.reason,
       error = payload.error,
-      fatal = payload.fatal == true,
+      fatal = payload.fatal,
       connection = current.connection,
       source_scope = current.source_scope,
       report = payload.report or current.report,
@@ -83,30 +94,8 @@ local RequestClose = StateMachine.isolated_update('socket.dial.request_close', f
     return Ready.write(next_state, true, next_state)
   end
   if current.kind == 'closing' then
-    local next_state = current
-    local needs_write = false
-    if payload.error ~= nil and current.error == nil then
-      next_state = copy(current)
-      next_state.error = payload.error
-      needs_write = true
-    end
-    if payload.fatal == true and current.fatal ~= true then
-      if next_state == current then
-        next_state = copy(current)
-      end
-      next_state.fatal = true
-      needs_write = true
-    end
-    if payload.report ~= nil and current.report == nil then
-      if next_state == current then
-        next_state = copy(current)
-      end
-      next_state.report = payload.report
-      needs_write = true
-    end
-    if needs_write then
-      return Ready.write(next_state, false, next_state)
-    end
+    local next_state = enrich(current, payload)
+    if next_state ~= current then return Ready.write(next_state, false, next_state) end
   end
   return Ready.same(false, current)
 end)
@@ -120,7 +109,7 @@ local Closed = StateMachine.isolated_update('socket.dial.closed', function(curre
     address = current.address,
     reason = payload.reason or current.reason,
     error = payload.error or current.error,
-    fatal = payload.fatal == true or current.fatal == true,
+    fatal = payload.fatal or current.fatal or false,
     report = payload.report or current.report,
   }
   return Ready.write(next_state, true, next_state)
@@ -156,7 +145,7 @@ end
 
 function Dial:take_op()
   local lifecycle = self
-  return wait_for(self.state, function(state)
+  return self.state:select_op(function(state)
     if state.kind == 'starting' then
       return nil, true
     end
@@ -168,7 +157,7 @@ function Dial:take_op()
 end
 
 function Dial:failure_op()
-  return wait_for(self.state, function(state)
+  return self.state:select_op(function(state)
     if state.kind == 'starting' then
       return nil, true
     end
@@ -213,7 +202,7 @@ function Dial:closed_op(reason, err, fatal, report)
 end
 
 function Dial:driver_release_op()
-  return wait_for(self.state, function(state)
+  return self.state:select_op(function(state)
     if state.kind == 'connected' or state.kind == 'starting' then
       return nil, true
     end
@@ -222,7 +211,7 @@ function Dial:driver_release_op()
 end
 
 function Dial:report_op()
-  return wait_for(self.state, function(state)
+  return self.state:select_op(function(state)
     if state.report ~= nil then
       return Op.always(state.report)
     end
@@ -234,7 +223,7 @@ function Dial:report_op()
 end
 
 function Dial:terminal_op()
-  return wait_for(self.state, function(state)
+  return self.state:select_op(function(state)
     if state.kind == 'failed' or state.kind == 'taken' or state.kind == 'closed' then
       return Op.always(state)
     end

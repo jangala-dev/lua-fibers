@@ -16,6 +16,10 @@ local socket = require('fibers.socket')
 local SimulatedHost = require('tests.support.simulated_host')
 local HostError = require('fibers.io.error')
 local Handle = require('fibers.io.handle')
+local HostHold = require('fibers.io.internal.host_hold')
+local Connection = require('fibers.socket.connection')
+local Runtime = require('fibers.runtime')
+local Protected = require('fibers.protected')
 
 local function assert_eq(actual, expected, message)
   if actual ~= expected then
@@ -229,6 +233,209 @@ do
   end, { host = host })
   assert_truthy(result.ok, result:tostring())
   IOAudit.assert_clean(result.runtime, { label = 'half-close' })
+end
+
+
+-- A host address accessor is part of the adapter contract. If it raises during
+-- Listener activation, the held handle is discarded and the lifecycle is made
+-- terminal before the structured protocol error escapes.
+do
+  local closed = 0
+  local host = SimulatedHost.new({ sockets = true })
+  local create_listener = host.create_listener
+  host.create_listener = function(self, address, opts)
+    local handle, err = create_listener(self, address, opts)
+    if not handle then return nil, err end
+    local close = handle._close
+    handle._close = function(self_handle, reason)
+      closed = closed + 1
+      return close(self_handle, reason)
+    end
+    handle.local_address = function()
+      error('injected local_address defect')
+    end
+    return handle
+  end
+
+  local result = fibers.try_run(function()
+    local ok, err = Protected.pcall(function()
+      return socket.listen_ipv4('127.0.0.1', 0, { label = 'bad-local-address-listener' })
+    end)
+    assert_eq(ok, false)
+    assert_truthy(HostError.is(err, 'protocol'), 'address accessor defect should be a protocol error')
+    assert_truthy(tostring(err):match('injected local_address defect'))
+  end, { host = host })
+
+  assert_eq(result.ok, false, 'fatal address accessor defect should remain visible to Scope Closure')
+  assert_truthy(tostring(result):match('injected local_address defect'))
+  assert_eq(closed, 1, 'failed activation must close its held handle exactly once')
+  IOAudit.assert_clean(result.runtime, { label = 'listener address accessor failure' })
+end
+
+-- Once a held connected handle has become a Stream, address discovery must not
+-- be able to strand that Stream in the target Scope. The hold is released first;
+-- an accessor defect aborts the new Stream and returns a structured error.
+do
+  local result = fibers.try_run(function(scope)
+    local hold = HostHold.new()
+    assert(fibers.perform(scope:admit_op(hold)))
+    local closed = 0
+    local handle = Handle.new({
+      label = 'bad-connected-address-handle',
+      read = function() return nil, HostError.would_block('socket', 'read') end,
+      write = function(_self, bytes) return #bytes end,
+      close = function()
+        closed = closed + 1
+        return true
+      end,
+    })
+    function handle:local_address()
+      error('injected connected local_address defect')
+    end
+    function handle:peer_address()
+      return socket.ipv4_address('192.0.2.2', 80)
+    end
+    assert(hold:hold('socket', handle, function(value, reason) return value:close(reason) end))
+
+    local connection, err = Connection.from_host_hold(
+      Runtime.current(),
+      scope,
+      hold,
+      'socket',
+      handle,
+      { action = 'open_connection', address = socket.ipv4_address('192.0.2.1', 80) }
+    )
+    assert_eq(connection, nil)
+    assert_truthy(HostError.is(err, 'protocol'))
+    assert_truthy(tostring(err):match('injected connected local_address defect'))
+    assert_truthy(hold:is_empty(), 'converted handle must no longer remain in HostHold')
+    assert_eq(closed, 1, 'failed address discovery must abort the admitted Stream')
+  end, { host = SimulatedHost.new() })
+
+  assert_truthy(result.ok, result:tostring())
+  IOAudit.assert_clean(result.runtime, { label = 'connected address accessor failure' })
+end
+
+-- If address discovery fails after Stream admission and aborting that Stream
+-- also fails, the returned setup error retains both failures.
+do
+  local returned_err
+  local result = fibers.try_run(function(scope)
+    local hold = HostHold.new()
+    assert(fibers.perform(scope:admit_op(hold)))
+    local handle = Handle.new({
+      label = 'bad-connected-address-cleanup-handle',
+      read = function() return nil, HostError.would_block('socket', 'read') end,
+      write = function(_self, bytes) return #bytes end,
+      close = function()
+        return nil, HostError.system('socket', 'close', 'injected Stream close failure', 'EIO')
+      end,
+    })
+    function handle:local_address() error('injected connected address defect') end
+    function handle:peer_address() return socket.ipv4_address('192.0.2.2', 80) end
+    assert(hold:hold('socket', handle, function(value, reason) return value:close(reason) end))
+
+    local connection
+    connection, returned_err = Connection.from_host_hold(
+      Runtime.current(), scope, hold, 'socket', handle,
+      { action = 'open_connection', address = socket.ipv4_address('192.0.2.1', 80) }
+    )
+    assert_eq(connection, nil)
+    assert_truthy(HostError.is(returned_err, 'protocol'))
+    assert_truthy(returned_err.errors and #returned_err.errors == 2,
+      'setup error should retain address and Stream-abort failures')
+  end, { host = SimulatedHost.new() })
+
+  assert_eq(result.ok, false, 'failed Stream close should remain a Scope Closure failure')
+  assert_truthy(returned_err and tostring(returned_err):match('cleanup both failed'))
+end
+
+
+-- If a failed direct connection attempt also fails to close its held handle,
+-- the cleanup defect must be retained in the Dial result rather than discarded.
+do
+  local close_calls = 0
+  local host = SimulatedHost.new({
+    sockets = true,
+    dial_factory = function(self)
+      local handle = Handle.new({
+        label = 'failing-connect-cleanup-handle',
+        host = self,
+        close = function()
+          close_calls = close_calls + 1
+          return nil, HostError.system('socket', 'close', 'injected dial close failure', 'EIO')
+        end,
+      })
+      function handle:finish_connect()
+        return nil, nil, HostError.system(
+          'socket', 'connect_finish', 'injected connect failure', 'ECONNREFUSED'
+        )
+      end
+      handle:mark_writable()
+      return handle
+    end,
+  })
+
+  fibers.run(function()
+    local dial = socket.dial(socket.ipv4_address('127.0.0.1', 9), {
+      label = 'failing-connect-cleanup-dial',
+    })
+    local connection, err = dial:result()
+    assert_eq(connection, nil)
+    assert_truthy(HostError.is(err, 'protocol'), 'connect plus cleanup failure should aggregate')
+    assert_truthy(tostring(err):match('cleanup was incomplete'))
+    assert_truthy(err.errors and #err.errors >= 2, 'aggregate should retain primary and cleanup errors')
+    assert_eq(close_calls, 1)
+  end, { host = host })
+end
+
+
+-- finish_connect completes the already-held handle. Returning a replacement
+-- handle would break continuous handle coverage, so the adapter contract rejects
+-- it and closes both the replacement and original handles.
+do
+  local original_closes, replacement_closes = 0, 0
+  local host = SimulatedHost.new({
+    sockets = true,
+    dial_factory = function(self)
+      local replacement = Handle.new({
+        label = 'replacement-connected-handle',
+        host = self,
+        close = function()
+          replacement_closes = replacement_closes + 1
+          return true
+        end,
+      })
+      local original = Handle.new({
+        label = 'original-pending-handle',
+        host = self,
+        close = function()
+          original_closes = original_closes + 1
+          return true
+        end,
+      })
+      function original:finish_connect()
+        return replacement, socket.ipv4_address('127.0.0.1', 9)
+      end
+      original:mark_writable()
+      return original
+    end,
+  })
+
+  local result = fibers.try_run(function()
+    local dial = socket.dial(socket.ipv4_address('127.0.0.1', 9), {
+      label = 'replacement-handle-dial',
+    })
+    local connection, err = dial:result()
+    assert_eq(connection, nil)
+    assert_truthy(HostError.is(err, 'protocol'))
+    assert_truthy(tostring(err):match('original host handle'))
+  end, { host = host })
+
+  assert_truthy(result.ok, result:tostring())
+  assert_eq(replacement_closes, 1, 'replacement handle must be closed immediately')
+  assert_eq(original_closes, 1, 'original held handle must close with failed attempt')
+  IOAudit.assert_clean(result.runtime, { label = 'finish_connect replacement handle' })
 end
 
 print('tests/io/test_socket_failure_matrix.lua: ok')

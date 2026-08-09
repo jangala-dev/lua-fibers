@@ -25,17 +25,20 @@ local next_query = 0
 
 local SOCKET_RESOLVE_OPTIONS = { scope = true, resolver = true, dns = true }
 
+local function resolver_object(value)
+  return type(value) == 'table'
+    and (type(value.resolve) == 'function' or type(value.resolve_family) == 'function')
+end
+
 local function validate_resolve_options(value)
   local opts = DNSResolver.validate_options(value, SOCKET_RESOLVE_OPTIONS, 'socket.resolve_op options')
-  if opts.resolver ~= nil and type(opts.resolver) ~= 'table' then
-    error('socket.resolve_op opts.resolver must be a resolver object', 3)
+  if opts.resolver ~= nil and not resolver_object(opts.resolver) then
+    error('socket.resolve_op opts.resolver must provide resolve() or resolve_family()', 3)
   end
   if opts.dns ~= nil and type(opts.dns) ~= 'boolean' and type(opts.dns) ~= 'table' then
     error('socket.resolve_op opts.dns must be a boolean, resolver object or DNS option table', 3)
   end
-  if type(opts.dns) == 'table'
-      and type(opts.dns.resolve) ~= 'function'
-      and type(opts.dns.resolve_family) ~= 'function' then
+  if type(opts.dns) == 'table' and not resolver_object(opts.dns) then
     DNSResolver.validate_constructor_options(opts.dns)
   end
   return opts
@@ -55,9 +58,9 @@ end
 
 local FAMILIES = { 'inet6', 'inet4' }
 
-local function family_completion(query, family, level)
+local function family_completion(query, family)
   if family ~= 'inet4' and family ~= 'inet6' then
-    error('resolver family must be inet4 or inet6', level or 3)
+    error('resolver family must be inet4 or inet6', 3)
   end
   return query._family_completions[family]
 end
@@ -80,14 +83,6 @@ function Query:family_finished_op(family)
 end
 
 
-local function terminal_values(state)
-  if state.kind ~= 'succeeded' then
-    return nil
-  end
-  local values = state.values
-  return values and values[1] or state.value
-end
-
 function Query:_families_op()
   return Op.named_each({
     inet6 = self:family_finished_op('inet6'),
@@ -96,22 +91,22 @@ function Query:_families_op()
 end
 
 local function combine_family_states(query, families)
-  local addresses, errors, preferred_error = {}, {}, nil
+  local addresses, first_error, preferred_error = {}, nil, nil
   for i = 1, #FAMILIES do
     local family = FAMILIES[i]
     local state = families[family]
-    local values = terminal_values(state)
+    local values = state.kind == 'succeeded' and state.values[1] or nil
     if values then
       for j = 1, #values do
         addresses[#addresses + 1] = values[j]
       end
     elseif state.kind == 'failed' then
-      errors[#errors + 1] = state.error
+      first_error = first_error or state.error
       if not preferred_error and (type(state.error) ~= 'table' or state.error.code ~= 'EAI_FAMILY') then
         preferred_error = state.error
       end
     elseif state.kind == 'cancelled' then
-      errors[#errors + 1] = state.reason
+      first_error = first_error or state.reason
       preferred_error = preferred_error or state.reason
     end
   end
@@ -119,7 +114,7 @@ local function combine_family_states(query, families)
     return addresses
   end
   return nil,
-    preferred_error or errors[1] or IOError.system(
+    preferred_error or first_error or IOError.system(
       'resolver',
       'resolve',
       'name resolved to no usable addresses',
@@ -158,7 +153,7 @@ function Query:close_op(reason)
   local cancel = self._driver and self._driver:request_cancel_op(reason) or Op.always(true)
   local err = IOError.closed('resolver', 'resolve', {
     reason = reason,
-    _endpoint = self._endpoint,
+    endpoint = self._endpoint,
   })
   local publishes = {}
   for i = 1, #FAMILIES do
@@ -239,12 +234,8 @@ local function dns_options(opts, host)
 end
 
 local function select_backend(rt, host, opts)
-  if type(opts.resolver) == 'table' and type(opts.resolver.resolve) == 'function' then
-    return opts.resolver
-  end
-  if type(opts.dns) == 'table' and type(opts.dns.resolve) == 'function' then
-    return opts.dns
-  end
+  if resolver_object(opts.resolver) then return opts.resolver end
+  if resolver_object(opts.dns) then return opts.dns end
   if opts.dns == true or type(opts.dns) == 'table' or opts.nameservers then
     return DNSResolver.new(dns_options(opts, host))
   end
@@ -273,7 +264,7 @@ end
 
 local function family_error(query, family, message, code)
   return IOError.system('resolver', 'resolve', message, code or 'EAI_NODATA', nil, {
-    _endpoint = query._endpoint,
+    endpoint = query._endpoint,
     family = family,
   })
 end
@@ -298,7 +289,7 @@ end
 local function publish_cancelled(rt, query, reason)
   local err = IOError.closed('resolver', 'resolve', {
     reason = reason,
-    _endpoint = query._endpoint,
+    endpoint = query._endpoint,
   })
   for i = 1, #FAMILIES do
     local completion = query._family_completions[FAMILIES[i]]
@@ -317,22 +308,12 @@ local function requested_families(endpoint, opts)
 end
 
 local function mark_unrequested(rt, query, requested)
-  local selected = {}
-  for i = 1, #requested do
-    selected[requested[i]] = true
-  end
-  for i = 1, #FAMILIES do
-    local family = FAMILIES[i]
-    if not selected[family] then
-      publish_family(
-        rt,
-        query,
-        family,
-        nil,
-        family_error(query, family, 'address family was not requested', 'EAI_FAMILY')
-      )
-    end
-  end
+  if #requested == 2 then return end
+  local family = requested[1] == 'inet4' and 'inet6' or 'inet4'
+  publish_family(
+    rt, query, family, nil,
+    family_error(query, family, 'address family was not requested', 'EAI_FAMILY')
+  )
 end
 
 local function split_families(addresses)
@@ -351,27 +332,21 @@ local function drive_combined(query, opts, rt, resolve_fn)
   mark_unrequested(rt, query, requested)
   local addresses, err = resolve_fn()
   if not addresses then
-    for i = 1, #requested do
-      publish_family(rt, query, requested[i], nil, err)
-    end
-    return nil, err
+    for i = 1, #requested do publish_family(rt, query, requested[i], nil, err) end
+    return
   end
+
   local normalised, normalise_err = normalise_addresses(addresses, query._endpoint)
   if not normalised then
-    for i = 1, #requested do
-      publish_family(rt, query, requested[i], nil, normalise_err)
-    end
-    return nil, normalise_err
+    for i = 1, #requested do publish_family(rt, query, requested[i], nil, normalise_err) end
+    return
   end
+
   local by_family = split_families(normalised)
-  local selected = {}
   for i = 1, #requested do
     local family = requested[i]
     if #by_family[family] > 0 then
       publish_family(rt, query, family, by_family[family])
-      for j = 1, #by_family[family] do
-        selected[#selected + 1] = by_family[family][j]
-      end
     else
       publish_family(
         rt,
@@ -382,10 +357,6 @@ local function drive_combined(query, opts, rt, resolve_fn)
       )
     end
   end
-  if #selected == 0 then
-    return nil, family_error(query, requested[1], 'name resolved to no usable addresses', 'EAI_NONAME')
-  end
-  return selected
 end
 
 local function drive_dns(query, backend, opts, rt)
@@ -396,10 +367,10 @@ local function drive_dns(query, backend, opts, rt)
   for i = 1, #requested do
     local family = requested[i]
     scope:spawn(function()
-      local ok, addresses, err = Protected.pcall(function()
-        local backend_opts = DNSResolver.is(backend) and DNSResolver.project_query_options(opts) or opts
-        return backend:resolve_family(query._endpoint, family, backend_opts)
-      end)
+      local backend_opts = DNSResolver.is(backend) and DNSResolver.project_query_options(opts) or opts
+      local ok, addresses, err = Protected.pcall(
+        backend.resolve_family, backend, query._endpoint, family, backend_opts
+      )
       if not ok then
         if Runtime.is_cancelled(addresses) then
           error(addresses, 0)
@@ -415,48 +386,45 @@ local function drive_dns(query, backend, opts, rt)
         addresses, err = normalised, normalise_err
       end
       publish_family(rt, query, family, addresses, err)
-      return addresses, err
+      return
     end):label(Label.describe(query, query._fibers_id) .. ':' .. family)
   end
 
   -- The two family completions are authoritative. The driver waits on their
   -- derived product rather than manually aggregating child-task results.
-  return perform(query:result_op())
+  perform(query:result_op())
 end
 
 local function drive(query, opts)
   local rt = Runtime.current()
-  local host = opts.host or (rt and rt.host)
-  local backend = select_backend(rt, host, opts)
-
-  local ok, addresses, err = Protected.pcall(function()
+  local ok, thrown = Protected.pcall(function()
+    local host = opts.host or rt.host
+    local backend = select_backend(rt, host, opts)
     if backend and type(backend.resolve_family) == 'function' then
-      return drive_dns(query, backend, opts, rt)
-    end
-    if backend then
-      return drive_combined(query, opts, rt, function()
+      drive_dns(query, backend, opts, rt)
+    elseif backend then
+      drive_combined(query, opts, rt, function()
         return backend:resolve(query._endpoint, opts)
       end)
+    else
+      drive_combined(query, opts, rt, function()
+        return host_resolve(host, query._endpoint, opts)
+      end)
     end
-    return drive_combined(query, opts, rt, function()
-      return host_resolve(host, query._endpoint, opts)
-    end)
   end)
-  if not ok then
-    if Runtime.is_cancelled(addresses) then
-      error(addresses, 0)
-    end
-    local failure = IO.protocol_error('resolver', 'resolve', addresses, { endpoint = query._endpoint })
-    for i = 1, #FAMILIES do
-      local completion = query._family_completions[FAMILIES[i]]
-      if completion:_is_pending() then
-        IO.masked_perform(rt, completion:publish_failure_op(failure))
-      end
-    end
-    error(failure, 0)
+  if ok then return end
+  if Runtime.is_cancelled(thrown) then
+    publish_cancelled(rt, query, thrown.reason or 'resolver query cancelled')
+    return
   end
-  -- The combined Query result is a projection of the two authoritative family
-  -- completions. There is no third completion to publish or keep consistent.
+  local failure = IO.protocol_error('resolver', 'resolve', thrown, { endpoint = query._endpoint })
+  for i = 1, #FAMILIES do
+    local completion = query._family_completions[FAMILIES[i]]
+    if completion:_is_pending() then
+      IO.masked_perform(rt, completion:publish_failure_op(failure))
+    end
+  end
+  error(failure, 0)
 end
 
 function Module.resolve_op(endpoint, opts)
@@ -489,15 +457,7 @@ function Module.resolve_op(endpoint, opts)
       query._family_completions.inet6.state,
       query._family_completions.inet4.state,
     },
-    run = function()
-      local ok, err = Protected.pcall(drive, query, opts)
-      if ok then return end
-      if Runtime.is_cancelled(err) then
-        publish_cancelled(Runtime.current(), query, err.reason or 'resolver query cancelled')
-        return
-      end
-      error(err, 0)
-    end,
+    run = function() return drive(query, opts) end,
   })
 end
 

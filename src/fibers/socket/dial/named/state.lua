@@ -23,7 +23,7 @@ local FAMILIES = { 'inet6', 'inet4' }
 
 local function copy_list(values)
   local out = {}
-  for i = 1, #(values or {}) do
+  for i = 1, #values do
     out[i] = values[i]
   end
   return out
@@ -31,7 +31,7 @@ end
 
 local function copy_map(values)
   local out = {}
-  for key, value in pairs(values or {}) do
+  for key, value in pairs(values) do
     out[key] = value
   end
   return out
@@ -52,7 +52,7 @@ end
 
 local function copy_family(info)
   return {
-    done = info.done == true,
+    done = info.done,
     addresses = copy_list(info.addresses),
     error = info.error,
     finished_at = info.finished_at,
@@ -87,7 +87,7 @@ local function copy_state(current)
     next_launch_at = current.next_launch_at,
     resolution_deadline = current.resolution_deadline,
     winner = current.winner,
-    candidates_dropped = current.candidates_dropped or 0,
+    candidates_dropped = current.candidates_dropped,
   }
   for i = 1, #current.attempts do
     out.attempts[i] = copy_attempt(current.attempts[i])
@@ -97,7 +97,7 @@ end
 
 local function active_attempt_count(state)
   local count = 0
-  for i = 1, #(state.attempts or {}) do
+  for i = 1, #state.attempts do
     if state.attempts[i].status == 'active' then
       count = count + 1
     end
@@ -106,17 +106,10 @@ local function active_attempt_count(state)
 end
 
 local function completion_addresses(state)
-  if type(state) ~= 'table' or state.kind ~= 'succeeded' then
-    return nil
-  end
-  local values = state.values
-  return values and values[1] or state.value
+  return state.kind == 'succeeded' and state.values[1] or nil
 end
 
 local function completion_error(state)
-  if type(state) ~= 'table' then
-    return nil
-  end
   if state.kind == 'failed' then
     return state.error
   end
@@ -128,7 +121,7 @@ end
 
 local function validate_addresses(values, family, endpoint)
   local out, seen = {}, {}
-  for i = 1, #(values or {}) do
+  for i = 1, #values do
     local ok, address_or_err = Protected.pcall(Address.validate, values[i], 'Happy Eyeballs candidate')
     if not ok then
       return nil,
@@ -163,15 +156,6 @@ local function validate_addresses(values, family, endpoint)
 end
 
 local function validate_global_order(values, expected, endpoint)
-  if type(values) ~= 'table' then
-    return nil,
-      IOError.protocol(
-        'socket',
-        'dial_order',
-        'order_destinations must return an address list',
-        { endpoint = endpoint }
-      )
-  end
   local available, out, used = {}, {}, {}
   for i = 1, #expected do
     available[Address.key(expected[i])] = expected[i]
@@ -287,8 +271,7 @@ local function order_candidates(race, current, family, values)
   end
   local other = family == 'inet6' and 'inet4' or 'inet6'
   local reserve_other = not current.families[other].done and #current.families[other].addresses == 0
-  local limit = race.maximum_candidates - (reserve_other and 1 or 0)
-  limit = math.max(0, limit)
+  local limit = race.opts.maximum_candidates - (reserve_other and 1 or 0)
   for i = 1, #incoming do
     local address = incoming[i]
     local key = Address.key(address)
@@ -305,14 +288,14 @@ local function order_candidates(race, current, family, values)
   end
 
   local ordered
-  if race.destination_ordering == 'application' or race.destination_ordering == 'host' then
-    local result, callback_err = call_ordering(race.order_destinations, merged, race.endpoint, race.opts)
+  if race.opts.destination_ordering == 'application' or race.opts.destination_ordering == 'host' then
+    local result, callback_err = call_ordering(race.opts.order_destinations, merged, race.endpoint, race.opts)
     if not result then
       return nil,
         nil,
         IOError.protocol('socket', 'dial_order', tostring(callback_err), {
           endpoint = race.endpoint,
-          ordering = race.destination_ordering,
+          ordering = race.opts.destination_ordering,
         })
     end
     ordered, err = validate_global_order(result, merged, race.endpoint)
@@ -324,14 +307,14 @@ local function order_candidates(race, current, family, values)
     -- The coordinator no longer guesses that IPv6 should globally precede IPv4.
     ordered = copy_list(merged)
   end
-  return interleave(ordered, race.first_family_count), added, nil, dropped
+  return interleave(ordered, race.opts.first_family_count), added, nil, dropped
 end
 
 local function attempt_options(race, spec, scope)
   local address, index = spec.address, spec.index
   local opts = race.opts
   local out = Connection.options(opts)
-  out.host = opts.host or out.host
+  out.host = opts.host
   out.scope = scope
   out.label = table.concat({
     opts.label or 'dial',
@@ -374,8 +357,6 @@ end
 
 
 local default_clock = Clock.default()
-local unpack_ = table.unpack or unpack
-
 local function now_op()
   return default_clock:now_op()
 end
@@ -402,15 +383,15 @@ local PublishFamily = StateMachine.update('socket.dial.named.publish_family', fu
     info.addresses[#info.addresses + 1] = address
     next_state.seen[Address.key(address)] = true
   end
-  next_state.unattempted = copy_list(ordered)
-  next_state.candidates_dropped = next_state.candidates_dropped + (dropped or 0)
+  next_state.unattempted = ordered
+  next_state.candidates_dropped = next_state.candidates_dropped + dropped
   if
     payload.family == 'inet4'
     and #added > 0
     and not next_state.families.inet6.done
     and #next_state.attempts == 0
   then
-    next_state.resolution_deadline = payload.finished_at + payload.race.resolution_delay
+    next_state.resolution_deadline = payload.finished_at + payload.race.opts.resolution_delay
   end
   return Ready.write(next_state, {
     kind = 'resolution',
@@ -483,8 +464,6 @@ local AdmitAttempt = StateMachine.update('socket.dial.named.admit_attempt', func
     status = 'active',
     started_at = payload.spec.started_at,
     deadline = payload.spec.deadline,
-    completed_at = nil,
-    error = nil,
   }
   next_state.attempts[#next_state.attempts + 1] = entry
   next_state.next_attempt = payload.spec.index + 1
@@ -539,35 +518,23 @@ local FinishAttempt = StateMachine.update('socket.dial.named.finish_attempt', fu
   })
 end)
 
-function State.new(endpoint, opts, host, started_at)
+function State.new(endpoint, opts, started_at)
   local state = {
     families = {
-      inet6 = { done = false, addresses = {}, error = nil, finished_at = nil },
-      inet4 = { done = false, addresses = {}, error = nil, finished_at = nil },
+      inet6 = { done = false, addresses = {} },
+      inet4 = { done = false, addresses = {} },
     },
     unattempted = {},
     seen = {},
     attempts = {},
     next_attempt = 1,
-    next_launch_at = nil,
-    resolution_deadline = nil,
-    winner = nil,
     candidates_dropped = 0,
   }
   local label = opts.label or 'named-dial'
   return setmetatable({
     endpoint = endpoint,
     opts = opts,
-    host = host,
     started_at = started_at,
-    resolution_delay = opts.resolution_delay,
-    attempt_delay = opts.attempt_delay,
-    first_family_count = opts.first_family_count,
-    maximum_candidates = opts.maximum_candidates,
-    maximum_active_attempts = opts.maximum_active_attempts,
-    attempt_timeout = opts.attempt_timeout,
-    destination_ordering = opts.destination_ordering,
-    order_destinations = opts.order_destinations,
     attempt_slots = Counter.bounded(opts.maximum_active_attempts):label(label .. ':attempt-slots'),
     state = StateMachine.new(state):label(label .. ':state'),
   }, State)
@@ -645,7 +612,7 @@ function State:_action_at_op(scope, now)
     :transition_op(NextAction, {
       now = now,
       deadline = self.opts.overall_deadline,
-      attempt_timeout = self.attempt_timeout,
+      attempt_timeout = self.opts.attempt_timeout,
     })
     :and_then(Op.guard(function(action)
       if action.kind ~= 'launch' then
@@ -657,7 +624,7 @@ function State:_action_at_op(scope, now)
           return self.state:transition_op(AdmitAttempt, {
             spec = action,
             dial = dial,
-            attempt_delay = self.attempt_delay,
+            attempt_delay = self.opts.attempt_delay,
           })
         end))
       end))
@@ -760,7 +727,7 @@ function State:terminal_error(state)
     message = 'all Happy Eyeballs connection attempts failed',
     endpoint = race.endpoint,
     attempts = attempts,
-    candidates_dropped = state.candidates_dropped or 0,
+    candidates_dropped = state.candidates_dropped,
     unattempted_count = #state.unattempted,
     active_attempts = active_attempt_count(state),
   })
@@ -773,11 +740,11 @@ function State:deadline_error(state)
     endpoint = race.endpoint,
     deadline = race.opts.overall_deadline,
     attempts = attempt_records(state),
-    candidates_dropped = state.candidates_dropped or 0,
+    candidates_dropped = state.candidates_dropped,
     unattempted_count = #state.unattempted,
     active_attempts = active_attempt_count(state),
     blocked_by_attempt_capacity = #state.unattempted > 0
-      and active_attempt_count(state) >= race.maximum_active_attempts,
+      and active_attempt_count(state) >= race.opts.maximum_active_attempts,
   })
 end
 
@@ -803,6 +770,7 @@ function State:report(status, err, completed_at, state)
   local race = self
   state = state or race.state._location.value
   assert(type(completed_at) == 'number', 'Happy Eyeballs report requires a committed completion time')
+  local active = active_attempt_count(state)
   local report = {
     kind = 'dial',
     strategy = 'happy_eyeballs_v2',
@@ -811,19 +779,19 @@ function State:report(status, err, completed_at, state)
     started_at = race.started_at,
     completed_at = completed_at,
     duration = completed_at - race.started_at,
-    resolution_delay = race.resolution_delay,
-    attempt_delay = race.attempt_delay,
-    first_family_count = race.first_family_count,
-    maximum_candidates = race.maximum_candidates,
-    maximum_active_attempts = race.maximum_active_attempts,
-    attempt_timeout = race.attempt_timeout,
-    capacity_limited = race.maximum_active_attempts < race.maximum_candidates,
+    resolution_delay = race.opts.resolution_delay,
+    attempt_delay = race.opts.attempt_delay,
+    first_family_count = race.opts.first_family_count,
+    maximum_candidates = race.opts.maximum_candidates,
+    maximum_active_attempts = race.opts.maximum_active_attempts,
+    attempt_timeout = race.opts.attempt_timeout,
+    capacity_limited = race.opts.maximum_active_attempts < race.opts.maximum_candidates,
     unattempted_count = #state.unattempted,
-    active_attempts = active_attempt_count(state),
+    active_attempts = active,
     blocked_by_attempt_capacity = #state.unattempted > 0
-      and active_attempt_count(state) >= race.maximum_active_attempts,
-    destination_ordering = race.destination_ordering,
-    candidates_dropped = state.candidates_dropped or 0,
+      and active >= race.opts.maximum_active_attempts,
+    destination_ordering = race.opts.destination_ordering,
+    candidates_dropped = state.candidates_dropped,
     error = error_summary(err),
     attempts = {},
     families = {},

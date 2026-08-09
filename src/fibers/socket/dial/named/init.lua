@@ -17,14 +17,14 @@ local RFC_MINIMUM_ATTEMPT_DELAY = 0.010
 local DEFAULT_CONNECT_TIMEOUT = 30.0
 local DEFAULT_MAXIMUM_CANDIDATES = 64
 
-local function finite_nonnegative(value, fallback, name, level)
-  if value == nil then return fallback end
-  return Contract.non_negative_number(value, name, level or 3)
+local function optional_timeout(value, label, level)
+  if value ~= false then return Contract.non_negative_number(value, label, level) end
+  return value
 end
 
-local function positive_integer(value, fallback, name, level)
-  if value == nil then return fallback end
-  return Contract.positive_integer(value, name, level or 3)
+local function stable_ordering(value, label, level)
+  if value ~= 'stable' then error(label .. " must be 'stable' when supplied", level or 3) end
+  return value
 end
 
 local Named = { name = 'happy_eyeballs_v2' }
@@ -32,9 +32,16 @@ local Named = { name = 'happy_eyeballs_v2' }
 local NAMED_OPTIONS = {
   scope = true, host = true, label = Contract.non_empty_string,
   nodelay = Contract.boolean, local_address = true, local_address_inet4 = true,
-  local_address_inet6 = true, resolution_delay = true, attempt_delay = true,
-  first_family_count = true, maximum_candidates = true, maximum_active_attempts = true,
-  attempt_timeout = true, timeout = true, deadline = true, destination_ordering = true,
+  local_address_inet6 = true,
+  resolution_delay = Contract.non_negative_number,
+  attempt_delay = Contract.non_negative_number,
+  first_family_count = Contract.positive_integer,
+  maximum_candidates = Contract.positive_integer,
+  maximum_active_attempts = Contract.positive_integer,
+  attempt_timeout = optional_timeout,
+  timeout = optional_timeout,
+  deadline = Contract.non_negative_number,
+  destination_ordering = stable_ordering,
   order_destinations = Contract.func, resolver = true, resolver_options = Contract.table,
   dns = Contract.boolean, nameservers = Contract.table,
   capacity = Contract.positive_integer, read_capacity = Contract.positive_integer,
@@ -42,38 +49,17 @@ local NAMED_OPTIONS = {
   read_chunk_size = Contract.positive_integer, write_chunk_size = Contract.positive_integer,
 }
 
-local function validate_named_contract(opts)
-  return Contract.record(opts, NAMED_OPTIONS, 'socket.dial_op options', 3)
-end
-
 function Named.normalise_options(opts, endpoint)
-  opts = validate_named_contract(opts)
+  opts = Contract.record(opts, NAMED_OPTIONS, 'socket.dial_op options', 3)
   local out = IO.copy_table(opts)
   out.endpoint = endpoint
-  out.resolution_delay = finite_nonnegative(out.resolution_delay, 0.050, 'resolution_delay')
-  out.attempt_delay = finite_nonnegative(out.attempt_delay, 0.250, 'attempt_delay')
+  out.resolution_delay = out.resolution_delay or 0.050
+  out.attempt_delay = out.attempt_delay or 0.250
   if out.attempt_delay < RFC_MINIMUM_ATTEMPT_DELAY then
     error('attempt_delay must be at least 0.010 seconds', 3)
   end
-  out.first_family_count = positive_integer(out.first_family_count, 1, 'first_family_count')
-  out.maximum_candidates =
-    positive_integer(out.maximum_candidates, DEFAULT_MAXIMUM_CANDIDATES, 'maximum_candidates')
-  if out.maximum_active_attempts ~= nil then
-    out.maximum_active_attempts =
-      positive_integer(out.maximum_active_attempts, nil, 'maximum_active_attempts')
-  end
-  if out.attempt_timeout ~= nil and out.attempt_timeout ~= false then
-    out.attempt_timeout = finite_nonnegative(out.attempt_timeout, nil, 'attempt_timeout')
-  end
-  if out.timeout ~= nil and out.timeout ~= false then
-    out.timeout = finite_nonnegative(out.timeout, nil, 'timeout')
-  end
-  if out.deadline ~= nil then
-    out.deadline = finite_nonnegative(out.deadline, nil, 'deadline')
-  end
-  if out.destination_ordering ~= nil and out.destination_ordering ~= 'stable' then
-    error("destination_ordering must be 'stable' when supplied", 3)
-  end
+  out.first_family_count = out.first_family_count or 1
+  out.maximum_candidates = out.maximum_candidates or DEFAULT_MAXIMUM_CANDIDATES
   return out
 end
 
@@ -132,7 +118,7 @@ local function resolver_options(dial, driver_scope, opts, host)
   out.scope = driver_scope
   out.host = host
   out.resolver = opts.resolver or out.resolver
-  out.dns = opts.dns ~= nil and opts.dns or out.dns
+  if opts.dns ~= nil then out.dns = opts.dns end
   out.nameservers = opts.nameservers or out.nameservers
   out.label = Label.describe(dial, dial._fibers_id) .. ':resolve'
   out.family = 'unspec'
@@ -146,7 +132,7 @@ function Named.run(dial, driver_scope, opts)
   local strategy_opts = start_options(opts, started_at, host)
   dial.started_at = started_at
 
-  local strategy = State.new(dial._endpoint, strategy_opts, host, started_at)
+  local strategy = State.new(dial._endpoint, strategy_opts, started_at)
   local query = perform(
     Resolver.resolve_op(dial._endpoint, resolver_options(dial, driver_scope, strategy_opts, host))
   )

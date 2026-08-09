@@ -29,7 +29,6 @@ local DatagramLifecycle = Lifecycle.define({
   start_action = 'open',
   start_failed_reason = 'datagram start failed',
   closed_reason = 'datagram socket closed',
-  available = true,
 })
 
 local Ready = StateMachine.Ready
@@ -43,8 +42,6 @@ local Allocate = StateMachine.isolated_update('socket.datagram.allocate_send', f
   local next_state = {
     next_seq = current.next_seq + 1,
     completed_seq = current.completed_seq,
-    terminal_error = nil,
-    failure_seq = nil,
   }
   return Ready.write(next_state, next_state.next_seq)
 end)
@@ -98,10 +95,8 @@ function SendState.new(capacity)
     state = StateMachine.new({
       next_seq = 0,
       completed_seq = 0,
-      terminal_error = nil,
-      failure_seq = nil,
     }),
-    queue = FIFO.new(capacity or 64),
+    queue = FIFO.new(capacity),
   }, SendState))
   Label.child(self.state, self, 'state')
   Label.child(self.queue, self, 'queue')
@@ -159,6 +154,16 @@ local function terminal_error(state, action)
     })
 end
 
+local function close_socket_handle(socket, rt, state, reason)
+  if not state.handle then return end
+  local ok, close_err = IO.safe_close('datagram', state.handle, reason, {
+    domain = 'datagram',
+    action = 'close',
+    address = state.address,
+  })
+  if not ok then IO.masked_perform(rt, socket._lifecycle:record_close_error_op(close_err)) end
+end
+
 local function datagram_closure(socket)
   return Closure.request_then_wait(function(_ctx, _record, reason)
     return socket:close_op(reason or 'scope closure')
@@ -186,7 +191,7 @@ end
 
 local function host_handle(socket)
   local state = socket._lifecycle.state._location.value
-  return state and state.handle or nil
+  return state.handle
 end
 
 function Datagram:send_to_op(data, address)
@@ -225,30 +230,21 @@ function Datagram:flush_op()
   return self._sends:flush_op()
 end
 
-local RECEIVE_OPTIONS = { max_size = true }
+local RECEIVE_OPTIONS = { max_size = Contract.non_negative_integer }
 
 local function limit_packet(packet, opts)
   local max_size = opts.max_size
-  if max_size ~= nil then
-    if #packet.data > max_size then
-      local copy = {}
-      for key, value in pairs(packet) do
-        copy[key] = value
-      end
-      copy.original_size = copy.original_size or #packet.data
-      copy.data = string.sub(packet.data, 1, max_size)
-      copy.truncated = true
-      return copy
-    end
-  end
-  return packet
+  if max_size == nil or #packet.data <= max_size then return packet end
+  local copy = {}
+  for key, value in pairs(packet) do copy[key] = value end
+  copy.original_size = copy.original_size or #packet.data
+  copy.data = string.sub(packet.data, 1, max_size)
+  copy.truncated = true
+  return copy
 end
 
 function Datagram:receive_from_op(opts)
   opts = Contract.options(opts, RECEIVE_OPTIONS, 'DatagramSocket:receive_from_op options', 2)
-  if opts.max_size ~= nil then
-    Contract.non_negative_integer(opts.max_size, 'DatagramSocket:receive_from_op max_size', 2)
-  end
   local received = self._packets:next_op():map(function(packet)
     return limit_packet(packet, opts)
   end)
@@ -258,33 +254,17 @@ function Datagram:receive_from_op(opts)
 end
 
 function Datagram:close_op(reason)
-  local socket = self
   reason = reason or 'datagram socket closed'
-  local cancel = socket._driver and socket._driver:request_cancel_op(reason) or Op.always(true)
-  return socket._lifecycle
+  return self._lifecycle
     :request_stop_op(reason)
     :and_then(Op.guard(function(first, state)
-      if first and socket._driver then
-        return cancel:map(function()
-          return first, state
-        end)
+      if first and self._driver then
+        return self._driver:request_cancel_op(reason):map(function() return first, state end)
       end
       return Op.always(first, state)
     end))
     :wrap(function(first, state)
-      if first and state.handle then
-        local ok, close_err = IO.safe_close('datagram', state.handle, reason, {
-          domain = 'datagram',
-          action = 'close',
-          address = state.address,
-        })
-        if not ok then
-          local rt = Runtime.current()
-          if rt then
-            IO.masked_perform(rt, socket._lifecycle:record_close_error_op(close_err))
-          end
-        end
-      end
+      if first then close_socket_handle(self, Runtime.current(), state, reason) end
       return true
     end)
 end
@@ -311,16 +291,7 @@ local function close_from_driver(socket, rt, reason, err, fatal)
       address = local_address_now(socket),
     })
   IO.masked_perform(rt, socket._sends:close_op(pending_error))
-  if first and state.handle then
-    local ok, close_err = IO.safe_close('datagram', state.handle, reason, {
-      domain = 'datagram',
-      action = 'close',
-      address = state.address,
-    })
-    if not ok then
-      IO.masked_perform(rt, socket._lifecycle:record_close_error_op(close_err))
-    end
-  end
+  if first then close_socket_handle(socket, rt, state, reason) end
   IO.masked_perform(rt, socket._lifecycle:stopped_op(reason, err, fatal))
 end
 
@@ -338,8 +309,9 @@ local function normalise_packet(socket, packet)
     packet.peer = peer
   end
   packet.local_address = packet.local_address or local_address_now(socket)
-  packet.truncated = packet.truncated == true
   packet.flags = packet.flags or {}
+  packet.truncated = packet.truncated == true or packet.flags.truncated == true
+  packet.original_size = packet.original_size or packet.flags.original_size
   return packet
 end
 
@@ -453,11 +425,11 @@ end
 local UDP_OPTIONS = {
   scope = true,
   host = true,
-  label = true,
-  receive_capacity = true,
-  send_capacity = true,
-  max_datagram_size = true,
-  reuse_address = true,
+  label = Contract.non_empty_string,
+  receive_capacity = Contract.positive_integer,
+  send_capacity = Contract.positive_integer,
+  max_datagram_size = Contract.non_negative_integer,
+  reuse_address = Contract.boolean,
 }
 
 function Module.udp_op(address, opts)
@@ -468,11 +440,7 @@ function Module.udp_op(address, opts)
   end
   local receive_capacity = opts.receive_capacity or 64
   local send_capacity = opts.send_capacity or 64
-  local max_datagram_size = opts._max_datagram_size or 65535
-  Contract.positive_integer(receive_capacity, 'socket.udp_op receive_capacity', 2)
-  Contract.positive_integer(send_capacity, 'socket.udp_op send_capacity', 2)
-  Contract.non_negative_integer(max_datagram_size, 'socket.udp_op max_datagram_size', 2)
-  Contract.optional_boolean(opts.reuse_address, 'socket.udp_op reuse_address', 2)
+  local max_datagram_size = opts.max_datagram_size or 65535
   local scope = IO.current_scope(opts, 'socket.udp_op')
   next_datagram = next_datagram + 1
   local id = 'datagram-' .. tostring(next_datagram)

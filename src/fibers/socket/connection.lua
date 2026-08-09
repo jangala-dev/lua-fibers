@@ -6,7 +6,6 @@ local Protected = require('fibers.protected')
 
 local Connection = {}
 
-
 local OPTION_KEYS = {
   'nodelay',
   'capacity',
@@ -20,13 +19,13 @@ local OPTION_KEYS = {
 function Connection.options(source, fields)
   local out = IO.copy_table(fields)
   for _, key in ipairs(OPTION_KEYS) do
-    if source and source[key] ~= nil then out[key] = source[key] end
+    if source[key] ~= nil then out[key] = source[key] end
   end
   return out
 end
 
 local function require_address_accessor(handle, name)
-  local accessor = handle and handle[name]
+  local accessor = handle[name]
   if type(accessor) ~= 'function' then
     error('connected host handle must provide ' .. name .. '()', 3)
   end
@@ -34,34 +33,43 @@ local function require_address_accessor(handle, name)
 end
 
 
-function Connection.open(rt, scope, handle, opts)
-  return IO.open_handle_stream(rt, scope, handle, {
-    label = opts.label,
-    read = true,
-    write = true,
-    capacity = opts.capacity,
-    read_capacity = opts.read_capacity,
-    write_capacity = opts.write_capacity,
-    chunk_size = opts.chunk_size,
-    read_chunk_size = opts.read_chunk_size,
-    write_chunk_size = opts.write_chunk_size,
-  })
+local function abort_with_cleanup(rt, connection, primary, action, address)
+  local cleanup = {}
+  IOError.capture_cleanup(cleanup, 'socket', 'connection_abort', { address = address }, function()
+    return IO.masked_perform(rt, connection:abort_op(primary))
+  end)
+  return IOError.with_cleanup(
+    primary, 'socket', action,
+    'connection setup and Stream cleanup both failed', cleanup,
+    { address = address }
+  )
 end
 
 function Connection.from_host_hold(rt, scope, host_hold, key, handle, opts)
+  local action = opts.action or 'open_connection'
   local connection
   local opened, open_err = Protected.pcall(function()
-    connection = Connection.open(rt, scope, handle, opts)
+    connection = IO.open_handle_stream(rt, scope, handle, {
+      label = opts.label,
+      read = true,
+      write = true,
+      capacity = opts.capacity,
+      read_capacity = opts.read_capacity,
+      write_capacity = opts.write_capacity,
+      chunk_size = opts.chunk_size,
+      read_chunk_size = opts.read_chunk_size,
+      write_chunk_size = opts.write_chunk_size,
+    })
   end)
   if not opened then
     local failure = IOError.normalise(open_err, {
       domain = 'socket',
-      action = opts.action or 'open_connection',
+      action = action,
       address = opts.address,
     })
     local discarded, discard_err = host_hold:discard(key, handle, failure)
     if not discarded then
-      return nil, IOError.protocol('socket', opts.action or 'open_connection', 'connection opening and handle disposal failed', {
+      return nil, IOError.protocol('socket', action, 'connection opening and handle disposal failed', {
         address = opts.address,
         errors = { failure, discard_err },
         cause = failure,
@@ -70,22 +78,30 @@ function Connection.from_host_hold(rt, scope, host_hold, key, handle, opts)
     return nil, failure
   end
 
-  local local_address = opts.local_address
-  if local_address == nil then
-    local_address = require_address_accessor(handle, 'local_address')
-  end
-  local peer_address = opts.peer_address
-  if peer_address == nil then
-    peer_address = require_address_accessor(handle, 'peer_address')
-  end
-  if peer_address == nil then peer_address = opts.default_peer end
-  connection:_set_addresses(local_address, peer_address)
-
   local released, release_err = host_hold:release(key, handle)
   if not released then
-    IO.masked_perform(rt, connection:abort_op(release_err))
-    return nil, release_err
+    return nil, abort_with_cleanup(rt, connection, release_err, action, opts.address)
   end
+
+  local addressed, local_address, peer_address = Protected.pcall(function()
+    local local_value = opts.local_address
+    if local_value == nil then
+      local_value = require_address_accessor(handle, 'local_address')
+    end
+    local peer_value = opts.peer_address
+    if peer_value == nil then
+      peer_value = require_address_accessor(handle, 'peer_address')
+    end
+    return local_value, peer_value or opts.default_peer
+  end)
+  if not addressed then
+    local failure = IO.protocol_error('socket', action, local_address, {
+      address = opts.address,
+    })
+    return nil, abort_with_cleanup(rt, connection, failure, action, opts.address)
+  end
+
+  connection:_set_addresses(local_address, peer_address)
   return connection
 end
 

@@ -10,7 +10,7 @@ local Lifecycle = {}
 
 local function copy(value)
   local out = {}
-  for key, item in pairs(value or {}) do
+  for key, item in pairs(value) do
     out[key] = item
   end
   return out
@@ -18,20 +18,12 @@ end
 
 Lifecycle.copy = copy
 
-function Lifecycle.wait_for(machine, select)
-  return machine:select_op(select)
-end
-
-local function transition(name, step)
-  return StateMachine.isolated_update(name, step)
-end
-
 function Lifecycle.define(spec)
   local prefix = assert(spec.prefix, 'socket lifecycle prefix required')
   local Type = {}
   Type.__index = Type
 
-  local Activate = transition(prefix .. '.activate', function(current, payload)
+  local Activate = StateMachine.isolated_update(prefix .. '.activate', function(current, payload)
     if current.kind ~= 'starting' then
       return Ready.same(false, current)
     end
@@ -43,22 +35,21 @@ function Lifecycle.define(spec)
     return Ready.write(next_state, true, next_state)
   end)
 
-  local StartFailed = transition(prefix .. '.start_failed', function(current, payload)
+  local StartFailed = StateMachine.isolated_update(prefix .. '.start_failed', function(current, payload)
     if current.kind ~= 'starting' then
       return Ready.same(false, current)
     end
     local next_state = {
       kind = 'stopped',
       address = current.address,
-      handle = nil,
       reason = spec.start_failed_reason,
       error = payload.error,
-      fatal = payload.fatal == true,
+      fatal = payload.fatal,
     }
     return Ready.write(next_state, true, next_state)
   end)
 
-  local RequestStop = transition(prefix .. '.request_stop', function(current, payload)
+  local RequestStop = StateMachine.isolated_update(prefix .. '.request_stop', function(current, payload)
     if current.kind == 'starting' or current.kind == 'active' then
       local next_state = {
         kind = 'stopping',
@@ -66,8 +57,7 @@ function Lifecycle.define(spec)
         handle = current.handle,
         reason = payload.reason,
         error = payload.error,
-        fatal = payload.fatal == true,
-        close_error = nil,
+        fatal = payload.fatal,
       }
       return Ready.write(next_state, true, next_state)
     end
@@ -79,7 +69,7 @@ function Lifecycle.define(spec)
         next_state.error = payload.error
         changed = true
       end
-      if payload.fatal == true and current.fatal ~= true then
+      if payload.fatal and not current.fatal then
         if next_state == current then
           next_state = copy(current)
         end
@@ -93,7 +83,7 @@ function Lifecycle.define(spec)
     return Ready.same(false, current)
   end)
 
-  local RecordCloseError = transition(prefix .. '.record_close_error', function(current, payload)
+  local RecordCloseError = StateMachine.isolated_update(prefix .. '.record_close_error', function(current, payload)
     if current.kind ~= 'stopping' and current.kind ~= 'stopped' then
       return Ready.same(false, current)
     end
@@ -106,7 +96,7 @@ function Lifecycle.define(spec)
     return Ready.write(next_state, true, next_state)
   end)
 
-  local Stopped = transition(prefix .. '.stopped', function(current, payload)
+  local Stopped = StateMachine.isolated_update(prefix .. '.stopped', function(current, payload)
     if current.kind == 'stopped' then
       return Ready.same(false, current)
     end
@@ -116,7 +106,7 @@ function Lifecycle.define(spec)
     if payload.error ~= nil and next_state.error == nil then
       next_state.error = payload.error
     end
-    if payload.fatal == true then
+    if payload.fatal then
       next_state.fatal = true
     end
     return Ready.write(next_state, true, next_state)
@@ -127,7 +117,6 @@ function Lifecycle.define(spec)
       state = StateMachine.new({
         kind = 'starting',
         address = address,
-        handle = nil,
       }),
     }, Type))
     Label.child(value.state, value, 'lifecycle')
@@ -184,15 +173,13 @@ function Lifecycle.define(spec)
     end)
   end
 
-  if spec.available then
-    function Type:available_op()
-      return self.state:select_op(function(state)
-        if state.kind == 'starting' or state.kind == 'active' then
-          return Op.always(true)
-        end
-        return nil, false
-      end)
-    end
+  function Type:available_op()
+    return self.state:select_op(function(state)
+      if state.kind == 'starting' or state.kind == 'active' then
+        return Op.always(true)
+      end
+      return nil, false
+    end)
   end
 
   function Type:unavailable_op()

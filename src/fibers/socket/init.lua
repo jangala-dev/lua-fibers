@@ -67,9 +67,7 @@ local Socket = {
   address_with_port = Address.with_port,
 }
 
-function Socket.dns_resolver(opts)
-  return DNSResolver.new(opts)
-end
+Socket.dns_resolver = DNSResolver.new
 
 
 local function numeric(address, label)
@@ -79,9 +77,7 @@ local function numeric(address, label)
   return address
 end
 
-function Socket.listen_op(address, opts)
-  return Listener.listen_op(Address.validate(address, 'socket.listen_op'), opts)
-end
+Socket.listen_op = Listener.listen_op
 
 function Socket.listen_ipv4_op(host, port, opts)
   return Listener.listen_op(Address.ipv4(host, port), opts)
@@ -102,9 +98,7 @@ function Socket.listen_unix_op(path, opts)
   return Listener.listen_op(Address.unix(path), opts)
 end
 
-function Socket.udp_op(address, opts)
-  return Datagram.udp_op(Address.validate(address, 'socket.udp_op'), opts)
-end
+Socket.udp_op = Datagram.udp_op
 
 function Socket.udp_ipv4_op(host, port, opts)
   return Datagram.udp_op(Address.ipv4(host, port), opts)
@@ -114,9 +108,7 @@ function Socket.udp_ipv6_op(host, port, opts)
   return Datagram.udp_op(Address.ipv6(host, port, address_options(opts)), operation_options(opts))
 end
 
-function Socket.resolve_op(endpoint, opts)
-  return Resolver.resolve_op(Address.validate(endpoint, 'socket.resolve_op'), opts)
-end
+Socket.resolve_op = Resolver.resolve_op
 
 function Socket.resolve_name_op(host, service, opts)
   return Socket.resolve_op(Address.name(host, service, name_address_options(opts)), resolve_operation_options(opts))
@@ -124,9 +116,7 @@ end
 
 -- One Dial constructor dispatches by endpoint kind. Name endpoints select the
 -- Happy Eyeballs strategy; numeric and Unix endpoints use the direct strategy.
-function Socket.dial_op(endpoint, opts)
-  return Dial.dial_op(Address.validate(endpoint, 'socket.dial_op'), opts)
-end
+Socket.dial_op = Dial.dial_op
 
 Direct.install_static(Socket, {
   'listen',
@@ -143,7 +133,7 @@ Direct.install_static(Socket, {
 })
 
 function Socket.connect(endpoint, opts)
-  local target = opts and opts.scope
+  local target = type(opts) == 'table' and opts.scope or nil
   return perform(Socket.dial_op(endpoint, opts)):connect(target)
 end
 

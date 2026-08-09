@@ -102,4 +102,23 @@ fibers.run(function(scope)
   waiter:await()
 end, { host = close_host })
 
+
+-- max_datagram_size controls the host receive bound, independently of the
+-- per-call receive_from max_size projection.
+do
+  local bounded_host = SimulatedHost.new({ datagrams = true })
+  fibers.run(function()
+    local sender = assert(socket.udp_ipv4('127.0.0.1', 0))
+    local receiver = assert(socket.udp_ipv4('127.0.0.1', 0, { max_datagram_size = 3 }))
+    assert(sender:send_to('abcdef', receiver:local_address()))
+    assert(sender:flush())
+    local packet = assert(receiver:receive_from())
+    assert_eq(packet.data, 'abc', 'socket max_datagram_size should bound host receive')
+    assert_eq(packet.original_size, 6)
+    assert(packet.truncated == true)
+    sender:close('max datagram size complete')
+    receiver:close('max datagram size complete')
+  end, { host = bounded_host })
+end
+
 print('tests/io/test_datagram.lua: ok')

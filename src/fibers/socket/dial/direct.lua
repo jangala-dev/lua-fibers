@@ -35,6 +35,12 @@ local function close_socket(value, reason)
   return IO.close_value('socket', value, reason)
 end
 
+local function retain_cleanup(primary, dial, cleanup_action, action, message, fn, ...)
+  local errors = {}
+  IOError.capture_cleanup(errors, 'socket', cleanup_action, { address = dial._endpoint }, fn, ...)
+  return IOError.with_cleanup(primary, 'socket', action, message, errors, { address = dial._endpoint })
+end
+
 local function timeout_error(dial, deadline)
   return IOError.system('socket', 'connect', 'connection attempt deadline expired', 'ETIMEDOUT', nil, {
     address = dial._endpoint,
@@ -53,10 +59,31 @@ local function connect_completion(dial, handle, driver_scope)
     mode = 'write',
     pull = function(registered_handle)
       if type(registered_handle.finish_connect) ~= 'function' then
-        return { handle = registered_handle, peer = dial._endpoint }
+        return { peer = dial._endpoint }
       end
       local connected, peer, err = registered_handle:finish_connect()
-      if connected then return { handle = connected, peer = peer } end
+      if connected then
+        if connected ~= registered_handle then
+          local failure = IOError.protocol(
+            'socket',
+            'connect_finish',
+            'finish_connect must return the original host handle',
+            { address = dial._endpoint }
+          )
+          return nil,
+            retain_cleanup(
+              failure,
+              dial,
+              'replacement_handle_close',
+              'connect_finish',
+              'finish_connect returned a replacement handle and cleanup was incomplete',
+              close_socket,
+              connected,
+              failure
+            )
+        end
+        return { peer = peer }
+      end
       if IOError.is_would_block(err) then return nil, err end
       return nil,
         IOError.normalise(err, {
@@ -87,7 +114,8 @@ local function await_connect(dial, source, deadline)
   return selected, err
 end
 
-local function report(dial, status, started_at, completed_at, err)
+function Direct.terminal_report(dial, status, err, completed_at)
+  local started_at = dial.started_at or completed_at
   return {
     kind = 'dial',
     strategy = 'direct',
@@ -111,7 +139,7 @@ function Direct.run(dial, driver_scope, opts)
   local start_dial = host and host.start_dial
   if type(start_dial) ~= 'function' then
     local err = IOError.unsupported('host', 'dial', { address = dial._endpoint })
-    return nil, err, report(dial, 'failed', started_at, rt:now(), err)
+    return nil, err, Direct.terminal_report(dial, 'failed', err, rt:now())
   end
 
   local handle, err = start_dial(host, dial._endpoint, {
@@ -125,24 +153,30 @@ function Direct.run(dial, driver_scope, opts)
       action = 'dial',
       address = dial._endpoint,
     })
-    return nil, err, report(dial, 'failed', started_at, rt:now(), err)
+    return nil, err, Direct.terminal_report(dial, 'failed', err, rt:now())
   end
 
   local held, hold_err = host_hold:hold('socket', handle, close_socket)
   if not held then error(hold_err, 0) end
-  if type(handle.bind_runtime) == 'function' then handle:bind_runtime(rt) end
-
   local completion = connect_completion(dial, handle, driver_scope)
   local completed, finish_err = await_connect(dial, completion, opts.connect_deadline)
   if not completed then
-    host_hold:close(finish_err)
-    return nil, finish_err, report(dial, 'failed', started_at, rt:now(), finish_err)
+    finish_err = retain_cleanup(
+      finish_err,
+      dial,
+      'dial_handle_close',
+      'dial',
+      'connection attempt failed and host-handle cleanup was incomplete',
+      host_hold.close,
+      host_hold,
+      finish_err
+    )
+    return nil, finish_err, Direct.terminal_report(dial, 'failed', finish_err, rt:now())
   end
-  local peer
-  handle, peer = completed.handle, completed.peer
+  local peer = completed.peer
 
   local connection_opts = Connection.options(opts, {
-    label = require('fibers.internal.label').describe(dial, dial._fibers_id or 'dial') .. ':connection',
+    label = Label.describe(dial, dial._fibers_id) .. ':connection',
     action = 'open_connection',
     address = dial._endpoint,
     peer_address = peer,
@@ -153,7 +187,7 @@ function Direct.run(dial, driver_scope, opts)
     Connection.from_host_hold(rt, driver_scope, host_hold, 'socket', handle, connection_opts)
   if not connection then error(connection_err, 0) end
 
-  return connection, nil, report(dial, 'connected', started_at, rt:now())
+  return connection, nil, Direct.terminal_report(dial, 'connected', nil, rt:now())
 end
 
 return Direct

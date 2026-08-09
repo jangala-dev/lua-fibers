@@ -781,4 +781,41 @@ do
   IOAudit.assert_clean(result.runtime, { label = 'Happy Eyeballs per-attempt timeout' })
 end
 
+
+-- An explicit top-level dns=false overrides any inherited resolver_options DNS
+-- setting; named dialling must therefore use the host resolver path.
+do
+  local host = SimulatedHost.new({
+    sockets = true,
+    datagrams = true,
+    resolver_records = {
+      ['dns-disabled.test'] = { { kind = 'inet4', host = '127.0.0.1' } },
+    },
+  })
+  local resolve_calls = 0
+  local base_resolve = host.resolve
+  host.resolve = function(self, endpoint, options)
+    resolve_calls = resolve_calls + 1
+    return base_resolve(self, endpoint, options)
+  end
+
+  fibers.run(function()
+    local listener = assert(socket.listen_ipv4('127.0.0.1', 0))
+    local address = listener:local_address()
+    host.resolver_records['dns-disabled.test'][1].port = address.port
+
+    local dial = socket.dial(socket.name_endpoint('dns-disabled.test', address.port), {
+      dns = false,
+      resolver_options = { dns = true },
+      destination_ordering = 'stable',
+    })
+    local client = assert(dial:result())
+    local server = assert(listener:accept())
+    assert_eq(resolve_calls, 1, 'top-level dns=false must select host resolution')
+    client:close('dns override test complete')
+    server:close('dns override test complete')
+    listener:close('dns override test complete')
+  end, { host = host })
+end
+
 print('tests/io/test_happy_eyeballs.lua: ok')

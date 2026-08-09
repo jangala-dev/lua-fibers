@@ -85,6 +85,34 @@ local function unexpected_error(dial, err)
   return IO.protocol_error('socket', 'dial_driver', err, terminal_fields(dial)), true
 end
 
+local function publish_failure(dial, rt, err, fatal, report)
+  err = attach_report(err, report)
+  local state = dial._lifecycle.state._location.value
+  local op
+  if state.kind == 'closing' then
+    op = dial._lifecycle:closed_op(state.reason, err, fatal, report)
+  else
+    op = dial._lifecycle:publish_failure_op(err, fatal, report)
+  end
+  IO.masked_perform(rt, op)
+end
+
+local function publish_cancelled(dial, rt, cancellation)
+  local state = dial._lifecycle.state._location.value
+  local closed = cancelled_error(dial, cancellation)
+  local report = state.report
+    or dial._strategy.terminal_report(dial, 'cancelled', closed, rt:now())
+  IO.masked_perform(
+    rt,
+    dial._lifecycle:closed_op(
+      cancellation.reason or state.reason or 'dial cancelled',
+      attach_report(closed, report),
+      false,
+      report
+    )
+  )
+end
+
 local function driver(dial, driver_scope)
   local rt = Runtime.current()
   local ok, connection, err, report = Protected.pcall(dial._strategy.run, dial, driver_scope, dial._options)
@@ -92,39 +120,18 @@ local function driver(dial, driver_scope)
   if not ok then
     local thrown = connection
     if Runtime.is_cancelled(thrown) then
-      local closed = cancelled_error(dial, thrown)
-      local cancelled_report = dial._strategy.terminal_report
-        and dial._strategy.terminal_report(dial, 'cancelled', closed, rt:now())
-        or nil
-      IO.masked_perform(
-        rt,
-        dial._lifecycle:closed_op(thrown.reason or 'dial cancelled', attach_report(closed, cancelled_report), false, cancelled_report)
-      )
+      publish_cancelled(dial, rt, thrown)
       return
     end
 
     local failure, fatal = unexpected_error(dial, thrown)
-    local failure_report = dial._strategy.terminal_report
-      and dial._strategy.terminal_report(dial, 'failed', failure, rt:now())
-      or nil
-    failure = attach_report(failure, failure_report)
-    local state = dial._lifecycle.state._location.value
-    if state.kind == 'closing' then
-      IO.masked_perform(rt, dial._lifecycle:closed_op(state.reason, failure, fatal, failure_report))
-    else
-      IO.masked_perform(rt, dial._lifecycle:publish_failure_op(failure, fatal, failure_report))
-    end
+    local failure_report = dial._strategy.terminal_report(dial, 'failed', failure, rt:now())
+    publish_failure(dial, rt, failure, fatal, failure_report)
     return
   end
 
   if not connection then
-    err = attach_report(err, report)
-    local state = dial._lifecycle.state._location.value
-    if state.kind == 'closing' then
-      IO.masked_perform(rt, dial._lifecycle:closed_op(state.reason, err, false, report))
-    else
-      IO.masked_perform(rt, dial._lifecycle:publish_failure_op(err, false, report))
-    end
+    publish_failure(dial, rt, err, false, report)
     return
   end
 
@@ -147,20 +154,7 @@ local function driver(dial, driver_scope)
   local released, release_state = Protected.pcall(perform, dial._lifecycle:driver_release_op())
   if not released then
     if Runtime.is_cancelled(release_state) then
-      local state_now = dial._lifecycle.state._location.value
-      local closed = cancelled_error(dial, release_state)
-      local cancelled_report = state_now.report
-        or (dial._strategy.terminal_report
-          and dial._strategy.terminal_report(dial, 'cancelled', closed, rt:now()))
-      IO.masked_perform(
-        rt,
-        dial._lifecycle:closed_op(
-          release_state.reason or state_now.reason or 'dial cancelled',
-          attach_report(closed, cancelled_report),
-          false,
-          cancelled_report
-        )
-      )
+      publish_cancelled(dial, rt, release_state)
       return
     end
     error(release_state, 0)
@@ -213,10 +207,9 @@ end
 
 function Dial:close_op(reason)
   reason = reason or 'dial closed'
-  local cancel = self._driver and self._driver:request_cancel_op(reason) or Op.always(true)
   return self._lifecycle:request_close_op(reason):and_then(Op.guard(function(first)
     if first and self._driver then
-      return cancel:map(function() return true end)
+      return self._driver:request_cancel_op(reason):map(function() return true end)
     end
     return Op.always(true)
   end))
@@ -254,7 +247,6 @@ end
 
 
 local function new_op(endpoint, opts, strategy)
-  assert(type(opts) == 'table', 'dial strategy must produce an option table')
   local scope = IO.current_scope(opts, 'socket.dial_op')
   next_dial = next_dial + 1
   local id = 'dial-' .. tostring(next_dial)
