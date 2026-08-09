@@ -1,11 +1,10 @@
 -- Shared transactional lifecycle machine for listener-like socket resources.
 
-local Op = require('fibers.op')
 local StateMachine = require('fibers.resource.machine')
 local Label = require('fibers.internal.label')
 local IOError = require('fibers.io.error')
 
-local Ready = StateMachine.Ready
+local Ready, Wait = StateMachine.Ready, StateMachine.Wait
 local Lifecycle = {}
 
 local function copy(value)
@@ -70,15 +69,11 @@ function Lifecycle.define(spec)
         changed = true
       end
       if payload.fatal and not current.fatal then
-        if next_state == current then
-          next_state = copy(current)
-        end
+        if next_state == current then next_state = copy(current) end
         next_state.fatal = true
         changed = true
       end
-      if changed then
-        return Ready.write(next_state, false, next_state)
-      end
+      if changed then return Ready.write(next_state, false, next_state) end
     end
     return Ready.same(false, current)
   end)
@@ -103,26 +98,48 @@ function Lifecycle.define(spec)
     local next_state = copy(current)
     next_state.kind = 'stopped'
     next_state.reason = next_state.reason or payload.reason
-    if payload.error ~= nil and next_state.error == nil then
-      next_state.error = payload.error
-    end
-    if payload.fatal then
-      next_state.fatal = true
-    end
+    if payload.error ~= nil and next_state.error == nil then next_state.error = payload.error end
+    if payload.fatal then next_state.fatal = true end
     return Ready.write(next_state, true, next_state)
+  end)
+
+  local StartResult = StateMachine.isolated_query(prefix .. '.start_result', function(state)
+    if state.kind == 'starting' then return Wait end
+    if state.kind == 'active' then return Ready.same(state.handle) end
+    if state.error ~= nil then return Ready.same(nil, state.error) end
+    return Ready.same(nil, IOError.closed(spec.error_domain, spec.start_action, {
+      reason = state.reason or spec.closed_reason,
+      address = state.address,
+    }))
+  end)
+
+  local Address = StateMachine.isolated_query(prefix .. '.address', function(state)
+    if state.kind == 'starting' then return Wait end
+    return Ready.same(state.address)
+  end)
+
+  local Available = StateMachine.isolated_query(prefix .. '.available', function(state)
+    if state.kind == 'starting' or state.kind == 'active' then return Ready.same(true) end
+    return Wait
+  end)
+
+  local Unavailable = StateMachine.isolated_query(prefix .. '.unavailable', function(state)
+    if state.kind == 'stopping' or state.kind == 'stopped' then return Ready.same(state) end
+    return Wait
+  end)
+
+  local Terminal = StateMachine.isolated_query(prefix .. '.terminal', function(state)
+    if state.kind == 'stopped' then return Ready.same(state) end
+    return Wait
   end)
 
   function Type.new(address)
     local value = Label.attach(setmetatable({
-      state = StateMachine.new({
-        kind = 'starting',
-        address = address,
-      }),
+      state = StateMachine.new({ kind = 'starting', address = address }),
     }, Type))
     Label.child(value.state, value, 'lifecycle')
     return value
   end
-
 
   function Type:activate_op(handle, address)
     return self.state:transition_op(Activate, { handle = handle, address = address })
@@ -153,51 +170,23 @@ function Lifecycle.define(spec)
   end
 
   function Type:start_result_op()
-    return self.state:select_op(function(state)
-      if state.kind == 'starting' then
-        return nil, true
-      end
-      if state.kind == 'active' then
-        return Op.always(state.handle)
-      end
-      if state.error ~= nil then
-        return Op.always(nil, state.error)
-      end
-      return Op.always(
-        nil,
-        IOError.closed(spec.error_domain, spec.start_action, {
-          reason = state.reason or spec.closed_reason,
-          address = state.address,
-        })
-      )
-    end)
+    return self.state:transition_op(StartResult)
+  end
+
+  function Type:address_op()
+    return self.state:transition_op(Address)
   end
 
   function Type:available_op()
-    return self.state:select_op(function(state)
-      if state.kind == 'starting' or state.kind == 'active' then
-        return Op.always(true)
-      end
-      return nil, false
-    end)
+    return self.state:transition_op(Available)
   end
 
   function Type:unavailable_op()
-    return self.state:select_op(function(state)
-      if state.kind == 'stopping' or state.kind == 'stopped' then
-        return Op.always(state)
-      end
-      return nil, false
-    end)
+    return self.state:transition_op(Unavailable)
   end
 
   function Type:terminal_op()
-    return self.state:select_op(function(state)
-      if state.kind == 'stopped' then
-        return Op.always(state)
-      end
-      return nil, true
-    end)
+    return self.state:transition_op(Terminal)
   end
 
   return Type

@@ -53,8 +53,8 @@ local function aggregate_error(source, message, ...)
 end
 
 local function source_closure(source)
-  return Closure.request_then_wait(function(_ctx, _record, close)
-    return source:close_op(close.reason or 'offer source closed')
+  return Closure.request_then_wait(function(_ctx, _record, reason)
+    return source:close_op(reason or 'offer source closed')
   end, function()
     return source:closed_op()
   end, {

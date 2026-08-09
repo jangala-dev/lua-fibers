@@ -14,7 +14,6 @@ local Label = require('fibers.internal.label')
 local Contract = require('fibers.internal.contract')
 
 local File = {}
-local next_pipe = 0
 
 local PIPE_OPTIONS = {
   scope = true, host = true, label = true, capacity = true,
@@ -149,7 +148,6 @@ function File.pipe_op(opts)
   for _, key in ipairs({ 'chunk_size', 'read_chunk_size', 'write_chunk_size' }) do
     if opts[key] ~= nil then Contract.positive_integer(opts[key], 'file.pipe_op opts.' .. key, 2) end
   end
-  next_pipe = next_pipe + 1
   local label = opts.label
   local scope = IO.current_scope(opts, 'file.pipe_op')
   local start = {
@@ -166,16 +164,7 @@ function File.pipe_op(opts)
       if not rt then
         error('file.pipe_op committed without a current runtime', 2)
       end
-      return start_pipe(rt, start, {
-        host = opts.host,
-        label = label,
-        capacity = opts.capacity,
-        read_capacity = opts.read_capacity,
-        write_capacity = opts.write_capacity,
-        chunk_size = opts.chunk_size,
-        read_chunk_size = opts.read_chunk_size,
-        write_chunk_size = opts.write_chunk_size,
-      })
+      return start_pipe(rt, start, opts)
     end)
 end
 

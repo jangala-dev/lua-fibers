@@ -15,7 +15,6 @@ local Lifecycle = require('fibers.socket.lifecycle')
 local HostOffer = require('fibers.io.offer')
 local Closure = require('fibers.closure')
 local FIFO = require('fibers.resource.fifo')
-local Cell = require('fibers.resource.cell')
 local StateMachine = require('fibers.resource.machine')
 local Protected = require('fibers.protected')
 local perform = require('fibers.perform')
@@ -31,7 +30,7 @@ local DatagramLifecycle = Lifecycle.define({
   closed_reason = 'datagram socket closed',
 })
 
-local Ready = StateMachine.Ready
+local Ready, Wait = StateMachine.Ready, StateMachine.Wait
 local SendState = {}
 SendState.__index = SendState
 
@@ -79,16 +78,13 @@ local Fail = StateMachine.isolated_update('socket.datagram.fail_send', function(
   return Ready.write(next_state, true, next_state)
 end)
 
-local function wait_flush(state, target)
-  return Cell.select_op(state, function(value)
-    if value.completed_seq >= target then
-      return Op.always(true)
-    end
-    if value.terminal_error ~= nil and (value.failure_seq or 0) <= target then
-      return Op.always(nil, value.terminal_error)
-    end
-  end)
-end
+local Flush = StateMachine.isolated_query('socket.datagram.flush_send', function(value, target)
+  if value.completed_seq >= target then return Ready.same(true) end
+  if value.terminal_error ~= nil and (value.failure_seq or 0) <= target then
+    return Ready.same(nil, value.terminal_error)
+  end
+  return Wait
+end)
 
 function SendState.new(capacity)
   local self = Label.attach(setmetatable({
@@ -133,7 +129,7 @@ end
 function SendState:flush_op()
   local state = self.state
   return state:read_op():and_then(Op.guard(function(value)
-    return wait_flush(state, value.next_seq)
+    return state:transition_op(Flush, value.next_seq)
   end))
 end
 
@@ -182,10 +178,7 @@ local function local_address_now(socket)
 end
 
 function Datagram:local_address_op()
-  return self._lifecycle.state:select_op(function(state)
-    if state.kind == 'starting' then return nil, true end
-    return Op.always(state.address or self._address)
-  end)
+  return self._lifecycle:address_op()
 end
 
 

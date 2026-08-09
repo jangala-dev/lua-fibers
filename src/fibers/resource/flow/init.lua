@@ -161,17 +161,31 @@ end
 
 -- Host notification ---------------------------------------------------------
 
-local function discharge_changed(runtime, prepared)
-  local reactor = runtime.host_reactor
-  if reactor and reactor._notify_flow_changed then reactor:_notify_flow_changed(prepared.flow) end
-  return true
-end
-
-local Changed = Effect.kind({
+local Changed
+Changed = Effect.kind({
   name = 'flow_changed',
-  key = function(payload) return payload.flow end,
+  key = function(payload) return payload.flow._fibers_id end,
   merge = function(first) return first end,
-  prepare = function(_, payload) return { flow = payload.flow, discharge = discharge_changed } end,
+  validate_payload = function(_, payload)
+    if type(payload.flow) ~= 'table' or payload.flow._fibers_id == nil then
+      return nil, { kind = 'invalid_effect_payload', message = 'flow_changed effect requires a Flow' }
+    end
+    return true
+  end,
+  prepare = function(_, payload)
+    return {
+      kind = Changed,
+      key = payload.flow._fibers_id,
+      payload = payload,
+      discharge = function(runtime, prepared)
+        local reactor = runtime.host_reactor
+        if reactor and reactor._notify_flow_changed then
+          reactor:_notify_flow_changed(prepared.payload.flow)
+        end
+        return true
+      end,
+    }
+  end,
 })
 
 local function transition(flow, rule, payload)
@@ -179,11 +193,11 @@ local function transition(flow, rule, payload)
   payload.flow = flow
   local option = flow._state:transition_op(rule, payload)
   if rule.rule_mode == 'inspect' then return option end
-  local effect = flow._changed_effect
-  if not effect then effect = Effect.of(Changed, { flow = flow }); flow._changed_effect = effect end
   return option:and_then(Op.guard(function(...)
     local result = Facility.pack(...)
-    return Op.emit(effect):map(function() return Facility.unpack(result, 1, result.n) end)
+    return Op.emit(Effect.of(Changed, { flow = flow })):map(function()
+      return Facility.unpack(result, 1, result.n)
+    end)
   end))
 end
 

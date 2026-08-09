@@ -92,7 +92,6 @@ local function read_response(stream, action)
   if not line then
     return nil, IOError.normalise(line_err, { domain = 'file', action = action })
   end
-  line = line:gsub('\r?\n$', '')
   local kind, n, m = parse_header(line, action)
   if not kind then
     return nil, n

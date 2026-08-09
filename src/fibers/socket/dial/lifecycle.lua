@@ -1,14 +1,12 @@
 -- Explicit transactional lifecycle resource for outbound socket dials.
 
-local Op = require('fibers.op')
 local StateMachine = require('fibers.resource.machine')
 local Label = require('fibers.internal.label')
 local IOError = require('fibers.io.error')
 local Common = require('fibers.socket.lifecycle')
 
-local Ready = StateMachine.Ready
+local Ready, Wait = StateMachine.Ready, StateMachine.Wait
 local copy = Common.copy
-
 local Dial = {}
 Dial.__index = Dial
 
@@ -33,9 +31,7 @@ local function enrich(current, payload)
 end
 
 local Connected = StateMachine.isolated_update('socket.dial.connected', function(current, payload)
-  if current.kind ~= 'starting' then
-    return Ready.same(false, current)
-  end
+  if current.kind ~= 'starting' then return Ready.same(false, current) end
   local next_state = {
     kind = 'connected',
     address = current.address,
@@ -67,15 +63,9 @@ local Failed = StateMachine.isolated_update('socket.dial.failed', function(curre
   return Ready.write(next_state, true, next_state)
 end)
 
-local Take = StateMachine.isolated_update('socket.dial.take', function(current)
-  if current.kind ~= 'connected' then
-    return StateMachine.Wait
-  end
-  local next_state = {
-    kind = 'taken',
-    address = current.address,
-    report = current.report,
-  }
+local Take = StateMachine.isolated_select('socket.dial.take', function(current)
+  if current.kind ~= 'connected' then return Wait end
+  local next_state = { kind = 'taken', address = current.address, report = current.report }
   return Ready.write(next_state, current.connection, current.source_scope, current.report)
 end)
 
@@ -115,17 +105,45 @@ local Closed = StateMachine.isolated_update('socket.dial.closed', function(curre
   return Ready.write(next_state, true, next_state)
 end)
 
+local Failure = StateMachine.isolated_query('socket.dial.failure', function(state)
+  if state.kind == 'starting' or state.kind == 'connected' then return Wait end
+  if state.kind == 'failed' then return Ready.same(state.error) end
+  if state.kind == 'taken' then
+    return Ready.same(IOError.closed('socket', 'take_dial_connection', {
+      reason = 'connection already taken',
+      address = state.address,
+    }))
+  end
+  return Ready.same(state.error or IOError.closed('socket', 'dial', {
+    reason = state.reason or 'dial closed',
+    address = state.address,
+  }))
+end)
+
+local DriverRelease = StateMachine.isolated_query('socket.dial.driver_release', function(state)
+  if state.kind == 'connected' or state.kind == 'starting' then return Wait end
+  return Ready.same(state)
+end)
+
+local Report = StateMachine.isolated_query('socket.dial.report', function(state)
+  if state.report ~= nil then return Ready.same(state.report) end
+  return Wait
+end)
+
+local Terminal = StateMachine.isolated_query('socket.dial.terminal', function(state)
+  if state.kind == 'failed' or state.kind == 'taken' or state.kind == 'closed' then
+    return Ready.same(state)
+  end
+  return Wait
+end)
+
 function Dial.new(address)
   local value = Label.attach(setmetatable({
-    state = StateMachine.new({
-      kind = 'starting',
-      address = address,
-    }),
+    state = StateMachine.new({ kind = 'starting', address = address }),
   }, Dial))
   Label.child(value.state, value, 'lifecycle')
   return value
 end
-
 
 function Dial:publish_connected_op(connection, source_scope, report)
   return self.state:transition_op(Connected, {
@@ -144,43 +162,11 @@ function Dial:publish_failure_op(err, fatal, report)
 end
 
 function Dial:take_op()
-  local lifecycle = self
-  return self.state:select_op(function(state)
-    if state.kind == 'starting' then
-      return nil, true
-    end
-    if state.kind == 'connected' then
-      return lifecycle.state:transition_op(Take, {})
-    end
-    return nil, false
-  end)
+  return self.state:transition_op(Take)
 end
 
 function Dial:failure_op()
-  return self.state:select_op(function(state)
-    if state.kind == 'starting' then
-      return nil, true
-    end
-    if state.kind == 'connected' then
-      return nil, false
-    end
-    if state.kind == 'failed' then
-      return Op.always(state.error)
-    end
-    if state.kind == 'taken' then
-      return Op.always(IOError.closed('socket', 'take_dial_connection', {
-        reason = 'connection already taken',
-        address = state.address,
-      }))
-    end
-    if state.kind == 'closing' or state.kind == 'closed' then
-      return Op.always(state.error or IOError.closed('socket', 'dial', {
-        reason = state.reason or 'dial closed',
-        address = state.address,
-      }))
-    end
-    return nil, true
-  end)
+  return self.state:transition_op(Failure)
 end
 
 function Dial:request_close_op(reason, err, fatal, report)
@@ -202,33 +188,15 @@ function Dial:closed_op(reason, err, fatal, report)
 end
 
 function Dial:driver_release_op()
-  return self.state:select_op(function(state)
-    if state.kind == 'connected' or state.kind == 'starting' then
-      return nil, true
-    end
-    return Op.always(state)
-  end)
+  return self.state:transition_op(DriverRelease)
 end
 
 function Dial:report_op()
-  return self.state:select_op(function(state)
-    if state.report ~= nil then
-      return Op.always(state.report)
-    end
-    if state.kind == 'starting' or state.kind == 'connected' or state.kind == 'closing' then
-      return nil, true
-    end
-    return nil, false
-  end)
+  return self.state:transition_op(Report)
 end
 
 function Dial:terminal_op()
-  return self.state:select_op(function(state)
-    if state.kind == 'failed' or state.kind == 'taken' or state.kind == 'closed' then
-      return Op.always(state)
-    end
-    return nil, true
-  end)
+  return self.state:transition_op(Terminal)
 end
 
 return Dial

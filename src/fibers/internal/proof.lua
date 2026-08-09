@@ -7,7 +7,6 @@
 local M = {}
 local EMPTY = {}
 local DEPS, INTERESTS, CHECKS, ACTIVATIONS = 1, 2, 3, 4
-local NIL_PAYLOAD = {}
 
 local function table_field(value, field)
   local out = value[field]
@@ -38,7 +37,6 @@ local function add_dependency(certificate, source, request, class, object, quali
 end
 
 local function add_check(certificate, check, payload, activation)
-  payload = payload == nil and NIL_PAYLOAD or payload
   local values = certificate[CHECKS]
   if not values then values = {}; certificate[CHECKS] = values end
   for i = 1, #values, 3 do
@@ -460,7 +458,7 @@ end
 local function add_snapshot_check(snapshot, check, payload)
   if check then
     local out = table_field(snapshot, 'checks')
-    out[#out + 1], out[#out + 2] = check, payload == nil and NIL_PAYLOAD or payload
+    out[#out + 1], out[#out + 2] = check, payload
   end
 end
 
@@ -551,8 +549,7 @@ function M.valid(engine, snapshot)
     if bucket.generation ~= generation then return false end
   end
   for i = 1, #(snapshot.checks or EMPTY), 2 do
-    local payload = snapshot.checks[i + 1]
-    if not snapshot.checks[i](engine.runtime, payload == NIL_PAYLOAD and nil or payload) then return false end
+    if not snapshot.checks[i](engine.runtime, snapshot.checks[i + 1]) then return false end
   end
   local now
   for i = 1, #(snapshot.timers or EMPTY) do

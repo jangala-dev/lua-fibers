@@ -116,17 +116,16 @@ local function provider_path_options(action, opts)
 end
 
 local Provider = {}
-local by_runtime = setmetatable({}, { __mode = 'k' })
 
 function Provider.for_runtime(runtime, opts)
   if not runtime then
     error('file provider requires a current runtime', 2)
   end
-  local cached = by_runtime[runtime]
+  local cached = runtime._fibers_file_provider
   if cached and (type(cached.is_supported) ~= 'function' or cached:is_supported()) then
     return cached
   end
-  by_runtime[runtime] = nil
+  runtime._fibers_file_provider = nil
 
   local host = runtime.host
   if not host or type(host.file_provider) ~= 'function' then
@@ -161,10 +160,10 @@ function Provider.for_runtime(runtime, opts)
     end
   end
 
-  by_runtime[runtime] = provider
+  runtime._fibers_file_provider = provider
   if type(provider.shutdown) == 'function' and type(runtime._add_finalizer) == 'function' then
     runtime:_add_finalizer(function()
-      by_runtime[runtime] = nil
+      runtime._fibers_file_provider = nil
       return provider:shutdown()
     end)
   end
@@ -183,6 +182,12 @@ local next_file, next_request, next_job, next_temp = 0, 0, 0, 0
 local DEFAULT_CHUNK = 16 * 1024
 local DEFAULT_MAX = 16 * 1024 * 1024
 local READ_LINE_EOF = {}
+local FILE_MODES = {
+  r = true, rb = true, w = true, wb = true, a = true, ab = true,
+  ['r+'] = true, ['r+b'] = true, ['rb+'] = true,
+  ['w+'] = true, ['w+b'] = true, ['wb+'] = true,
+  ['a+'] = true, ['a+b'] = true, ['ab+'] = true,
+}
 
 local function validate_path(path, action)
   if type(path) ~= 'string' or path == '' then
@@ -193,33 +198,15 @@ end
 
 local function validate_mode(mode)
   mode = mode or 'r'
-  local allowed = {
-    r = true,
-    rb = true,
-    w = true,
-    wb = true,
-    a = true,
-    ab = true,
-    ['r+'] = true,
-    ['r+b'] = true,
-    ['rb+'] = true,
-    ['w+'] = true,
-    ['w+b'] = true,
-    ['wb+'] = true,
-    ['a+'] = true,
-    ['a+b'] = true,
-    ['ab+'] = true,
-  }
-  if not allowed[mode] then
+  if not FILE_MODES[mode] then
     error('invalid regular-file mode ' .. tostring(mode), 3)
   end
   return mode
 end
 
 local function validate_read_limits(opts, level)
-  opts = opts or {}
-  local max = opts.max or DEFAULT_MAX
-  local chunk = opts.chunk_size or DEFAULT_CHUNK
+  local max = opts and opts.max or DEFAULT_MAX
+  local chunk = opts and opts.chunk_size or DEFAULT_CHUNK
   level = (level or 1) + 1
   if type(max) ~= 'number' or max < 0 or max ~= math.floor(max) then
     error('file read max must be a non-negative integer', level)
@@ -321,7 +308,7 @@ local function enqueue(file, kind, args)
   local request = new_request(kind, args)
   return file._tx:send_op(request):map(function()
     return request
-  end), request
+  end)
 end
 
 local function request_result(file, kind, args)
@@ -377,7 +364,7 @@ function RegularFile:rename_op(path)
   return request_result(self, 'rename', { path = path })
 end
 
-local function seek_args(whence, offset, label)
+local function seek_args(whence, offset)
   whence, offset = whence or 'cur', offset or 0
   if whence ~= 'set' and whence ~= 'cur' and whence ~= 'end' then
     error("seek whence must be 'set', 'cur' or 'end'", 3)
@@ -385,14 +372,14 @@ local function seek_args(whence, offset, label)
   if type(offset) ~= 'number' or offset ~= math.floor(offset) then
     error('seek offset must be an integer', 3)
   end
-  return { whence = whence, offset = offset, label = label }
+  return { whence = whence, offset = offset }
 end
 function RegularFile:submit_seek_op(whence, offset)
-  local args = seek_args(whence, offset, 'submit_seek_op')
+  local args = seek_args(whence, offset)
   return (enqueue(self, 'seek', args))
 end
 function RegularFile:seek_op(whence, offset)
-  return request_result(self, 'seek', seek_args(whence, offset, 'seek_op'))
+  return request_result(self, 'seek', seek_args(whence, offset))
 end
 
 function RegularFile:submit_flush_op()
@@ -635,11 +622,8 @@ local function new_file_op(path, mode, opts, operation, temporary)
     _rx = rx,
     _ready_completion = Completion.new(),
     _closed_completion = Completion.new(),
-    _backend = nil,
-    _driver = nil,
     _provider_opts = opts,
     _temporary = temporary == true,
-    _auto_unlink = false,
   }, RegularFile), opts.label)
   Label.child(file._tx, file, 'requests')
   Label.child(file._ready_completion, file, 'ready')
@@ -679,7 +663,7 @@ local function new_file_op(path, mode, opts, operation, temporary)
       if not Runtime.is_cancelled(err) then error(failure, 0) end
     end,
   })
-  return admission, file
+  return admission
 end
 
 function File.submit_open_op(path, mode, opts)
@@ -736,10 +720,10 @@ local function path_job_op(action, fn, opts)
     closure = Closure.none(),
     run = function() return fn(opts) end,
   })
-  return submission, job
+  return submission
 end
 
-local function job_result(submission, _job)
+local function job_result(submission)
   return submission:wrap(function(job, err)
     if not job then
       return nil, err
@@ -788,8 +772,7 @@ function File.submit_read_all_op(path, opts)
   return (read_all_job(path, opts, 'submit_read_all_op'))
 end
 function File.read_all_op(path, opts)
-  local submission, job = read_all_job(path, opts, 'read_all_op')
-  return job_result(submission, job)
+  return job_result(read_all_job(path, opts, 'read_all_op'))
 end
 
 local function write_all_job(path, bytes, opts, label)
@@ -827,8 +810,7 @@ function File.submit_write_all_op(path, bytes, opts)
   return (write_all_job(path, bytes, opts, 'submit_write_all_op'))
 end
 function File.write_all_op(path, bytes, opts)
-  local submission, job = write_all_job(path, bytes, opts, 'write_all_op')
-  return job_result(submission, job)
+  return job_result(write_all_job(path, bytes, opts, 'write_all_op'))
 end
 
 local function path_action(action, args, opts)
@@ -843,8 +825,7 @@ local function path_action(action, args, opts)
 end
 
 local function path_action_result(action, args, opts)
-  local submission, job = path_action(action, args, opts)
-  return job_result(submission, job)
+  return job_result(path_action(action, args, opts))
 end
 
 function File.submit_rename_op(from, to, opts)
@@ -886,8 +867,7 @@ function File.submit_mkdir_p_op(path, opts)
   return (mkdir_p_job(path, opts, 'submit_mkdir_p_op'))
 end
 function File.mkdir_p_op(path, opts)
-  local submission, job = mkdir_p_job(path, opts, 'mkdir_p_op')
-  return job_result(submission, job)
+  return job_result(mkdir_p_job(path, opts, 'mkdir_p_op'))
 end
 
 

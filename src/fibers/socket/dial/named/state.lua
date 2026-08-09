@@ -1,11 +1,10 @@
 -- Transactional state for the named-dial Happy Eyeballs v2 strategy.
 --
 -- DNS completions, attempt results, clock observations, capacity claims and Dial
--- admission are composed as options over one Cell machine. Irreversible socket
+-- admission are composed as options over one state machine. Irreversible socket
 -- work remains inside numeric Dial Lifetimes and begins only after commit.
 
 local Op = require('fibers.op')
-local Cell = require('fibers.resource.cell')
 local StateMachine = require('fibers.resource.machine')
 local Counter = require('fibers.resource.counter')
 local Clock = require('fibers.resource.clock')
@@ -25,14 +24,6 @@ local function copy_list(values)
   local out = {}
   for i = 1, #values do
     out[i] = values[i]
-  end
-  return out
-end
-
-local function copy_map(values)
-  local out = {}
-  for key, value in pairs(values) do
-    out[key] = value
   end
   return out
 end
@@ -81,7 +72,6 @@ local function copy_state(current)
       inet4 = copy_family(current.families.inet4),
     },
     unattempted = copy_list(current.unattempted),
-    seen = copy_map(current.seen),
     attempts = {},
     next_attempt = current.next_attempt,
     next_launch_at = current.next_launch_at,
@@ -263,11 +253,17 @@ local function order_candidates(race, current, family, values)
   if not incoming then
     return nil, nil, err
   end
-  local merged, known = copy_list(current.unattempted), copy_map(current.seen)
-  local added, dropped = {}, 0
-  local retained = 0
-  for _ in pairs(known) do
-    retained = retained + 1
+  local merged, known = copy_list(current.unattempted), {}
+  local added, dropped, retained = {}, 0, 0
+  for _, known_family in ipairs(FAMILIES) do
+    local addresses = current.families[known_family].addresses
+    for i = 1, #addresses do
+      local key = Address.key(addresses[i])
+      if not known[key] then
+        known[key] = true
+        retained = retained + 1
+      end
+    end
   end
   local other = family == 'inet6' and 'inet4' or 'inet6'
   local reserve_other = not current.families[other].done and #current.families[other].addresses == 0
@@ -381,7 +377,6 @@ local PublishFamily = StateMachine.update('socket.dial.named.publish_family', fu
   for i = 1, #added do
     local address = added[i]
     info.addresses[#info.addresses + 1] = address
-    next_state.seen[Address.key(address)] = true
   end
   next_state.unattempted = ordered
   next_state.candidates_dropped = next_state.candidates_dropped + dropped
@@ -525,7 +520,6 @@ function State.new(endpoint, opts, started_at)
       inet4 = { done = false, addresses = {} },
     },
     unattempted = {},
-    seen = {},
     attempts = {},
     next_attempt = 1,
     candidates_dropped = 0,

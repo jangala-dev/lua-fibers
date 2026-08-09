@@ -85,10 +85,7 @@ local function local_address_now(listener)
 end
 
 function Listener:local_address_op()
-  return self._lifecycle.state:select_op(function(state)
-    if state.kind == 'starting' then return nil, true end
-    return Op.always(state.address or self._address)
-  end)
+  return self._lifecycle:address_op()
 end
 
 
