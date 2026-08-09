@@ -119,7 +119,6 @@ end
 function Journal:rollback(mark)
   local entries = self.entries
   local stop = self.marks[mark]
-  local removed = (#entries - stop) / 5
   for n = #entries, stop + 1, -5 do
     local kind = entries[n - 4]
     local target = entries[n - 3]
@@ -221,7 +220,6 @@ function Journal.stage(segment, location, patch)
   stage_summary(segment, location, patch)
   journal:set(segment.values, location, Algebra.apply(location, value, patch))
   journal.writers[location] = nil
-  return true
 end
 
 local function writers_for(journal, location)
@@ -248,9 +246,7 @@ local function relation(left, right)
   return a.group.mode == 'interacting' and 'interacting' or 'independent'
 end
 
-function Journal.relation(left, right)
-  return relation(left, right)
-end
+Journal.relation = relation
 
 local function visible_patch(location, patch, relation, orientation)
   if relation == 'external' or relation == 'interacting' then

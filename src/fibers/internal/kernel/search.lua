@@ -987,8 +987,10 @@ local function frontier_supply_score(frontier, intents)
   for i = 1, #(intents or EMPTY) do
     local demand = intents[i]
     if demand.kind == 'exchange' then
-      local roles = frontier.dependencies and frontier.dependencies.exchanges[demand.resource]
-      local latent = frontier.latent and frontier.latent.exchanges[demand.resource]
+      local exchanges = frontier.dependencies and frontier.dependencies.exchanges
+      local latent_exchanges = frontier.latent and frontier.latent.exchanges
+      local roles = exchanges and exchanges[demand.resource]
+      local latent = latent_exchanges and latent_exchanges[demand.resource]
       local opposite = demand.role == 'put' and 'get' or demand.role == 'get' and 'put' or nil
       if opposite and ((roles and roles[opposite]) or (latent and latent[opposite])) then score = score + 1 end
     end

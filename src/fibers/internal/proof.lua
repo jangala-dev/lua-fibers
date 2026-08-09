@@ -8,6 +8,12 @@ local M = {}
 local EMPTY = {}
 local DEPS, INTERESTS, CHECKS, ACTIVATIONS = 1, 2, 3, 4
 
+local function table_field(value, field)
+  local out = value[field]
+  if not out then out = {}; value[field] = out end
+  return out
+end
+
 local function add_value(certificate, field, value)
   local values = certificate[field]
   if not values then values = {}; certificate[field] = values end
@@ -141,18 +147,14 @@ function M.from_intents(intents)
   return certificate
 end
 
-local function dependencies()
-  return { exchanges = {}, locations = {}, resources = {} }
-end
-
 local function observe(deps, class, object, qualifier, version)
+  local set = table_field(deps, class == 'exchange' and 'exchanges' or class == 'location' and 'locations' or 'resources')
   if class == 'exchange' then
-    local roles = deps.exchanges[object]
-    if not roles then roles = {}; deps.exchanges[object] = roles end
+    local roles = set[object]
+    if not roles then roles = {}; set[object] = roles end
     roles[qualifier] = true
-  else
-    local set = deps[class == 'location' and 'locations' or 'resources']
-    if set[object] == nil then set[object] = version or object.version or true end
+  elseif set[object] == nil then
+    set[object] = version or object.version or true
   end
 end
 
@@ -160,7 +162,7 @@ function M.frontiers(intents, roots, inherited)
   local frontiers = {}
   for request, root in pairs(roots or {}) do
     if root and not root.done then
-      frontiers[request] = { dependencies = dependencies(), latent = dependencies(), complete = true }
+      frontiers[request] = { dependencies = {}, complete = true }
     end
   end
   for i = 1, #(intents or {}) do
@@ -182,8 +184,9 @@ function M.frontiers(intents, roots, inherited)
   for i = 1, #deps, DEP_FIELDS do
     local frontier = frontiers[deps[i + 1]]
     if frontier then
-      observe(deps[i + 6] and frontier.latent or frontier.dependencies,
-        deps[i + 2], deps[i + 3], deps[i + 4], deps[i + 5])
+      local target = frontier.dependencies
+      if deps[i + 6] then target = frontier.latent or {}; frontier.latent = target end
+      observe(target, deps[i + 2], deps[i + 3], deps[i + 4], deps[i + 5])
     end
   end
   return frontiers
@@ -337,6 +340,7 @@ local function same_set_map(left, right)
 end
 
 local function same_dependencies(left, right)
+  left, right = left or EMPTY, right or EMPTY
   return same_set_map(left.exchanges, right.exchanges)
     and same_set_map(left.locations, right.locations)
     and same_set_map(left.resources, right.resources)
@@ -440,11 +444,23 @@ function M.component(engine, focus)
 end
 
 local function add_bucket(snapshot, bucket)
-  if bucket then snapshot.buckets[bucket] = bucket.generation end
+  if bucket then table_field(snapshot, 'buckets')[bucket] = bucket.generation end
 end
 
 local function add_location(snapshot, location, version)
-  if location and snapshot.locations[location] == nil then snapshot.locations[location] = version or location.version or 0 end
+  if not location then return end
+  local locations = table_field(snapshot, 'locations')
+  if locations[location] == nil then locations[location] = version or location.version or 0 end
+end
+
+local function add_check(snapshot, check)
+  if check then local out = table_field(snapshot, 'checks'); out[#out + 1] = check end
+end
+
+local function add_timer(snapshot, interest)
+  if interest and interest.kind == 'timer' and type(interest.deadline) == 'number' then
+    local out = table_field(snapshot, 'timers'); out[#out + 1] = interest.deadline
+  end
 end
 
 local function add_request(snapshot, request)
@@ -459,14 +475,15 @@ end
 
 function M.capture(engine, state, certificate)
   local value = M.ensure(engine)
-  local snapshot = { requests = {}, locations = {}, buckets = {}, checks = {}, timers = {} }
+  local snapshot = { requests = {} }
   for _, root in pairs(state.roots or EMPTY) do add_request(snapshot, root.request) end
   for location, version in pairs((state.journal and state.journal.observed) or EMPTY) do
     add_location(snapshot, location, version)
   end
 
-  local demanded = {}
+  local demanded
   local function add_exchange(resource, role)
+    demanded = demanded or {}
     local roles = demanded[resource]
     if not roles then roles = {}; demanded[resource] = roles end
     if roles[role] then return end
@@ -488,11 +505,8 @@ function M.capture(engine, state, certificate)
         add_bucket(snapshot, value.potential_resource[object])
       end
     end
-    for i = 1, #(proof[CHECKS] or EMPTY), 2 do snapshot.checks[#snapshot.checks + 1] = proof[CHECKS][i] end
-    for i = 1, #(proof[INTERESTS] or EMPTY) do
-      local interest = proof[INTERESTS][i]
-      if interest and interest.kind == 'timer' and type(interest.deadline) == 'number' then snapshot.timers[#snapshot.timers + 1] = interest.deadline end
-    end
+    for i = 1, #(proof[CHECKS] or EMPTY), 2 do add_check(snapshot, proof[CHECKS][i]) end
+    for i = 1, #(proof[INTERESTS] or EMPTY) do add_timer(snapshot, proof[INTERESTS][i]) end
   end
   for i = 1, #(state.intents or EMPTY) do
     local intent = state.intents[i]
@@ -508,10 +522,8 @@ function M.capture(engine, state, certificate)
         local resource = intent.resource or (leaf and leaf.resource)
         if resource then add_bucket(snapshot, value.potential_resource[resource]) end
       end
-      local check = intent.absence_check
-      if check then snapshot.checks[#snapshot.checks + 1] = check end
-      local interest = intent.interest
-      if interest and interest.kind == 'timer' and type(interest.deadline) == 'number' then snapshot.timers[#snapshot.timers + 1] = interest.deadline end
+      add_check(snapshot, intent.absence_check)
+      add_timer(snapshot, intent.interest)
     end
   end
   add_certificate(certificate)

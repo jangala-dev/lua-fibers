@@ -1,4 +1,4 @@
--- Transaction engine. Owns pending operations, retained searchs and arbitration.
+-- Transaction engine. Owns pending operations, retained searches and arbitration.
 
 local Search = require('fibers.internal.kernel.search')
 
@@ -42,41 +42,17 @@ function Engine.new(scheduler, opts)
   }, { __index = Engine })
 end
 
-local function begin_call(engine)
-  if engine.cycle_work_limit or engine.cycle_focus_limit then
-    engine._cycle_budget = {
-      work = engine.cycle_work_limit, focus = engine.cycle_focus_limit,
-      work_used = 0, focus_used = 0,
-    }
-  end
-end
-local function end_call(engine) engine._cycle_budget = nil end
-
 function Engine:charge(kind, amount)
   local budget = self._cycle_budget
   local remaining = budget and budget[kind]
   if remaining == nil then return true end
   amount = amount or 1
   if remaining < amount then
-    budget.reason = 'cycle_' .. kind .. '_limit'
-    self._last_search_unknown_reason = budget.reason
+    self._last_search_unknown_reason = 'cycle_' .. kind .. '_limit'
     return false
   end
   budget[kind] = remaining - amount
-  budget[kind .. '_used'] = budget[kind .. '_used'] + amount
   return true
-end
-
-local function clear_request(request)
-  request.pending = nil
-  request.order = nil
-  request.op = nil
-  request.interrupt = nil
-  request.metadata = nil
-  request._proof = nil
-  request._potential_memberships = nil
-  request.activation_root = nil
-  return request
 end
 
 function Engine.admit(engine, fiber, op, interrupt)
@@ -100,7 +76,7 @@ end
 
 function Engine.resume(engine, request, outcome, cancelled)
   local packed, wrap = outcome and outcome.pack or nil, outcome and outcome.wrap or nil
-  clear_request(request)
+  request.order, request.op, request.interrupt, request.metadata, request.activation_root = nil, nil, nil, nil, nil
   engine.runtime:_resume_fiber(request, cancelled, packed, wrap)
 end
 
@@ -110,8 +86,8 @@ function Engine.interrupt(engine, token, cancelled)
     local request = engine.pending[i]
     if request.interrupt == token then requests[#requests + 1] = request end
   end
-  if #requests > 0 then Engine.remove(engine, requests) end
-  for i = 1, #requests do Engine.resume(engine, requests[i], nil, cancelled) end
+  if #requests > 0 then engine:remove(requests) end
+  for i = 1, #requests do engine:resume(requests[i], nil, cancelled) end
   return true
 end
 
@@ -304,7 +280,7 @@ function Engine:resolve_without_suspension(fiber)
   if fiber.pending then
     local reason = self._last_search_unknown_reason or 'operation_not_immediately_committable'
     self:remove_one(fiber)
-    Engine.resume(self, fiber, nil, suspension_error(self, fiber, reason))
+    self:resume(fiber, nil, suspension_error(self, fiber, reason))
   end
   return false
 end
@@ -502,13 +478,15 @@ end
 
 
 function Engine:advance(mode, opts)
-  begin_call(self)
   self._last_search_unknown_reason = nil
+  if self.cycle_work_limit or self.cycle_focus_limit then
+    self._cycle_budget = { work = self.cycle_work_limit, focus = self.cycle_focus_limit }
+  end
   local result
   if mode == 'step' then result = step(self, opts)
   elseif mode == 'run' then result = run(self, opts)
   else error('unknown engine advance mode ' .. tostring(mode), 2) end
-  end_call(self)
+  self._cycle_budget = nil
   return result
 end
 
