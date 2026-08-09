@@ -5,63 +5,61 @@
 -- versioned buckets to invalidate retained searches and completed Retry proofs.
 
 local M = {}
+local EMPTY = {}
+local DEPS, INTERESTS, CHECKS, ACTIVATIONS = 1, 2, 3, 4
 
-local function identity(fact)
-  return fact.identity or fact.object or fact.value or false
-end
-
-local function same_fact(left, right)
-  return left.kind == right.kind and identity(left) == identity(right)
-end
-
-local function add_unique(certificate, fact)
-  for i = 1, #certificate do
-    if same_fact(certificate[i], fact) then
-      return false
-    end
-  end
-  certificate[#certificate + 1] = fact
+local function add_value(certificate, field, value)
+  local values = certificate[field]
+  if not values then values = {}; certificate[field] = values end
+  for i = 1, #values do if values[i] == value then return false end end
+  values[#values + 1] = value
   return true
 end
 
-function M.new() return {} end
-
-function M.add(certificate, kind, fields)
-  certificate = certificate or M.new()
-  local fact = fields or {}
-  fact.kind = kind
-  add_unique(certificate, fact)
-  return certificate
+local DEP_FIELDS = 7
+local function add_dependency(certificate, source, request, class, object, qualifier, version, latent)
+  local flag = class == 'exchange' and 1 or class == 'location' and 2 or 4
+  if latent then flag = flag * 8 end
+  local seen = certificate[source] or 0
+  if seen % (flag * 2) >= flag then return end
+  certificate[source] = seen + flag
+  local values = certificate[DEPS]
+  if not values then values = {}; certificate[DEPS] = values end
+  local n = #values
+  values[n + 1], values[n + 2], values[n + 3], values[n + 4] = source, request, class, object
+  values[n + 5], values[n + 6], values[n + 7] = qualifier or false, version or false, latent or false
 end
 
-function M.copy(certificate)
-  if not certificate then
-    return nil
-  end
-  local out = M.new()
-  for i = 1, #certificate do out[i] = certificate[i]
-  end
-  return out
+local function add_check(certificate, check, activation)
+  local values = certificate[CHECKS]
+  if not values then values = {}; certificate[CHECKS] = values end
+  for i = 1, #values, 2 do if values[i] == check then return false end end
+  values[#values + 1], values[#values + 2] = check, activation
+  return true
 end
 
 function M.merge(dst, src)
-  if not src then
-    return dst
+  if not src then return dst end
+  dst = dst or {}
+  local deps = src[DEPS] or EMPTY
+  for i = 1, #deps, DEP_FIELDS do
+    add_dependency(dst, deps[i], deps[i + 1], deps[i + 2], deps[i + 3], deps[i + 4], deps[i + 5], deps[i + 6])
   end
-  dst = dst or M.new()
-  for i = 1, #src do add_unique(dst, src[i])
-  end
+  for i = 1, #(src[INTERESTS] or EMPTY) do add_value(dst, INTERESTS, src[INTERESTS][i]) end
+  for i = 1, #(src[CHECKS] or EMPTY), 2 do add_check(dst, src[CHECKS][i], src[CHECKS][i + 1]) end
+  for i = 1, #(src[ACTIVATIONS] or EMPTY) do add_value(dst, ACTIVATIONS, src[ACTIVATIONS][i]) end
+  dst.membership_sensitive = dst.membership_sensitive or src.membership_sensitive
   return dst
 end
+
+function M.interests(certificate) return certificate and certificate[INTERESTS] end
 
 function M.collect_interests(proofs)
   local out = {}
   for i = 1, #(proofs or {}) do
     local proof = proofs[i]
-    for j = 1, #(proof or {}) do
-      local fact = proof[j]
-      if fact.kind == 'interest' then out[#out + 1] = fact.value end
-    end
+    local interests = proof and (proof[INTERESTS] or proof.interests) or EMPTY
+    for j = 1, #interests do out[#out + 1] = interests[j] end
   end
   return out
 end
@@ -70,14 +68,11 @@ end
 -- preferred branch. They invalidate on new compatible roots without retaining
 -- the branch's state or external waits.
 function M.merge_latent_frontier(dst, src)
-  dst = dst or M.new()
-  for i = 1, #(src or {}) do
-    local fact = src[i]
-    if fact.kind == 'dependency' and not fact.latent then
-      local copy = {}
-      for key, value in pairs(fact) do copy[key] = value end
-      copy.latent, copy.identity = true, identity(fact)
-      add_unique(dst, copy)
+  dst = dst or {}
+  local deps = src and src[DEPS] or EMPTY
+  for i = 1, #deps, DEP_FIELDS do
+    if not deps[i + 6] then
+      add_dependency(dst, deps[i], deps[i + 1], deps[i + 2], deps[i + 3], deps[i + 4], deps[i + 5], true)
     end
   end
   return dst
@@ -87,12 +82,10 @@ local ACTIVATION_FACT, INTEREST_FACT, CHECK_FACT, LOCATION_FACT = {}, {}, {}, {}
 
 function M.gate_facts(certificate)
   local out = {}
-  for i = 1, #(certificate or {}) do
-    local fact = certificate[i]
-    if fact.kind == 'activation' then
-      out[#out + 1] = ACTIVATION_FACT
-      for j = 1, #(fact.value or {}) do out[#out + 1] = fact.value[j] end
-    end
+  for i = 1, #(certificate and certificate[ACTIVATIONS] or EMPTY) do
+    local activation = certificate[ACTIVATIONS][i]
+    out[#out + 1] = ACTIVATION_FACT
+    for j = 1, #activation do out[#out + 1] = activation[j] end
   end
   return out
 end
@@ -101,42 +94,36 @@ end
 -- participant frontier. Closed proofs such as `never` cannot be invalidated by
 -- admitting another fiber; exchange, location and resource frontiers can.
 function M.mark_absence_gate_frontier(certificate)
-  for i = 1, #(certificate or {}) do
-    local fact = certificate[i]
-    if fact.kind == 'dependency' and not fact.latent then
-      certificate.membership_sensitive = true
-      break
-    end
+  local deps = certificate and certificate[DEPS] or EMPTY
+  for i = 1, #deps, DEP_FIELDS do
+    if not deps[i + 6] then certificate.membership_sensitive = true; break end
   end
 end
 
-local function add_dependency(certificate, intent, class, object, qualifier, version)
-  M.add(certificate, 'dependency', {
-    identity = intent, request = intent.request, class = class, object = object,
-    qualifier = qualifier, version = version,
-  })
+local function add_intent_dependency(certificate, intent, class, object, qualifier, version)
+  add_dependency(certificate, intent, intent.request, class, object, qualifier, version)
 end
 
 local function add_intent(certificate, activation, intent)
   if intent.kind == 'exchange' then
-    add_dependency(certificate, intent, 'exchange', intent.resource, intent.role)
+    add_intent_dependency(certificate, intent, 'exchange', intent.resource, intent.role)
   elseif intent.spec and intent.spec.location then
     local location = intent.spec.location
-    add_dependency(certificate, intent, 'location', location, nil, intent.observed_version or location.version or 0)
+    add_intent_dependency(certificate, intent, 'location', location, nil, intent.observed_version or location.version or 0)
   end
   local resource = intent.resource or (intent.spec and intent.spec.resource)
   if resource and intent.kind ~= 'exchange' then
-    add_dependency(certificate, intent, 'resource', resource, nil, resource.version or 0)
+    add_intent_dependency(certificate, intent, 'resource', resource, nil, resource.version or 0)
   end
   if intent.interest then
-    M.add(certificate, 'interest', { identity = intent.interest, value = intent.interest })
+    add_value(certificate, INTERESTS, intent.interest)
     activation[#activation + 1], activation[#activation + 2] =
       INTEREST_FACT, intent.interest.id or intent.interest
   end
 
   local check = intent.absence_check
   if check then
-    M.add(certificate, 'check', { identity = check, value = check })
+    add_check(certificate, check, intent.activation)
     activation[#activation + 1], activation[#activation + 2] = CHECK_FACT, intent.activation
   end
 
@@ -147,15 +134,11 @@ local function add_intent(certificate, activation, intent)
   end
 end
 
-local function finish_activation(certificate, activation)
-  M.add(certificate, 'activation', { value = activation })
-  return certificate
-end
-
 function M.from_intents(intents)
-  local certificate, activation = M.new(), {}
+  local certificate, activation = {}, {}
   for i = 1, #(intents or {}) do add_intent(certificate, activation, intents[i]) end
-  return finish_activation(certificate, activation)
+  add_value(certificate, ACTIVATIONS, activation)
+  return certificate
 end
 
 local function dependencies()
@@ -174,19 +157,16 @@ local function observe(deps, class, object, qualifier, version)
 end
 
 function M.frontiers(intents, roots, inherited)
-  local frontiers, activations = {}, {}
+  local frontiers = {}
   for request, root in pairs(roots or {}) do
     if root and not root.done then
-      frontiers[request] = { dependencies = dependencies(), latent = dependencies(), complete = true, certificate = M.new() }
-      activations[request] = {}
+      frontiers[request] = { dependencies = dependencies(), latent = dependencies(), complete = true }
     end
   end
-
   for i = 1, #(intents or {}) do
     local intent = intents[i]
     local frontier = intent.active and frontiers[intent.request]
     if frontier then
-      add_intent(frontier.certificate, activations[intent.request], intent)
       if intent.kind == 'exchange' then
         observe(frontier.dependencies, 'exchange', intent.resource, intent.role)
       elseif intent.kind == 'choice' or intent.kind == 'transition' then
@@ -198,22 +178,18 @@ function M.frontiers(intents, roots, inherited)
       if resource and intent.kind ~= 'exchange' then observe(frontier.dependencies, 'resource', resource) end
     end
   end
-
-  for i = 1, #(inherited or {}) do
-    local fact = inherited[i]
-    local frontier = fact.kind == 'dependency' and frontiers[fact.request]
-    if frontier then observe(fact.latent and frontier.latent or frontier.dependencies, fact.class, fact.object, fact.qualifier, fact.version) end
-  end
-
-  for request, frontier in pairs(frontiers) do
-    frontier.certificate = finish_activation(frontier.certificate, activations[request])
+  local deps = inherited and inherited[DEPS] or EMPTY
+  for i = 1, #deps, DEP_FIELDS do
+    local frontier = frontiers[deps[i + 1]]
+    if frontier then
+      observe(deps[i + 6] and frontier.latent or frontier.dependencies,
+        deps[i + 2], deps[i + 3], deps[i + 4], deps[i + 5])
+    end
   end
   return frontiers
 end
 
 local Operation = require('fibers.internal.operation')
-
-local EMPTY = {}
 
 local function new_bucket()
   return { generation = 0, items = {} }
@@ -280,14 +256,10 @@ local function potential_shape(request)
   return shape, scope and scope._lifetime
 end
 
-local function mark_dirty(value, request, reason)
-  if request and request.pending then value.dirty[request] = reason or true end
-end
-
-local function mark_bucket(value, bucket, reason, excluded)
+local function mark_bucket(value, bucket, excluded)
   if not bucket then return end
   for request in pairs(bucket.items) do
-    if request ~= excluded then mark_dirty(value, request, reason) end
+    if request ~= excluded and request.pending then value.dirty[request] = true end
   end
 end
 
@@ -320,7 +292,7 @@ function M.remove_request(engine, request)
   local proof = request._proof
   if proof then remove_memberships(proof.memberships, request); request._proof = nil end
   value.dirty[request] = nil
-  mark_bucket(value, value.potential_dynamic, 'pending-root-removed')
+  mark_bucket(value, value.potential_dynamic)
 end
 
 function M.add_request(engine, request, quiet_admission)
@@ -331,24 +303,24 @@ function M.add_request(engine, request, quiet_admission)
   for resource, roles in pairs(shape.exchanges or EMPTY) do
     for role in pairs(roles) do
       local exact, possible = value.exact_exchange[resource], value.potential_exchange[resource]
-      mark_bucket(value, exact and exact[opposite(role)], 'new-supplier', request)
-      mark_bucket(value, possible and possible[opposite(role)], 'new-potential-supplier', request)
+      mark_bucket(value, exact and exact[opposite(role)], request)
+      mark_bucket(value, possible and possible[opposite(role)], request)
     end
   end
   for location in pairs(shape.locations or EMPTY) do
-    mark_bucket(value, value.exact_location[location], 'new-location-participant', request)
-    mark_bucket(value, value.potential_location[location], 'new-potential-location-participant', request)
+    mark_bucket(value, value.exact_location[location], request)
+    mark_bucket(value, value.potential_location[location], request)
   end
   for resource in pairs(shape.resources or EMPTY) do
-    mark_bucket(value, value.exact_resource[resource], 'new-resource-participant', request)
-    mark_bucket(value, value.potential_resource[resource], 'new-potential-resource-participant', request)
+    mark_bucket(value, value.exact_resource[resource], request)
+    mark_bucket(value, value.potential_resource[resource], request)
   end
   if lifetime ~= nil then
     local exact, possible = value.exact_exchange[lifetime], value.potential_exchange[lifetime]
-    mark_bucket(value, exact and exact.get, 'new-supplier', request)
-    mark_bucket(value, possible and possible.get, 'new-potential-supplier', request)
+    mark_bucket(value, exact and exact.get, request)
+    mark_bucket(value, possible and possible.get, request)
   end
-  mark_bucket(value, value.potential_dynamic, 'new-pending-root', request)
+  mark_bucket(value, value.potential_dynamic, request)
 end
 
 local function same_set_map(left, right)
@@ -399,14 +371,14 @@ function M.publish(engine, request, frontier)
   request._proof, value.dirty[request] = frontier, nil
 end
 
-function M.touch_location(engine, location, reason)
+function M.touch_location(engine, location)
   local value = engine.proof_graph
-  if value then mark_bucket(value, value.exact_location[location], reason or 'location-version') end
+  if value then mark_bucket(value, value.exact_location[location]) end
 end
 
-function M.touch_resource(engine, resource, reason)
+function M.touch_resource(engine, resource)
   local value = engine.proof_graph
-  if value then mark_bucket(value, value.exact_resource[resource], reason or 'resource-version') end
+  if value then mark_bucket(value, value.exact_resource[resource]) end
 end
 
 local function collect_bucket(bucket, out, seen)
@@ -476,7 +448,7 @@ local function add_location(snapshot, location, version)
 end
 
 local function add_request(snapshot, request)
-  if request then snapshot.requests[request] = request.op end
+  if request then snapshot.requests[request] = request.order end
 end
 
 function M.acknowledge(engine, state)
@@ -485,7 +457,7 @@ function M.acknowledge(engine, state)
   for _, root in pairs((state and state.roots) or EMPTY) do value.dirty[root.request] = nil end
 end
 
-function M.capture(engine, state, certificate, frontiers)
+function M.capture(engine, state, certificate)
   local value = M.ensure(engine)
   local snapshot = { requests = {}, locations = {}, buckets = {}, checks = {}, timers = {} }
   for _, root in pairs(state.roots or EMPTY) do add_request(snapshot, root.request) end
@@ -502,54 +474,55 @@ function M.capture(engine, state, certificate, frontiers)
     local possible = value.potential_exchange[resource]
     add_bucket(snapshot, possible and possible[opposite(role)])
   end
-  local function add_fact(fact)
-    if fact.kind == 'dependency' then
-      if fact.class == 'exchange' then
-        add_exchange(fact.object, fact.qualifier)
-      elseif fact.class == 'location' then
-        if not fact.latent then add_location(snapshot, fact.object, fact.version) end
-        add_bucket(snapshot, value.potential_location[fact.object])
+  local function add_certificate(proof)
+    if not proof then return end
+    local deps = proof[DEPS] or EMPTY
+    for i = 1, #deps, DEP_FIELDS do
+      local class, object = deps[i + 2], deps[i + 3]
+      if class == 'exchange' then
+        add_exchange(object, deps[i + 4])
+      elseif class == 'location' then
+        if not deps[i + 6] then add_location(snapshot, object, deps[i + 5]) end
+        add_bucket(snapshot, value.potential_location[object])
       else
-        add_bucket(snapshot, value.potential_resource[fact.object])
+        add_bucket(snapshot, value.potential_resource[object])
       end
-    elseif fact.kind == 'check' and fact.value then
-      snapshot.checks[#snapshot.checks + 1] = fact.value
-    elseif fact.kind == 'interest' then
-      local interest = fact.value
+    end
+    for i = 1, #(proof[CHECKS] or EMPTY), 2 do snapshot.checks[#snapshot.checks + 1] = proof[CHECKS][i] end
+    for i = 1, #(proof[INTERESTS] or EMPTY) do
+      local interest = proof[INTERESTS][i]
       if interest and interest.kind == 'timer' and type(interest.deadline) == 'number' then snapshot.timers[#snapshot.timers + 1] = interest.deadline end
     end
   end
-
-  if frontiers then
-    for _, frontier in pairs(frontiers) do
-      for i = 1, #(frontier.certificate or EMPTY) do add_fact(frontier.certificate[i]) end
-    end
-  else
-    for i = 1, #(state.intents or EMPTY) do
-      local intent = state.intents[i]
-      if intent.active then
-        if intent.kind == 'exchange' then
-          add_exchange(intent.resource, intent.role)
-        elseif intent.spec and intent.spec.location then
-          add_location(snapshot, intent.spec.location, intent.observed_version)
-          add_bucket(snapshot, value.potential_location[intent.spec.location])
+  for i = 1, #(state.intents or EMPTY) do
+    local intent = state.intents[i]
+    if intent.active then
+      if intent.kind == 'exchange' then
+        add_exchange(intent.resource, intent.role)
+      else
+        local leaf = intent.spec
+        if leaf and leaf.location then
+          add_location(snapshot, leaf.location, intent.observed_version)
+          add_bucket(snapshot, value.potential_location[leaf.location])
         end
-        local check = intent.absence_check
-        if check then snapshot.checks[#snapshot.checks + 1] = check end
-        local interest = intent.interest
-        if interest and interest.kind == 'timer' and type(interest.deadline) == 'number' then snapshot.timers[#snapshot.timers + 1] = interest.deadline end
+        local resource = intent.resource or (leaf and leaf.resource)
+        if resource then add_bucket(snapshot, value.potential_resource[resource]) end
       end
+      local check = intent.absence_check
+      if check then snapshot.checks[#snapshot.checks + 1] = check end
+      local interest = intent.interest
+      if interest and interest.kind == 'timer' and type(interest.deadline) == 'number' then snapshot.timers[#snapshot.timers + 1] = interest.deadline end
     end
   end
-  for i = 1, #(certificate or EMPTY) do add_fact(certificate[i]) end
+  add_certificate(certificate)
   return snapshot
 end
 
 function M.valid(engine, snapshot)
   local value = engine.proof_graph
   if not snapshot then return false end
-  for request, op in pairs(snapshot.requests or EMPTY) do
-    if not request.pending or request.op ~= op then return false end
+  for request, order in pairs(snapshot.requests or EMPTY) do
+    if not request.pending or request.order ~= order then return false end
     if value and value.dirty[request] then return false end
   end
   for location, version in pairs(snapshot.locations or EMPTY) do
@@ -575,7 +548,7 @@ function M.retry(engine, request)
   local frontier = request and request._proof
   if not frontier or not frontier.retry or (value and value.dirty[request]) then return nil end
   if not M.valid(engine, frontier.snapshot) then return nil end
-  return M.copy(frontier.certificate)
+  return frontier
 end
 
 return M

@@ -147,7 +147,7 @@ function Candidate:settle(engine)
   local prepared = self.prepared_effects
 
   Journal.commit(self.writes)
-  for location in pairs(self.writes or EMPTY) do Proof.touch_location(engine, location, 'commit') end
+  for location in pairs(self.writes or EMPTY) do Proof.touch_location(engine, location) end
   engine.epoch = engine.epoch + 1
   if instrumentation then instrumentation:inc('commits') end
 

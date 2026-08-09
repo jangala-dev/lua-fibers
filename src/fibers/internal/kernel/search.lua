@@ -1286,7 +1286,7 @@ local function explore(state, apply)
   if not apply() then
     state.search_depth = state.search_depth - 1
     state.journal:rollback(mark)
-    return nil, Proof.new(), false
+    return nil, {}, false
   end
   local candidate, refutation, unknown = search(state)
   state.search_depth = state.search_depth - 1
@@ -1324,7 +1324,8 @@ local function prefer(state, task, expr)
   end
 
   local previous_gate = state.absence_gate
-  local gate = Proof.merge(Proof.copy(previous_gate), preferred_refutation)
+  local gate = Proof.merge({}, previous_gate)
+  Proof.merge(gate, preferred_refutation)
   Proof.mark_absence_gate_frontier(gate)
   -- A proof may stop at a deferred choice before branch-local frontiers are
   -- materialised.  The immutable preferred shape is used only to decide whether
@@ -1588,7 +1589,7 @@ end
 
 search = function(state)
   if not note_search_step(state) then
-    return nil, Proof.new(), true
+    return nil, {}, true
   end
 
   while true do
@@ -1625,13 +1626,13 @@ local function publish_frontiers(state, result)
   Proof.ensure(state.engine)
   local published = Proof.frontiers(state.intents, state.roots, result and result.certificate)
   for request, frontier in pairs(published) do Proof.publish(state.engine, request, frontier) end
-  local snapshot = Proof.capture(state.engine, state, result and result.certificate, published)
+  local snapshot = Proof.capture(state.engine, state, result and result.certificate)
   if state.resumable then state.frontier_snapshot = snapshot end
   local focus = published[state.focus]
   if focus and result and result.retry then
     focus.retry = true
     focus.snapshot = snapshot
-    focus.certificate = result.certificate or focus.certificate
+    focus.interests = Proof.interests(result.certificate) or focus.interests
   end
   return snapshot
 end

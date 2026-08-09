@@ -222,7 +222,7 @@ function External.external_feed(runtime, resource)
   return Feed.for_resource(runtime, resource)
 end
 
-local function mutate(runtime, feed, action, expectation, dirty_reason, apply, ...)
+local function mutate(runtime, feed, action, expectation, apply, ...)
   runtime:_check_not_failed(3)
   runtime:_require_driver_call(action, 3)
   if not Feed.is_feed(feed) then error(expectation, 3) end
@@ -230,18 +230,17 @@ local function mutate(runtime, feed, action, expectation, dirty_reason, apply, .
   apply(feed, ...)
   local engine = runtime.engine
   engine.epoch = engine.epoch + 1
-  Proof.touch_resource(engine, feed.resource, dirty_reason)
+  Proof.touch_resource(engine, feed.resource)
   return feed.resource
 end
 
 function External.deliver(runtime, feed, ...)
-  return mutate(runtime, feed, 'external delivery', 'External.deliver expects an ExternalFeed',
-    'external-delivery', Feed._deliver, ...)
+  return mutate(runtime, feed, 'external delivery', 'External.deliver expects an ExternalFeed', Feed._deliver, ...)
 end
 
 function External.clear(runtime, feed, ...)
   return mutate(runtime, feed, 'clear external resource',
-    'External.clear expects an ExternalFeed', 'external-clear', Feed._clear, ...)
+    'External.clear expects an ExternalFeed', Feed._clear, ...)
 end
 
 function External.signal(runtime)

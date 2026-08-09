@@ -100,4 +100,24 @@ do
   eq(counter(rt, 'searches'), 2, 'each root is still evaluated when needed')
 end
 
+
+-- One intent may carry both a location and an independent resource dependency.
+-- Certificate de-duplication must preserve both facts.
+do
+  local Proof = require('fibers.internal.proof')
+  local location, resource = { version = 2 }, { version = 3 }
+  local intent = {
+    kind = 'transition', request = {}, activation = {}, observed_version = 2,
+    spec = { location = location, resource = resource },
+  }
+  local certificate = Proof.from_intents({ intent })
+  local seen_location, seen_resource = false, false
+  for i = 1, #certificate[1], 7 do
+    local class, object = certificate[1][i + 2], certificate[1][i + 3]
+    seen_location = seen_location or class == 'location' and object == location
+    seen_resource = seen_resource or class == 'resource' and object == resource
+  end
+  assert(seen_location and seen_resource, 'one intent must retain distinct location and resource dependencies')
+end
+
 print('tests/kernel/test_proof_index.lua: ok')
