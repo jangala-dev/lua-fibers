@@ -80,10 +80,7 @@ function M.location(owner, opts)
   Contract.optional_function(opts.clone_value, 'Facility.location clone_value', 2)
   Contract.optional_boolean(opts.put_equal, 'Facility.location put_equal', 2)
   Contract.optional_boolean(opts.remove_idempotent, 'Facility.location remove_idempotent', 2)
-  local location_opts = {}
-  for key, value in pairs(opts) do location_opts[key] = value end
-  location_opts.owner = owner
-  return Journal.new_location(location_opts)
+  return Journal.new_location(opts, owner)
 end
 
 M.ABSENT = Algebra.ABSENT
@@ -100,13 +97,12 @@ M.patch = {
   map_remove = function(key)
     return { kind = 'finite_map', ops = { { op = 'remove', key = key } } }
   end,
+  map_take = function(key)
+    return { kind = 'finite_map', ops = { { op = 'take', key = key } } }
+  end,
   -- A machine successor is compiled into a serial machine patch when staged.
   machine = function(value) return { kind = 'machine_value', value = value } end,
 }
-
-function M._normalise_supply(value, label, level)
-  return Algebra.normalise_supply(value, label or 'supply', (level or 1) + 1)
-end
 
 M.result = Operation.result
 M.pack = Values.pack
@@ -143,6 +139,10 @@ function M.replace(location, result, resource)
   )
 end
 
+function M.add(location, result, resource)
+  return Operation.patch(location, nil, result or M.result.boolean, resource, M.patch.add)
+end
+
 function M.presence_put(location, result, resource)
   return Operation.patch(
     location,
@@ -169,12 +169,6 @@ end
 function M.outcome_packed(patch, packed)
   if not is_pack(packed) then error('packed outcome requires a Fibers value pack', 2) end
   return { patch = patch, result = packed }
-end
-
-function M.outcome_result(patch, projection, value, leaf)
-  leaf = leaf or {}
-  leaf.result = projection or M.result.value
-  return { patch = patch, result = Operation.result_pack(leaf, value) }
 end
 
 local function state_spec(opts, transition, internal)

@@ -261,6 +261,26 @@ do
 end
 
 do
+  local flow = Flow.new(8):label('query-flow-change-effect')
+  local notified = 0
+  local rt = FibersRuntime.new()
+  rt.host_reactor = {
+    _notify_flow_changed = function()
+      notified = notified + 1
+    end,
+  }
+  local peeked
+  rt:spawn_raw(function()
+    rt:perform(flow:inlet():write_op('x'))
+    notified = 0
+    peeked = rt:perform(flow:outlet():peek_exactly_op(1))
+  end):label('query-flow-change')
+  assert_status(rt:run(), 'found')
+  assert_eq(peeked, 'x')
+  assert_eq(notified, 0, 'pure Flow query must not notify the reactor')
+end
+
+do
   local flow = Flow.new(0):label('losing-flow-change-effect')
   local notified = 0
   local rt = FibersRuntime.new()

@@ -67,8 +67,7 @@ RecoveryClaimKind = Effect.kind({
 })
 
 local function recovery_state(failure)
-  local accessor = type(failure) == 'table' and rawget(failure, RECOVERY_STATE) or nil
-  return type(accessor) == 'function' and accessor() or nil
+  return type(failure) == 'table' and rawget(failure, RECOVERY_STATE) or nil
 end
 
 local function item_label(item)
@@ -133,9 +132,7 @@ function ClosureFailure.new(token, failures, mark_error)
     token = token,
     authority = StateMachine.new(RECOVERY_AVAILABLE):label(token.id .. '-recovery'),
   }
-  rawset(failure, RECOVERY_STATE, function()
-    return recovery
-  end)
+  rawset(failure, RECOVERY_STATE, recovery)
   return failure
 end
 
@@ -367,7 +364,6 @@ local function ensure_progress(token)
     local record = token.records[i]
     local entry = {
       _fibers_value = true,
-      index = i,
       item = record.item,
       node = record.node,
       record = record,
@@ -441,7 +437,6 @@ local function run_step(ctx, token, entry, field, state_field, error_field, phas
   end
   entry[state_field] = 'failed'
   entry[error_field] = err
-  entry.last_failure_phase = phase
   update_state(entry)
   return false, err
 end
@@ -579,8 +574,7 @@ local function raise_failure(ctx, token, failures)
   error(ClosureFailure.new(token, failures, marked and nil or mark_error), 0)
 end
 
-local function run_token_inline(ctx, token, opts, after_finish)
-  opts = opts or {}
+local function run_token_inline(ctx, token, force, after_finish)
   if token.complete then
     error('Closure token has already completed', 2)
   end
@@ -605,7 +599,7 @@ local function run_token_inline(ctx, token, opts, after_finish)
 
     local ok, unexpected = Protected.pcall(function()
       with_closure_authority(ctx, function()
-        if opts.force then
+        if force then
           quiesce_pass(ctx, token, true)
         else
           quiesce_pass(ctx, token, false)
@@ -645,7 +639,7 @@ end
 function Closure._close_item_op(ctx, item, purpose, after_finish)
   require_context(ctx)
   return ctx:_store():_acquire_close_token_op(ctx, item, purpose):wrap(function(token)
-    return run_token_inline(ctx, token, nil, after_finish)
+    return run_token_inline(ctx, token, false, after_finish)
   end)
 end
 
@@ -659,7 +653,7 @@ local function recover_token_op(ctx, token, force, after_finish)
     error(action .. ' closure expects an incomplete started Closure token', 3)
   end
   return Op.always(token):wrap(function()
-    return run_token_inline(ctx, token, force and { force = true } or nil, after_finish)
+    return run_token_inline(ctx, token, force, after_finish)
   end)
 end
 

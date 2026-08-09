@@ -119,5 +119,4 @@ function Label.describe(value, fallback)
   return fallback
 end
 
-Label.method = method
 return Label

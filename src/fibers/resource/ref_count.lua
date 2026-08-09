@@ -64,10 +64,10 @@ function Handle:clone_op()
 end
 
 function Handle:close_op()
-  local close = self:active_op():and_then(Op.each({
+  local close = self:active_op():and_then(Op.each(
       self._active:write_op(false),
-      self._group._count:take_op(1),
-    }):map(function()
+      self._group._count:take_op(1)
+    ):map(function()
       return true
     end))
 
@@ -75,12 +75,6 @@ function Handle:close_op()
     return false
   end))
 end
-
-
-
-
-
-
 
 RefCount.Handle = Handle
 

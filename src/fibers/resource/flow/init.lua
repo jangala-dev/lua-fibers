@@ -197,7 +197,7 @@ local function transition(flow, rule, payload)
   payload = payload or {}
   payload.flow = flow
   local option = flow._state:transition_op(rule, payload)
-  if rule.mode == 'query' then return option end
+  if rule.rule_mode == 'inspect' then return option end
   return option:and_then(Op.guard(function(...)
     local result = Facility.pack(...)
     return Op.emit(Effect.of(Changed, { flow = flow })):map(function()

@@ -33,13 +33,16 @@ local function prefix_table(pattern)
   return prefix
 end
 
+
 local function copy_array(values)
+  if not values then return nil end
   local out = {}
   for i = 1, #values do out[i] = values[i] end
   return out
 end
 
 local function copy_searches(searches)
+  if not searches then return nil end
   local out = {}
   for pattern, search in pairs(searches) do
     out[pattern] = {
@@ -95,7 +98,7 @@ local function each(self, visit)
 end
 
 local function clear_searches(self)
-  self.searches, self.search_order = {}, {}
+  self.searches, self.search_order = nil, nil
 end
 
 local function touch(self, pattern)
@@ -109,11 +112,13 @@ local function touch(self, pattern)
 end
 
 local function cache(self, pattern, search)
-  if #self.search_order >= MAX_SEARCHES then
-    self.searches[table.remove(self.search_order, 1)] = nil
+  local searches, order = self.searches, self.search_order
+  if not searches then searches, order = {}, {}; self.searches, self.search_order = searches, order end
+  if #order >= MAX_SEARCHES then
+    searches[table.remove(order, 1)] = nil
   end
-  self.searches[pattern] = search
-  self.search_order[#self.search_order + 1] = pattern
+  searches[pattern] = search
+  order[#order + 1] = pattern
 end
 
 local function ensure_front(self)
@@ -122,7 +127,7 @@ local function ensure_front(self)
 end
 
 local function search_for(self, pattern)
-  local search = self.searches[pattern]
+  local search = self.searches and self.searches[pattern]
   if search then
     touch(self, pattern)
     return search
@@ -139,14 +144,7 @@ local function search_for(self, pattern)
 end
 
 function Rope.new(bytes)
-  local rope = setmetatable({
-    front = nil,
-    back = nil,
-    offset = 0,
-    len = 0,
-    searches = {},
-    search_order = {},
-  }, Rope)
+  local rope = setmetatable({ offset = 0, len = 0 }, Rope)
   if bytes and bytes ~= '' then rope:append(bytes) end
   return rope
 end
@@ -174,7 +172,9 @@ function Rope:append(bytes)
   assert(type(bytes) == 'string', 'Rope:append expects a string')
   if bytes == '' then return self end
   local base = self.len
-  for _, search in pairs(self.searches) do feed(search, bytes, base) end
+  if self.searches then
+    for _, search in pairs(self.searches) do feed(search, bytes, base) end
+  end
   self.back = node(bytes, self.back)
   self.len = self.len + #bytes
   return self

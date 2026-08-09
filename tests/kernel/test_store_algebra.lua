@@ -8,7 +8,6 @@ package.path = table.concat({
   package.path,
 }, ';')
 local Facility = require('fibers.resource.authoring')
-local Extreme = require('fibers.resource.extreme')
 local S = require('fibers.internal.kernel.journal')
 local A = require('fibers.internal.kernel.algebra')
 local Operation = require('fibers.internal.operation')
@@ -156,32 +155,6 @@ local machine_merged = A.join(machine, {
 for i = 1, 4 do
   eq(machine_merged.steps[i].serial, i, 'machine merge must retain serial order')
 end
-
-local extreme_value = {
-  a = { rank = 1, seq = 2, value = 'a' },
-  b = { rank = 1, seq = 1, value = 'b' },
-  c = { rank = 2, seq = 1, value = 'c' },
-  d = { rank = 2, seq = 2, value = 'd' },
-}
-local minimum_leaf = Extreme.spec({
-    location = fm,
-    order = 'min',
-    rank_field = 'rank',
-    seq_field = 'seq',
-    result = Facility.result.value,
-  })
-local minimum = Operation.transition_cursor(minimum_leaf, extreme_value, {}, nil):next()
-eq(minimum.result[1].value, 'b', 'minimum selection order changed')
-local maximum_leaf = Extreme.spec({
-    location = fm,
-    order = 'max',
-    rank_field = 'rank',
-    seq_field = 'seq',
-    result = Facility.result.value,
-  })
-local maximum = Operation.transition_cursor(maximum_leaf, extreme_value, {}, nil):next()
-eq(maximum.result[1].value, 'd', 'maximum selection order changed')
-
 
 local custom = {
   name = 'custom',

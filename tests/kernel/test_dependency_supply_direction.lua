@@ -61,10 +61,11 @@ local producer_meta = Operation.shape(cell:transition_op(producer))
 local access = assert(producer_meta.locations[cell._location])
 assert(access.supplies and access.supplies.any)
 
+local invalid_supply = StateMachine.rule(nil, 'update', function(value)
+  return StateMachine.Ready.write(value, true)
+end, 'together', { any = true, up = true })
 rejected(function()
-  StateMachine.rule(nil, 'update', function(value)
-    return StateMachine.Ready.write(value, true)
-  end, 'together', { any = true, up = true })
+  cell:transition_op(invalid_supply)
 end, 'cannot combine any')
 
 -- Dynamic residual dependencies are discovered by execution. A fallback may

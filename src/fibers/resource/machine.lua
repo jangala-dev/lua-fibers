@@ -18,6 +18,13 @@ local MODES = {
 local WAIT = { _fibers_cell_wait = true }
 local Ready = {}
 
+local function copy_supply(value)
+  if type(value) ~= 'table' then return value end
+  local out = {}
+  for key, present in pairs(value) do out[key] = present end
+  return out
+end
+
 function Ready.write(value, ...)
   return { _fibers_cell_ready = true, writes = true, value = value, pack = Facility.pack(...) }
 end
@@ -41,9 +48,7 @@ local function rule(name, mode, step, visibility, supply, order, probe, validate
     validate = validate,
     serial_order = order or 0,
     visibility = visibility,
-    supply = semantics.mode == 'change'
-      and Facility._normalise_supply(supply or 'none', 'machine rule supply', 3)
-      or {},
+    supply = semantics.mode == 'change' and copy_supply(supply or 'none') or 'none',
   }
 end
 
@@ -155,9 +160,7 @@ end
 
 -- Used by external machine-backed resources while retaining the same closed
 -- Machine rule protocol.
-function Machine._compile(location, resource, transition, opts)
-  return compile_transition(location, resource, transition, opts)
-end
+Machine._compile = compile_transition
 
 Machine.Kind = Kind
 
