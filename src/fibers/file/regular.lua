@@ -568,32 +568,21 @@ local function drive_file(file, opts)
       break
     end
     local ok, value, err = Protected.pcall(execute_request, file, provider, backend, request)
+    local request_error
     if not ok then
-      publish(
-        rt,
-        request.completion,
-        false,
-        IO.protocol_error('file', request.kind, value, { path = file._path })
-      )
+      request_error = IO.protocol_error('file', request.kind, value, { path = file._path })
+      publish(rt, request.completion, false, request_error)
     elseif value == READ_LINE_EOF then
       publish(rt, request.completion, true, nil)
     elseif value == nil or value == false then
-      publish(
-        rt,
-        request.completion,
-        false,
-        IOError.normalise(err, { domain = 'file', action = request.kind, path = file._path })
-      )
+      request_error = IOError.normalise(err, { domain = 'file', action = request.kind, path = file._path })
+      publish(rt, request.completion, false, request_error)
     else
       publish(rt, request.completion, true, value, err)
     end
     if request.kind == 'close' then
-      publish(
-        rt,
-        file._closed_completion,
-        value ~= nil and value ~= false,
-        value ~= nil and value ~= false and true or err
-      )
+      local closed = ok and value ~= nil and value ~= false
+      publish(rt, file._closed_completion, closed, closed and true or request_error)
       return
     end
   end

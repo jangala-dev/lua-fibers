@@ -603,6 +603,28 @@ do
   end, { host = host })
 end
 
+-- A one-candidate cap cannot reserve a second-family slot. Keep the first
+-- usable candidate rather than dropping the race while the other family is
+-- unresolved.
+do
+  local host = SimulatedHost.new({
+    sockets = true,
+    resolver_records = {
+      ['single-candidate.test'] = { { kind = 'inet6', host = '::1' } },
+    },
+  })
+  fibers.run(function()
+    local connection, err = socket.connect(socket.name_endpoint('single-candidate.test', 6553), {
+      attempt_delay = 0.010,
+      maximum_candidates = 1,
+    })
+    assert_eq(connection, nil)
+    assert_truthy(HostError.is(err, 'connect_failed'))
+    assert_eq(#err.attempts, 1)
+    assert_eq(err.candidates_dropped, 0)
+  end, { host = host })
+end
+
 -- The general profile has no second four-attempt ceiling. Every retained
 -- destination may start at its stagger time even while earlier sockets remain
 -- black-holed.

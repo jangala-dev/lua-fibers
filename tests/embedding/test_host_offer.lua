@@ -12,6 +12,8 @@ local Reactor = require('fibers.io.reactor')
 local Runtime = require('fibers.runtime')
 local FakeHandle = require('tests.support.fake_handle')
 local State = require('tests.support.resource_state')
+local Signal = require('fibers.resource.signal')
+local UnsafeExternalMutation = require('fibers.embed.unsafe_external_mutation')
 
 local function assert_eq(a, b, message)
   if a ~= b then error((message or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a), 2) end
@@ -200,6 +202,41 @@ do
     fibers.perform(source:open_op(scope))
     assert_eq(fibers.perform(source:result_op()), 'complete')
     assert_eq(pulls, 3)
+  end, { host = host })
+end
+
+-- A reactor callback may hand host completion data to an external Signal
+-- without entering Fibers scheduling. The waiting fiber observes that delivery
+-- after the non-yielding callback has returned.
+do
+  local host = SimulatedHost.new({ auto_advance_time = true })
+  fibers.run(function()
+    local handle = FakeHandle.new({
+      host = host,
+      label = 'callback-signal-handle',
+      manual_readiness = true,
+      initial_writable = false,
+    })
+    handle:bind_runtime(Runtime.current())
+    local signal = Signal.new():label('callback-signal')
+    local entry = Reactor.for_runtime():callback({
+      label = 'callback-signal-entry',
+      mode = 'read',
+      handle = handle,
+      callback = function(registered_handle)
+        registered_handle:clear_readable()
+        UnsafeExternalMutation.deliver(signal, 37)
+        return true
+      end,
+    })
+    fibers.perform(entry:register_op())
+    Sleep.sleep(0.001)
+    handle:mark_readable()
+    Reactor.for_runtime():hint(handle:readiness_key(), 'read')
+    assert_eq(fibers.perform(signal:wait_op()), 37, 'reactor callback signal delivery')
+    fibers.perform(entry:retire_op('callback signal test complete'))
+    assert(fibers.perform(entry:retired_op()))
+    handle:close('callback signal test complete')
   end, { host = host })
 end
 

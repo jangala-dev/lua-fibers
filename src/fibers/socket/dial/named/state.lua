@@ -266,7 +266,9 @@ local function order_candidates(race, current, family, values)
     end
   end
   local other = family == 'inet6' and 'inet4' or 'inet6'
-  local reserve_other = not current.families[other].done and #current.families[other].addresses == 0
+  local reserve_other = race.opts.maximum_candidates > 1
+    and not current.families[other].done
+    and #current.families[other].addresses == 0
   local limit = race.opts.maximum_candidates - (reserve_other and 1 or 0)
   for i = 1, #incoming do
     local address = incoming[i]

@@ -345,6 +345,41 @@ function tests.memory_provider_keeps_open_inode_after_rename_and_unlink()
   end, { host = host_with_provider(provider) })
 end
 
+function tests.memory_provider_zero_fills_sparse_writes()
+  local provider = MemoryProvider.new()
+  fibers.run(function()
+    local opened = assert(file.open('/sparse', 'w+b', {}))
+    assert(opened:seek('set', 3) == 3)
+    assert(opened:write('x') == 1)
+    assert(opened:seek('set', 0) == 0)
+    assert(opened:read_exactly(4) == '\0\0\0x')
+    assert(opened:close())
+  end, { host = host_with_provider(provider) })
+end
+
+function tests.thrown_backend_close_is_not_published_as_success()
+  local provider = memory_provider()
+  local original_open = provider.open
+  function provider:open(path, mode, opts)
+    local backend, err = original_open(self, path, mode, opts)
+    if not backend then return nil, err end
+    function backend:close()
+      error('synthetic backend close failure')
+    end
+    return backend
+  end
+
+  local closed, close_err
+  local result = fibers.try_run(function()
+    local opened = assert(file.open('/close-throws', 'w+b', {}))
+    closed, close_err = opened:close()
+  end, { host = host_with_provider(provider) })
+
+  assert(closed == nil)
+  assert(HostError.is(close_err, 'protocol'))
+  assert(result.ok == false)
+end
+
 function tests.file_close_waits_for_private_lifetime_descendants()
   local provider = memory_provider()
   local original_open = provider.open

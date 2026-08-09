@@ -4,9 +4,9 @@
 -- 16-byte CQE ABI. It supports the complete version-1 file surface without
 -- issuing blocking filesystem calls on the runtime thread.
 
-local Completion = require('fibers.resource.completion')
+local Signal = require('fibers.resource.signal')
 local IOError = require('fibers.io.error')
-local IO = require('fibers.io.facility')
+local UnsafeExternalMutation = require('fibers.embed.unsafe_external_mutation')
 local Reactor = require('fibers.io.reactor')
 local perform = require('fibers.perform')
 
@@ -33,6 +33,7 @@ local function cdef(ffi)
       typedef unsigned short fibers_u16;
       typedef unsigned int fibers_u32;
       typedef signed int fibers_i32;
+      typedef signed long long fibers_i64;
       typedef unsigned long fibers_uintptr;
       typedef unsigned long long fibers_u64;
       struct fibers_io_sqring_offsets {
@@ -54,6 +55,8 @@ local function cdef(ffi)
       int munmap(void *, unsigned long);
       int close(int);
       char *strerror(int);
+      fibers_u32 __atomic_load_4(const volatile void *, int);
+      void __atomic_store_4(volatile void *, fibers_u32, int);
     ]])
   end)
   if ok then
@@ -74,22 +77,69 @@ end
 local function i32(ffi, p, o)
   return ffi.cast('fibers_i32*', ptr_add(ffi, p, o))
 end
+local function i64(ffi, p, o)
+  return ffi.cast('fibers_i64*', ptr_add(ffi, p, o))
+end
 local function u64(ffi, p, o)
   return ffi.cast('fibers_u64*', ptr_add(ffi, p, o))
+end
+
+-- cffi-lua represents unsigned 64-bit scalars as userdata and tonumber()
+-- returns nil for them. Values which Fibers needs as Lua integers are within
+-- the signed 64-bit range, so read the same ABI bits through an i64 view.
+local function i64_number(ffi, p, o)
+  return tonumber(i64(ffi, p, o)[0])
+end
+
+local ATOMIC_ACQUIRE, ATOMIC_RELEASE = 2, 3
+
+local function atomic_u32(ffi, arch)
+  if type(ffi.load) == 'function' then
+    local loaded, atomic = pcall(ffi.load, 'atomic')
+    if not loaded then loaded, atomic = pcall(ffi.load, 'libatomic.so.1') end
+    if loaded then
+      local symbols = pcall(function()
+        return atomic.__atomic_load_4, atomic.__atomic_store_4
+      end)
+      if symbols then
+        return {
+          library = atomic,
+          load_acquire = function(ptr)
+            return tonumber(atomic.__atomic_load_4(ptr, ATOMIC_ACQUIRE))
+          end,
+          store_release = function(ptr, value)
+            atomic.__atomic_store_4(ptr, value, ATOMIC_RELEASE)
+          end,
+        }
+      end
+    end
+  end
+
+  -- x86 TSO plus volatile ring indices is sufficient for the acquire/release
+  -- relations used by the io_uring rings. Weak-memory targets require a real
+  -- atomic primitive; without one the provider is disabled and the host falls
+  -- back to the worker backend.
+  if arch == 'x64' or arch == 'x86' then
+    return {
+      load_acquire = function(ptr) return tonumber(ptr[0]) end,
+      store_release = function(ptr, value) ptr[0] = value end,
+    }
+  end
+  return nil, 'libatomic is required for io_uring ring ordering on ' .. tostring(arch)
 end
 
 local function setup_ring(ffi, C, number, entries, params)
   return tonumber(C.syscall(ffi.cast('long', number), ffi.cast('unsigned int', entries), params))
 end
 
-local function enter_ring(ffi, C, number, fd, to_submit)
+local function enter_ring(ffi, C, number, fd, to_submit, min_complete, flags)
   return tonumber(
     C.syscall(
       ffi.cast('long', number),
       ffi.cast('int', fd),
-      ffi.cast('unsigned int', to_submit),
-      ffi.cast('unsigned int', 0),
-      ffi.cast('unsigned int', 0),
+      ffi.cast('unsigned int', to_submit or 0),
+      ffi.cast('unsigned int', min_complete or 0),
+      ffi.cast('unsigned int', flags or 0),
       ffi.cast('void*', nil),
       ffi.cast('unsigned long', 0)
     )
@@ -100,6 +150,7 @@ local IORING_OFF_SQ_RING = 0
 local IORING_OFF_CQ_RING = 0x08000000
 local IORING_OFF_SQES = 0x10000000
 local IORING_FEAT_SINGLE_MMAP = 1
+local IORING_ENTER_GETEVENTS = 1
 local PROT_READ, PROT_WRITE = 1, 2
 local MAP_SHARED = 1
 local AT_FDCWD = -100
@@ -183,6 +234,8 @@ function Provider.probe(opts)
   if not setup then
     return false, 'unsupported architecture'
   end
+  local atomics, atomic_err = atomic_u32(ffi, arch)
+  if not atomics then return false, atomic_err end
   local params = ffi.new('struct fibers_io_uring_params[1]')
   local fd = setup_ring(ffi, C, setup, 2, params)
   if fd and fd >= 0 then
@@ -205,13 +258,15 @@ function Provider.new(runtime, opts)
   if not setup_nr then
     return nil, 'unsupported io_uring architecture'
   end
+  local atomics, atomic_err = atomic_u32(ffi, arch)
+  if not atomics then return nil, atomic_err end
   local self = setmetatable({
-    runtime = runtime,
     ffi = ffi,
     C = C,
     fd_provider = assert(opts.fd),
     setup_nr = setup_nr,
     enter_nr = enter_nr,
+    atomics = atomics,
     pending = {},
     next_id = 0,
     closed = false,
@@ -266,39 +321,89 @@ function Provider.new(runtime, opts)
   self.cq_tail = u32(ffi, self.cq_ring, p.cq_off.tail)
   self.cq_mask = u32(ffi, self.cq_ring, p.cq_off.ring_mask)
   self.cqes = ptr_add(ffi, self.cq_ring, p.cq_off.cqes)
-  local handle, err = self.fd_provider.new(
-    fd,
-    { host = runtime.host, name = 'file-io-uring', nonblocking = true, cloexec = true }
-  )
+  local handle, err = self.fd_provider.new(fd, {
+    host = runtime.host,
+    nonblocking = true,
+    cloexec = true,
+  })
   if not handle then
     self:shutdown()
     return nil, err
   end
   self.handle = handle
   self.reactor = Reactor.for_runtime(runtime)
-  self.completion_entry = self.reactor:callback({
-    label = 'file-io-uring-completions',
-    mode = 'read',
-    handle = handle,
-    callback = function(registered_handle)
-      if type(registered_handle.clear_readable) == 'function' then
-        registered_handle:clear_readable()
-      end
-      self:_drain()
-      return true
-    end,
-  })
-  local registered, register_err = runtime:_perform_current(self.completion_entry:register_op(), nil, true)
-  if not registered then
-    self.completion_entry = nil
-    self:shutdown()
-    return nil, register_err
-  end
   return self
 end
 
 function Provider:is_supported()
   return not self.closed
+end
+
+local function completion_entry_live(entry)
+  return entry ~= nil and not entry.retired
+end
+
+function Provider:_retire_completion_entry_if_idle(reason)
+  if next(self.pending) ~= nil then return true end
+  local entry = self.completion_entry
+  if not completion_entry_live(entry) then
+    self.completion_entry = nil
+    return true
+  end
+  local ok, err = perform(entry:retire_op(reason or 'io_uring idle'))
+  if self.completion_entry == entry then self.completion_entry = nil end
+  return ok, err
+end
+
+function Provider:_retire_completion_entry_direct_if_idle(reason)
+  if next(self.pending) ~= nil then return true end
+  local entry = self.completion_entry
+  if not completion_entry_live(entry) then
+    self.completion_entry = nil
+    return true
+  end
+  -- Reactor callbacks cannot perform. Direct retirement is safe here because
+  -- the reactor task is itself executing and will observe the now-empty entry
+  -- set before it waits again.
+  local ok, err = self.reactor:_retire_entry(entry, reason or 'io_uring idle')
+  if self.completion_entry == entry then self.completion_entry = nil end
+  return ok, err
+end
+
+function Provider:_ensure_completion_entry()
+  if completion_entry_live(self.completion_entry) then return true end
+
+  local entry
+  entry = self.reactor:callback({
+    label = 'file-io-uring-completions',
+    mode = 'read',
+    handle = self.handle,
+    callback = function(registered_handle)
+      if type(registered_handle.clear_readable) == 'function' then
+        registered_handle:clear_readable()
+      end
+      local drained = self:_drain()
+      if drained == 0 then
+        -- Ring-fd readiness may report pending io_uring task-work before a CQE
+        -- is visible. Entering with GETEVENTS and min_complete=0 is non-blocking
+        -- and gives the kernel the required completion-side transition.
+        local flushed, flush_err = self:_flush_completions()
+        if not flushed then return nil, flush_err end
+        self:_drain()
+      end
+      local retired, retire_err = self:_retire_completion_entry_direct_if_idle()
+      if not retired then return nil, retire_err end
+      return true
+    end,
+  })
+  self.completion_entry = entry
+  local runtime = self.reactor.runtime
+  local registered, register_err = runtime:_perform_current(entry:register_op(), nil, true)
+  if not registered then
+    self.completion_entry = nil
+    return nil, register_err
+  end
+  return true
 end
 function Provider:shutdown()
   if self.closed then
@@ -331,12 +436,14 @@ function Provider:_submit(setup, keep)
   if self.closed then
     return nil, IOError.closed('file', 'submit')
   end
-  local head = tonumber(self.sq_head[0])
+  -- The kernel publishes khead after consuming SQ entries. Acquire it before
+  -- deciding whether this userspace producer has room for another SQE.
+  local head = self.atomics.load_acquire(self.sq_head)
   local tail = tonumber(self.sq_tail[0])
   local entries = tonumber(self.sq_entries[0])
   if tail - head >= entries then
     self:_drain()
-    head = tonumber(self.sq_head[0])
+    head = self.atomics.load_acquire(self.sq_head)
     tail = tonumber(self.sq_tail[0])
     if tail - head >= entries then
       return nil, IOError.system('file', 'submit', 'io_uring submission queue is full', 'EBUSY')
@@ -349,43 +456,103 @@ function Provider:_submit(setup, keep)
   local id = self.next_id
   setup(sqe, id)
   u64(self.ffi, sqe, 32)[0] = id
-  self.sq_array[index] = index
-  self.sq_tail[0] = tail + 1
-  local req = { id = id, completion = Completion.new():label('file-uring-' .. id), keep = keep }
+
+  -- Do not keep an idle ring registered with the host reactor. Registration is
+  -- created only for an actual pending request, so provider caching cannot keep
+  -- an otherwise quiescent runtime alive.
+  local watching, watch_err = self:_ensure_completion_entry()
+  if not watching then return nil, watch_err end
+
+  -- CQ delivery originates in the reactor's non-yielding host-callback phase.
+  -- Use an externally fed Signal as the boundary rather than publishing a
+  -- Completion from that callback (which would enter Fibers scheduling).
+  local req = { id = id, signal = Signal.new():label('file-uring-' .. id), keep = keep }
   self.pending[id] = req
-  local submitted = enter_ring(self.ffi, self.C, self.enter_nr, self.fd, 1)
+  self.sq_array[index] = index
+  -- Publish the SQE and array entry before advancing ktail. This mirrors the
+  -- release store used by liburing and is required on weak-memory targets.
+  self.atomics.store_release(self.sq_tail, tail + 1)
+  local submitted = enter_ring(self.ffi, self.C, self.enter_nr, self.fd, 1, 0, 0)
   if not submitted or submitted < 1 then
-    self.sq_tail[0] = tail
+    self.atomics.store_release(self.sq_tail, tail)
     self.pending[id] = nil
     local eno = self.ffi.errno and self.ffi.errno() or nil
-    return nil, IOError.system('file', 'submit', 'io_uring_enter failed', nil, eno)
+    local failure = IOError.system('file', 'submit', 'io_uring_enter failed', nil, eno)
+    local retired, retire_err = self:_retire_completion_entry_if_idle('io_uring submit failed')
+    if not retired then
+      return nil, IOError.with_cleanup(
+        failure, 'file', 'submit',
+        'io_uring submission failed and completion watcher cleanup was incomplete',
+        { retire_err }
+      )
+    end
+    return nil, failure
   end
   return req
 end
 
+function Provider:_flush_completions()
+  local entered = enter_ring(
+    self.ffi, self.C, self.enter_nr, self.fd, 0, 0, IORING_ENTER_GETEVENTS
+  )
+  if entered == nil or entered < 0 then
+    local eno = self.ffi.errno and self.ffi.errno() or nil
+    return nil, IOError.system(
+      'file', 'completion', 'io_uring completion flush failed', nil, eno
+    )
+  end
+  return true
+end
+
+-- Drain is safe in both ordinary Fibers execution and the reactor's
+-- non-yielding callback phase: it performs only ring reads and authorised
+-- external Signal delivery. It must not call perform or masked_perform.
 function Provider:_drain()
   local head = tonumber(self.cq_head[0])
-  local tail = tonumber(self.cq_tail[0])
-  local rt = self.runtime
+  -- The kernel publishes CQEs before advancing ktail. Match liburing's
+  -- acquire load here so CQE reads cannot move before observing that tail.
+  local tail = self.atomics.load_acquire(self.cq_tail)
+  local drained = 0
   while head ~= tail do
     local index = head % (tonumber(self.cq_mask[0]) + 1)
     local cqe = ptr_add(self.ffi, self.cqes, index * 16)
-    local id = tonumber(u64(self.ffi, cqe, 0)[0])
+    -- user_data contains Fibers-generated positive request IDs. Read it as
+    -- signed 64-bit so both LuaJIT FFI and cffi-lua convert it to a Lua integer.
+    local id = i64_number(self.ffi, cqe, 0)
     local res = tonumber(i32(self.ffi, cqe, 8)[0])
-    local req = self.pending[id]
-    if req then
-      self.pending[id] = nil
-      req.keep = nil
-      IO.masked_perform(rt, req.completion:publish_success_op(res))
+    if id == nil or res == nil then
+      error(IOError.protocol('file', 'completion', 'io_uring CQE could not be converted to Lua integers', {
+        user_data = tostring(i64(self.ffi, cqe, 0)[0]),
+        result = tostring(i32(self.ffi, cqe, 8)[0]),
+      }), 0)
     end
+    local req = self.pending[id]
+    if not req then
+      error(IOError.protocol('file', 'completion', 'io_uring returned an unknown request id', {
+        request_id = id,
+        result = res,
+      }), 0)
+    end
+    self.pending[id] = nil
+    req.keep = nil
+    UnsafeExternalMutation.deliver(req.signal, res)
     head = head + 1
+    drained = drained + 1
   end
-  self.cq_head[0] = head
+  -- Release the consumed head only after every CQE has been read. This keeps
+  -- the kernel from reusing a slot before userspace has finished consuming it.
+  self.atomics.store_release(self.cq_head, head)
+  return drained
 end
 
 function Provider:_await(req)
   self:_drain()
-  return perform(req.completion:result_op())
+  local retired, retire_err = self:_retire_completion_entry_if_idle()
+  if not retired then return nil, retire_err end
+  local result = perform(req.signal:wait_op())
+  retired, retire_err = self:_retire_completion_entry_if_idle()
+  if not retired then return nil, retire_err end
+  return result
 end
 
 local function set_common(self, sqe, opcode, fd)
@@ -495,7 +662,16 @@ function Backend:_size()
   if res < 0 then
     return nil, result_error(p, 'stat', res, { path = self.path })
   end
-  return tonumber(u64(p.ffi, stat, 40)[0])
+  -- statx.stx_size is unsigned in the kernel ABI, but Fibers positions must
+  -- fit in the host Lua integer domain. cffi-lua does not tonumber() uint64 cdata,
+  -- so read the same bits through a signed 64-bit view and reject overflow.
+  local size = i64_number(p.ffi, stat, 40)
+  if size == nil or size < 0 then
+    return nil, IOError.protocol('file', 'stat', 'file size exceeds Lua integer range', {
+      path = self.path,
+    })
+  end
+  return size
 end
 function Backend:seek(whence, offset)
   local base = 0

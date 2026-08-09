@@ -110,6 +110,9 @@ function Backend:write(bytes)
   end
   local current = data(self)
   local before = current:sub(1, self.position)
+  if bytes ~= '' and self.position > #current then
+    before = current .. string.rep('\0', self.position - #current)
+  end
   local after = current:sub(self.position + #bytes + 1)
   self.inode.bytes = before .. bytes .. after
   self.position = self.position + #bytes
