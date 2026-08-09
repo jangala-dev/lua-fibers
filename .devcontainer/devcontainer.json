@@ -11,5 +11,9 @@
   },
   "remoteUser": "vscode",
   "updateRemoteUserUID": true,
-  "postCreateCommand": "sudo /bin/sh '${containerWorkspaceFolder}/.devcontainer/bootstrap.sh'"
+  "postCreateCommand": "sudo /bin/sh '${containerWorkspaceFolder}/.devcontainer/bootstrap.sh'",
+  "runArgs": [
+    "--security-opt",
+    "seccomp=unconfined"
+  ]
 }

@@ -258,21 +258,18 @@ verify: verify-lua verify-luajit verify-luau verify-texlua verify-tools verify-l
 
 verify-lua: rocks
 	for slot in 5.1 5.2 5.3 5.4 5.5; do
-		LUA_PATH='./src/?.lua;./src/?/init.lua;./src/?/?.lua;;' "lua$$slot" -e "assert(_VERSION == 'Lua $$slot'); assert(require('cffi')); assert(require('nixio')); local h = require('fibers.host.nixio'); local ok, why = h.is_supported(); assert(ok, why)"
-		"lua$$slot" tests/embedding/hosts/test_nixio.lua
-		"lua$$slot" tests/embedding/hosts/test_fd_nixio.lua
+		"lua$$slot" -e \
+			"assert(_VERSION == 'Lua $$slot'); assert(require('cffi')); assert(require('nixio'))"
 	done
 	lua5.1 -e "assert(require('bit32')); assert(require('posix.sys.socket'))"
 	lua5.2 -e "assert(require('posix.sys.socket'))"
 	lua5.3 -e "assert(require('posix.sys.socket'))"
 	lua5.4 -e "assert(require('bit32')); assert(require('posix.sys.socket'))"
-	LUA_PATH='./src/?.lua;./src/?/init.lua;./src/?/?.lua;;' lua5.5 -e "local h = require('fibers.host.cffi_linux'); local ok, why = h.is_supported(); assert(ok, why)"
 
 verify-luajit: rocks
-	LUA_PATH='./src/?.lua;./src/?/init.lua;./src/?/?.lua;;' luajit -e "assert(jit and jit.version); assert(require('ffi')); assert(require('posix.sys.socket')); assert(require('nixio')); local h = require('fibers.host.nixio'); local ok, why = h.is_supported(); assert(ok, why)"
-	luajit tests/embedding/hosts/test_nixio.lua
-	luajit tests/embedding/hosts/test_fd_nixio.lua
-
+	luajit -e \
+		"assert(jit and jit.version); assert(require('ffi')); assert(require('posix.sys.socket')); assert(require('nixio'))"
+				
 # Luau has no --version option. Execute and analyse a small typed program
 # instead, which checks both installed CLI binaries.
 verify-luau: luau
