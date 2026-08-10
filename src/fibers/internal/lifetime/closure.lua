@@ -20,6 +20,7 @@ local Effect = require('fibers.effect')
 local Protected = require('fibers.protected')
 local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
+local TrustedState = require('fibers.internal.trusted_state')
 
 local Closure = {}
 local unpack_ = table.unpack or unpack
@@ -130,7 +131,7 @@ function ClosureFailure.new(token, failures, mark_error)
   }, ClosureFailure)
   local recovery = {
     token = token,
-    authority = StateMachine.new(RECOVERY_AVAILABLE):label(token.id .. '-recovery'),
+    authority = TrustedState.machine(RECOVERY_AVAILABLE):label(token.id .. '-recovery'),
   }
   rawset(failure, RECOVERY_STATE, recovery)
   return failure

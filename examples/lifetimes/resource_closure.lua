@@ -21,8 +21,8 @@ Lifetime.define(handle, {
     finish_op = function(_ctx, entry, close)
       return closed:write_op({
         closed = true,
-        resource = entry.item,
-                reason = close.reason,
+        resource = entry.item.name,
+        reason = close.reason,
       })
     end,
   }),
@@ -38,7 +38,7 @@ end)
 
 assert(result.runtime_status.tag == 'found')
 assert(finished.closed == true)
-assert(finished.resource == handle)
+assert(finished.resource == 'demo-handle')
 assert(finished.reason == 'done')
 assert(lifetime_closed)
 

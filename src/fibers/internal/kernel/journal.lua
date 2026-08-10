@@ -160,6 +160,7 @@ function Journal.new_location(opts, owner)
     owner = owner or opts.owner,
     key = opts.key,
     clone_value = opts.clone_value,
+    value_equal = opts.value_equal,
     put_equal = opts.put_equal == true,
     remove_idempotent = opts.remove_idempotent ~= false,
   }

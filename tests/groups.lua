@@ -28,6 +28,7 @@ return {
     'tests/resources/test_lease_laws.lua',
     'tests/resources/test_event.lua',
     'tests/resources/test_cell.lua',
+    'tests/resources/test_machine_managed_values.lua',
     'tests/resources/test_state_resource_laws.lua',
     'tests/resources/test_standard_compounds.lua',
   },
@@ -133,6 +134,7 @@ return {
   internal = {
     'tests/internal/test_context.lua',
     'tests/internal/test_host_hold.lua',
+    'tests/internal/test_managed_value.lua',
     'tests/internal/test_package_structure.lua',
     'tests/internal/test_closed_op_conformance.lua',
     'tests/internal/test_io_audit.lua',

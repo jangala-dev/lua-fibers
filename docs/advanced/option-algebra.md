@@ -464,7 +464,7 @@ A facility cannot manufacture Retry or commit independently.
 
 ### Versioned locations
 
-A location contains an opaque committed value, a version and one fixed merge algebra. Current algebras are:
+A location contains one authoritative committed representation, a version and one fixed merge algebra. Public Cell and Machine locations expose that representation through the managed-value snapshot law; trusted facilities may use private identity-bearing representations behind the authoring boundary. Current algebras are:
 
 ```text
 replace

@@ -62,7 +62,7 @@ local function run_all(rt)
   return st
 end
 
--- Plain user tables are opaque values, not solver structure.
+-- Rendezvous payloads remain opaque identity-bearing values. Managed Cell values are snapshots.
 do
   local ch = Rendezvous.new():label('opaque-rendezvous')
   local value = { x = 42, nested = { y = 7 }, [1] = 'array-part' }
@@ -90,8 +90,10 @@ do
     got = rt:perform(cell:read_op())
   end):label('opaque-cell-fiber')
   run_all(rt)
-  assert_eq(got, value, 'cell stores user table opaquely')
+  assert_falsy(got == value, 'cell exposes an independent managed snapshot')
+  assert_falsy(got.nested == value.nested, 'cell recursively separates managed tables')
   assert_eq(got.x, 42, 'cell preserves keyed fields')
+  assert_eq(got.nested.y, 7, 'cell preserves nested managed values')
 end
 
 -- EventQueue consumption is journalled: a losing branch does not steal an occurrence.

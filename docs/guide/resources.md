@@ -25,6 +25,14 @@ channel:get()
 
 Capacity zero is synchronous rendezvous. Positive capacity is FIFO buffering.
 
+## Managed values
+
+`Cell` and public `Machine` state use one managed-value domain. A managed value is `nil`, a boolean, number or string, or a plain finite Lua table recursively containing managed values. Table keys must be scalar managed values. Tables with metatables, cycles, shared table references, table keys, functions, threads and userdata are rejected immediately.
+
+Managed tables have value semantics. Fibers captures a value when it enters managed state or is incorporated into a state-changing Option, and exposes an independent table when the value leaves managed state. Mutating a table passed to `Cell.new`, `write_op` or a Machine transition cannot change the corresponding managed fact or Option; mutating a value returned by `read` cannot change committed state. Structurally equal managed tables are equal even when they are different Lua table objects.
+
+Identity-bearing live objects belong in resources and Lifetimes rather than inside managed values. Store an identifier or plain description in managed state instead.
+
 ## Cells
 
 ```lua
@@ -49,7 +57,7 @@ state:expect_op('idle')
   :and_then(state:write_op('running'))
 ```
 
-`wait_until` returns the complete satisfying value. `match` uses a truthy leading matcher result and returns the remaining projected values. Cell contents are available only by performing or composing these operations. Public value/version fields are deliberately absent; version epochs are an implementation detail of transactional search.
+`wait_until` returns the complete satisfying managed value. `match` uses a truthy leading matcher result and returns the remaining projected values. Predicates and matchers receive independent managed-value snapshots, so accidental table mutation inside them cannot alter committed state. `wait_until` returns a fresh snapshot of the authoritative value that satisfied the predicate, not a predicate-mutated working copy. Cell contents are available only by performing or composing these operations. Public value/version fields are deliberately absent; version epochs are an implementation detail of transactional search.
 
 ## Counters and capacity
 

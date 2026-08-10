@@ -154,7 +154,115 @@ local function test_expect_nil_is_a_valid_projected_value()
   H.assert_eq(matched, true)
 end
 
+
+local function perform_one(op)
+  local rt, result = Runtime.new()
+  rt:spawn_raw(function() result = rt:perform(op) end)
+  H.assert_status(rt:run(), 'found')
+  return result
+end
+
+local function test_managed_values_capture_and_expose_tables()
+  local source = { state = 'idle', nested = { count = 1 } }
+  local cell = Cell.new(source)
+  source.nested.count = 99
+
+  local first = perform_one(cell:read_op())
+  H.assert_eq(first.nested.count, 1, 'constructor captures the initial value')
+  first.nested.count = 77
+  local second = perform_one(cell:read_op())
+  H.assert_eq(second.nested.count, 1, 'read results cannot mutate authoritative state')
+  H.assert_eq(cell._location.version, 0, 'ordinary Lua mutation cannot change a managed version')
+end
+
+local function test_write_and_expect_capture_occurrence_values()
+  local cell = Cell.new({ value = 0 })
+  local next_value = { value = 4 }
+  local write = cell:write_op(next_value)
+  next_value.value = 9
+  perform_one(write)
+  H.assert_eq(perform_one(cell:read_op()).value, 4, 'write option captures at construction')
+
+  local expected = { value = 4 }
+  local expect = cell:expect_op(expected)
+  expected.value = 100
+  H.assert_eq(perform_one(expect), true, 'expect uses captured structural equality')
+end
+
+local function test_wait_until_predicate_mutation_preserves_observed_result()
+  local cell = Cell.new({ ready = true, nested = { count = 1 } })
+  local observed = perform_one(cell:wait_until_op(function(value)
+    value.ready = false
+    value.nested.count = 50
+    return true
+  end))
+
+  H.assert_eq(observed.ready, true, 'wait_until returns the value which was observed')
+  H.assert_eq(observed.nested.count, 1, 'predicate-local mutation does not rewrite the returned observation')
+  H.assert_eq(perform_one(cell:read_op()).nested.count, 1, 'predicate mutation cannot escape')
+  H.assert_eq(cell._location.version, 0)
+end
+
+local function test_alias_mutation_cannot_change_certified_fallback()
+  local source = { gate = { ready = false } }
+  local expected = { gate = { ready = true } }
+  local cell = Cell.new(source)
+  local decision = cell:expect_op(expected)
+    :and_then(Op.always('primary'))
+    :or_else(Op.always('fallback'))
+
+  -- Mutate every ordinary-Lua alias which participated in construction or
+  -- observation. None of these mutations is a versioned managed-state change.
+  source.gate.ready = true
+  expected.gate.ready = false
+  local exposed = perform_one(cell:read_op())
+  exposed.gate.ready = true
+
+  H.assert_eq(perform_one(decision), 'fallback', 'aliases cannot invalidate certified present absence')
+  H.assert_eq(perform_one(cell:read_op()).gate.ready, false)
+  H.assert_eq(cell._location.version, 0)
+end
+
+local function test_equal_parallel_replacements_compose_structurally()
+  local cell = Cell.new({ value = 0 })
+  local rows
+  local rt = Runtime.new()
+  rt:spawn_raw(function()
+    rows = rt:perform(Op.each({ cell:write_op({ value = 1 }), cell:write_op({ value = 1 }) }))
+  end)
+  H.assert_status(rt:run(), 'found')
+  H.assert_eq(rows[1][1], true)
+  H.assert_eq(rows[2][1], true)
+  H.assert_eq(perform_one(cell:read_op()).value, 1)
+end
+
+local function test_managed_value_rejections_are_immediate()
+  local function rejects(fn, needle)
+    local ok, err = pcall(fn)
+    H.assert_eq(ok, false)
+    if not tostring(err):find(needle, 1, true) then error('unexpected managed-value error: ' .. tostring(err), 2) end
+  end
+
+  rejects(function() Cell.new({ callback = function() end }) end, 'forbidden function value')
+  rejects(function() Cell.new(setmetatable({ value = 1 }, {})) end, 'table with a metatable')
+  local cycle = {}; cycle.self = cycle
+  rejects(function() Cell.new(cycle) end, 'contains a cycle')
+  local shared = { value = 1 }
+  rejects(function() Cell.new({ a = shared, b = shared }) end, 'shared table reference')
+  local key = {}
+  rejects(function() Cell.new({ [key] = true }) end, 'forbidden table key')
+
+  local cell = Cell.new(0)
+  rejects(function() cell:write_op({ bad = coroutine.create(function() end) }) end, 'forbidden thread value')
+end
+
 local tests = {
+  test_managed_value_rejections_are_immediate,
+  test_equal_parallel_replacements_compose_structurally,
+  test_alias_mutation_cannot_change_certified_fallback,
+  test_wait_until_predicate_mutation_preserves_observed_result,
+  test_write_and_expect_capture_occurrence_values,
+  test_managed_values_capture_and_expose_tables,
   test_expect_nil_is_a_valid_projected_value,
   test_shared_change_leaf_keeps_occurrence_state_separate,
   test_wait_until_and_match_contracts,

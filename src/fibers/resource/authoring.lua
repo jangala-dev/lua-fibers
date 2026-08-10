@@ -38,6 +38,7 @@ local LOCATION_OPTIONS = {
   version = true,
   key = true,
   clone_value = true,
+  value_equal = true,
   put_equal = true,
   remove_idempotent = true,
 }
@@ -74,6 +75,7 @@ function M.location(owner, opts)
   if opts.algebra == nil then error('Facility.location requires algebra', 2) end
   if opts.version ~= nil then Contract.non_negative_integer(opts.version, 'Facility.location version', 2) end
   Contract.optional_function(opts.clone_value, 'Facility.location clone_value', 2)
+  Contract.optional_function(opts.value_equal, 'Facility.location value_equal', 2)
   Contract.optional_boolean(opts.put_equal, 'Facility.location put_equal', 2)
   Contract.optional_boolean(opts.remove_idempotent, 'Facility.location remove_idempotent', 2)
   return Journal.new_location(opts, owner)

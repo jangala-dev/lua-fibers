@@ -29,6 +29,7 @@ local Exit = Task.Exit
 local perform = require('fibers.perform')
 local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
+local TrustedState = require('fibers.internal.trusted_state')
 
 local next_process = 0
 
@@ -54,8 +55,8 @@ end
 
 function Lifecycle.new()
   local value = Label.attach(setmetatable({
-    state = Cell.new({ kind = 'created' }),
-    close_request = StateMachine.new({ requested = false, reason = nil }),
+    state = TrustedState.cell({ kind = 'created' }),
+    close_request = TrustedState.machine({ requested = false, reason = nil }),
   }, Lifecycle))
   Label.child(value.state, value, 'state')
   Label.child(value.close_request, value, 'close-request')

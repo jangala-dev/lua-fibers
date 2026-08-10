@@ -2,11 +2,11 @@
 
 local Channel = require('fibers.channel')
 local RefCount = require('fibers.resource.ref_count')
-local Cell = require('fibers.resource.cell')
 local Counter = require('fibers.resource.counter')
 local Op = require('fibers.op')
 local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
+local TrustedState = require('fibers.internal.trusted_state')
 
 local Mailbox = {}
 local Tx = {}
@@ -83,7 +83,7 @@ local function new_mailbox(capacity, accept, full)
     _accept = accept,
     _messages = Channel.new(capacity),
     _senders = refs,
-    _reason = Cell.new(NO_REASON),
+    _reason = TrustedState.cell(NO_REASON),
     _dropped = Counter.new(0),
   }, Mailbox))
   Label.child(mailbox._messages, mailbox, 'messages')

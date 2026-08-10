@@ -410,7 +410,7 @@ local Cell = require('fibers.resource.cell')
 
 Direct twins exist for `read`, `expect`, `write`, `wait_until` and `match`.
 
-Cell contents are available only through these operations. `.value` and `.version` are not part of the public semantics.
+Cell contents are available only through these operations. `.value` and `.version` are not part of the public semantics. Cell values use the single public managed-value domain: scalars and plain finite value trees. Fibers captures table values on entry and exposes independent table values on exit; unsupported identity-bearing or aliased structures are rejected immediately. `expect_op` uses structural managed-value equality. See [Resources](guide/resources.md#managed-values).
 
 ## `fibers.resource.counter`
 

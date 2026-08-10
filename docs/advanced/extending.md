@@ -516,16 +516,15 @@ the general authoring record and cannot change denotation.
 ```lua
 local Take = Machine.select('buffer.take', function(state, payload)
   if #state.items < payload.n then return Machine.Wait end
-  local successor = copy_state(state)
-  local value = remove_prefix(successor, payload.n)
-  return Machine.Ready.write(successor, value)
+  local value = remove_prefix(state, payload.n)
+  return Machine.Ready.write(state, value)
 end)
 ```
 
 Machine query, select and update rules compile to inspect or change rules over a
-machine location. Their seriality, write capability and totality are not
-separately authored. The supplied Machine rule name is retained on the compiled
-specification and in blocked-frontier diagnostics.
+machine location. Public Machines use the same managed-value domain as Cell. Each rule invocation receives an independent working state and an independent captured payload, so a rule may mutate its working table naturally before returning `Machine.Ready.write(state, ...)`. Query mutation is discarded; a losing candidate's working state is discarded; only the captured successor of a committed write becomes authoritative.
+
+Their seriality, write capability and totality are not separately authored. The supplied Machine rule name is retained on the compiled specification and in blocked-frontier diagnostics. Trusted facilities which use Machine as an internal façade may retain a private representation, but must preserve the same observable transactional laws at their public boundary.
 
 ### Linear exchange
 

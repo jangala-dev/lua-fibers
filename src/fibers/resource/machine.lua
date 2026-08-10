@@ -1,5 +1,7 @@
 local Facility = require('fibers.resource.authoring')
 local Cell = require('fibers.resource.cell')
+local StateResource = require('fibers.internal.state_resource')
+local ValueSemantics = require('fibers.internal.value_semantics')
 
 local unpack_ = table.unpack or unpack
 
@@ -98,8 +100,27 @@ end
 
 local function compile_transition(location, resource, transition, options)
   options = options or {}
+  -- Public Machines carry managed semantics. Closed resource façades which use
+  -- the private compiler directly own their representation and therefore retain
+  -- the trusted authoring contract unless they provide explicit semantics.
+  local semantics = options.semantics or resource._value_semantics or ValueSemantics.trusted
+  local transition_label = "Machine transition '" .. tostring(transition.name) .. "'"
+
+  local function callback_value(value)
+    return semantics.expose(value)
+  end
+
+  local function callback_argument(argument)
+    if argument == nil then return nil end
+    return semantics.expose(argument)
+  end
+
   local function step(value, argument, context)
-    local outcome = transition.step(value, argument_or_empty(argument), context)
+    local outcome = transition.step(
+      callback_value(value),
+      argument_or_empty(callback_argument(argument)),
+      context
+    )
     if type(outcome) == 'table' and outcome._fibers_cell_wait == true then return nil end
     if not (type(outcome) == 'table' and outcome._fibers_cell_ready == true) then
       error('machine transition must return Machine.Wait or Machine.Ready', 2)
@@ -107,12 +128,20 @@ local function compile_transition(location, resource, transition, options)
     if transition.rule_mode == 'inspect' and outcome.writes then
       error('query transition cannot write', 2)
     end
-    local patch = outcome.writes and Facility.patch.machine(outcome.value) or nil
+    local successor = outcome.value
+    if outcome.writes then
+      successor = semantics.capture(successor, transition_label .. ' successor', 3)
+    end
+    local patch = outcome.writes and Facility.patch.machine(successor) or nil
     return Facility.outcome_packed(patch, outcome.pack or Facility.pack())
   end
 
   local probe = transition.probe and function(value, argument, context)
-    local result = transition.probe(value, argument_or_empty(argument), context)
+    local result = transition.probe(
+      callback_value(value),
+      argument_or_empty(callback_argument(argument)),
+      context
+    )
     return result ~= nil
       and result ~= false
       and not (type(result) == 'table' and result._fibers_cell_wait == true)
@@ -138,8 +167,7 @@ end
 
 function Machine.new(value)
   local machine = Facility.identity(setmetatable({}, Machine), Kind)
-  Cell._init(machine, value, 'machine')
-  return machine
+  return StateResource.init(machine, value, 'machine', ValueSemantics.managed, 'Machine.new() value')
 end
 
 function Machine:write_op(value)
@@ -148,7 +176,11 @@ end
 
 function Machine:transition_op(transition, payload)
   assert(transition and transition._fibers_transition_rule, 'machine transition expected')
-  if transition.validate then transition.validate(payload) end
+  local semantics = self._value_semantics
+  payload = semantics.capture(payload, "Machine:transition_op('" .. tostring(transition.name) .. "') payload", 3)
+  if transition.validate then
+    transition.validate(semantics.expose(payload))
+  end
   local specs = self._transition_specs
   if not specs then specs = setmetatable({}, { __mode = 'kv' }); self._transition_specs = specs end
   local spec = specs[transition]

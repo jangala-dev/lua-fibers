@@ -21,6 +21,7 @@ local perform = require('fibers.perform')
 local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
 local Contract = require('fibers.internal.contract')
+local TrustedState = require('fibers.internal.trusted_state')
 
 local DatagramLifecycle = Lifecycle.define({
   prefix = 'socket.datagram',
@@ -88,7 +89,7 @@ end)
 
 function SendState.new(capacity)
   local self = Label.attach(setmetatable({
-    state = StateMachine.new({
+    state = TrustedState.machine({
       next_seq = 0,
       completed_seq = 0,
     }),

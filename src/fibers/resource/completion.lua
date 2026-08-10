@@ -4,6 +4,7 @@ local Op = require('fibers.op')
 local Facility = require('fibers.resource.authoring')
 local StateMachine = require('fibers.resource.machine')
 local Label = require('fibers.internal.label')
+local TrustedState = require('fibers.internal.trusted_state')
 
 local Completion = {}
 Completion.__index = Completion
@@ -25,7 +26,7 @@ end)
 
 function Completion.new()
   local completion = Facility.identity(setmetatable({}, Completion), Kind)
-  completion.state = StateMachine.new({ kind = 'pending' })
+  completion.state = TrustedState.machine({ kind = 'pending' })
   Label.child(completion.state, completion, 'state')
   return completion
 end

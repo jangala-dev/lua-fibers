@@ -1,6 +1,6 @@
-local Cell = require('fibers.resource.cell')
 local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
+local TrustedState = require('fibers.internal.trusted_state')
 
 local Latch = {}
 Latch.__index = Latch
@@ -22,7 +22,7 @@ function Latch.new()
   local id = 'latch-' .. tostring(next_id)
   local latch = Label.attach(setmetatable({
     _fibers_id = id,
-    _state = Cell.new(EMPTY),
+    _state = TrustedState.cell(EMPTY),
   }, Latch))
   Label.child(latch._state, latch, 'state')
   return latch

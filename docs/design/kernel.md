@@ -62,6 +62,8 @@ A Search contains:
 
 A genuine alternative opens a journal mark. First writes and list extensions are recorded once per mark. Backtracking restores the speculative store, activations, cursor positions and proof state together.
 
+For public Cell and Machine state, one committed location version denotes one stable managed value. Ordinary Lua code never receives a mutable alias to that authoritative value: values are captured on ingress and exposed as independent snapshots. This is required for versioned proof and certified-absence reasoning; mutation behind a location version would invalidate the proof model. Trusted facilities may use private representations only when they preserve the same observable stability law.
+
 ## Search outcomes
 
 A search yields one of three semantic outcomes:

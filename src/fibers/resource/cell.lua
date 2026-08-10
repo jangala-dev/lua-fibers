@@ -1,6 +1,8 @@
 local Facility = require('fibers.resource.authoring')
 local Op = require('fibers.op')
 local Direct = require('fibers.internal.direct')
+local StateResource = require('fibers.internal.state_resource')
+local ValueSemantics = require('fibers.internal.value_semantics')
 
 local Cell = {}
 Cell.__index = Cell
@@ -11,8 +13,11 @@ local VERSIONED_RESULT = Facility.result.project(function(value, leaf)
   return { value = value, version = leaf.location.version }
 end)
 
-local function expect(current, expected)
-  if current == expected then return Facility.outcome(nil, true) end
+local function read_result(resource)
+  local semantics = resource._value_semantics
+  return Facility.result.project(function(value)
+    return semantics.expose(value)
+  end)
 end
 
 local function select_op(resource, select)
@@ -28,7 +33,11 @@ local function select_op(resource, select)
   end
   local function loop()
     return state:and_then(Op.guard(function(current)
-      local option, wait = select(current.value)
+      -- The versioned read stays internal. Arbitrary selection code receives an
+      -- exposure, never the authoritative representation. The raw value is only
+      -- passed to private selectors which need to produce a pristine result.
+      local working = resource._value_semantics.expose(current.value)
+      local option, wait = select(working, current.value)
       if option ~= nil then return option end
       if wait == false then return Op.never() end
       return Facility.bind(changed, current.version):and_then(Op.guard(loop))
@@ -37,37 +46,40 @@ local function select_op(resource, select)
   return loop()
 end
 
-function Cell._init(resource, value, algebra)
-  resource._location = Facility.location(resource, {
-    algebra = algebra or 'replace', domain = 'plain', value = value,
-  })
-  return resource
-end
-
 function Cell.new(value)
   local cell = Facility.identity(setmetatable({}, Cell), Kind)
-  return Cell._init(cell, value)
+  return StateResource.init(cell, value, 'replace', ValueSemantics.managed, 'Cell.new() value')
 end
 
 function Cell:read_op()
   local op = self._read_op
   if not op then
-    op = Facility.op(Facility.read(self._location, Facility.result.value, self))
+    op = Facility.op(Facility.read(self._location, read_result(self), self))
     self._read_op = op
   end
   return op
 end
 
 function Cell:expect_op(value)
+  local semantics = self._value_semantics
+  value = semantics.capture(value, 'Cell:expect_op() value', 3)
   local spec = self._expect_spec
   if not spec then
-    spec = Facility.rule.inspect({ location = self._location, resource = self, step = expect })
+    spec = Facility.rule.inspect({
+      location = self._location,
+      resource = self,
+      step = function(current, expected)
+        if semantics.equal(current, expected) then return Facility.outcome(nil, true) end
+      end,
+    })
     self._expect_spec = spec
   end
   return Facility.bind(spec, value)
 end
 
 function Cell:write_op(value)
+  local semantics = self._value_semantics
+  value = semantics.capture(value, 'Cell:write_op() value', 3)
   local spec = self._write_spec
   if not spec then
     spec = Facility.replace(self._location, Facility.result.boolean, self)
@@ -77,12 +89,17 @@ function Cell:write_op(value)
 end
 
 function Cell:select_op(select)
-  return select_op(self, select)
+  return select_op(self, function(value) return select(value) end)
 end
 
 function Cell:wait_until_op(predicate)
-  return select_op(self, function(value)
-    if predicate(value) then return Op.always(value) end
+  local semantics = self._value_semantics
+  return select_op(self, function(value, authoritative)
+    if predicate(value) then
+      -- Return a fresh exposure of the observed authoritative value rather than
+      -- the predicate's disposable working copy.
+      return Op.always(semantics.expose(authoritative))
+    end
   end)
 end
 

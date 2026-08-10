@@ -7,6 +7,7 @@ local Op = require('fibers.op')
 local Effect = require('fibers.effect')
 local Values = require('fibers.internal.values')
 local StateMachine = require('fibers.resource.machine')
+local TrustedState = require('fibers.internal.trusted_state')
 
 local Store = {}
 Store.__index = Store
@@ -478,7 +479,7 @@ function Store.new(runtime)
     dirty_items = {},
     removed_records = false,
   }
-  local forest = StateMachine.new(initial_state):label('lifetime-forest')
+  local forest = TrustedState.machine(initial_state):label('lifetime-forest')
   forest._location.clone_value = nil
   local store = setmetatable({
     runtime = runtime,

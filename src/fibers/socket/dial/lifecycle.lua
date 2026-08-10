@@ -4,6 +4,7 @@ local StateMachine = require('fibers.resource.machine')
 local Label = require('fibers.internal.label')
 local IOError = require('fibers.io.error')
 local Common = require('fibers.socket.lifecycle')
+local TrustedState = require('fibers.internal.trusted_state')
 
 local Ready, Wait = StateMachine.Ready, StateMachine.Wait
 local copy = Common.copy
@@ -139,7 +140,7 @@ end)
 
 function Dial.new(address)
   local value = Label.attach(setmetatable({
-    state = StateMachine.new({ kind = 'starting', address = address }),
+    state = TrustedState.machine({ kind = 'starting', address = address }),
   }, Dial))
   Label.child(value.state, value, 'lifecycle')
   return value

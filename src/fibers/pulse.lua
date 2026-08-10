@@ -1,10 +1,10 @@
 -- Coalescing broadcast notification from Counter + Cell.
 
 local Counter = require('fibers.resource.counter')
-local Cell = require('fibers.resource.cell')
 local Op = require('fibers.op')
 local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
+local TrustedState = require('fibers.internal.trusted_state')
 
 local Pulse = {}
 Pulse.__index = Pulse
@@ -30,7 +30,7 @@ function Pulse.new(initial)
   local pulse = Label.attach(setmetatable({
     _fibers_id = id,
     _version = Counter.new(initial),
-    _status = Cell.new(OPEN),
+    _status = TrustedState.cell(OPEN),
   }, Pulse))
   Label.child(pulse._version, pulse, 'version')
   Label.child(pulse._status, pulse, 'status')

@@ -209,8 +209,9 @@ function Replace.stage(summary, patch, trail)
   assign(trail, summary, 'value', patch.value)
   return summary
 end
-function Replace.join(_, left, right)
-  if left.value ~= right.value then
+function Replace.join(location, left, right)
+  local equal = location.value_equal
+  if not (equal and equal(left.value, right.value)) and left.value ~= right.value then
     return nil
   end
   return Replace.clone(left)

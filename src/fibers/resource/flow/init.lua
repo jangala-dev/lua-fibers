@@ -14,6 +14,7 @@ local Rope = require('fibers.resource.flow.rope')
 local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
 local Contract = require('fibers.internal.contract')
+local TrustedState = require('fibers.internal.trusted_state')
 
 local Ready, Wait = Machine.Ready, Machine.Wait
 local INF = math.huge
@@ -715,7 +716,7 @@ end
 
 function Flow.new(limit)
   local flow = Facility.identity(setmetatable({ _capacity = capacity(limit) }, Flow), Kind)
-  flow._state = Machine.new(new_state())
+  flow._state = TrustedState.machine(new_state())
   Label.child(flow._state, flow, 'state')
   flow._inlet = Label.attach(setmetatable({
     _fibers_id = flow._fibers_id .. ':inlet',

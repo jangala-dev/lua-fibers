@@ -3,6 +3,7 @@
 local StateMachine = require('fibers.resource.machine')
 local Label = require('fibers.internal.label')
 local IOError = require('fibers.io.error')
+local TrustedState = require('fibers.internal.trusted_state')
 
 local Ready, Wait = StateMachine.Ready, StateMachine.Wait
 local Lifecycle = {}
@@ -135,7 +136,7 @@ function Lifecycle.define(spec)
 
   function Type.new(address)
     local value = Label.attach(setmetatable({
-      state = StateMachine.new({ kind = 'starting', address = address }),
+      state = TrustedState.machine({ kind = 'starting', address = address }),
     }, Type))
     Label.child(value.state, value, 'lifecycle')
     return value

@@ -13,6 +13,7 @@ local StateMachine = require('fibers.resource.machine')
 local Effect = require('fibers.effect')
 local Label = require('fibers.internal.label')
 local Contract = require('fibers.internal.contract')
+local TrustedState = require('fibers.internal.trusted_state')
 
 local Lifetime = {}
 Lifetime.CloseReason = { NORMAL = 'normal' }
@@ -131,10 +132,10 @@ function Lifetime.new(opts)
     _role = opts.role,
     _rights = opts.rights,
     _meta = opts.meta,
-    _cancel = StateMachine.new({ requested = false, cancelled = false }):label(node_kind .. '-cancellation'),
+    _cancel = TrustedState.machine({ requested = false, cancelled = false }):label(node_kind .. '-cancellation'),
     _interrupt = Runtime._new_interrupt(node_kind .. '-interrupt'),
-    _body_result = Cell.new(pending()):label(node_kind .. '-body-result'),
-    _outcome = Cell.new(pending()):label(node_kind .. '-outcome'),
+    _body_result = TrustedState.cell(pending()):label(node_kind .. '-body-result'),
+    _outcome = TrustedState.cell(pending()):label(node_kind .. '-outcome'),
     _closure_state = initial_closure_state(),
     _offers = opts.offers,
   }, Node)
