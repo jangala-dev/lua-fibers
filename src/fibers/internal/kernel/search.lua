@@ -379,6 +379,11 @@ local function pushv(state, target, value)
   state.journal:push(target, value)
 end
 
+local function push_frame(state, task, frame)
+  frame.parent = task.frame
+  setv(state, task, 'frame', frame)
+end
+
 local function bump(state, target, key, amount)
   setv(state, target, key, (target[key] or 0) + (amount or 1))
 end
@@ -474,8 +479,8 @@ end
 
 complete_task = function(state, task, outcome)
   while true do
-    local n = #task.frames
-    if n == 0 then
+    local frame = task.frame
+    if not frame then
       local root = task.root
       setv(state, root, 'done', true)
       setv(state, root, 'outcome', outcome)
@@ -483,8 +488,7 @@ complete_task = function(state, task, outcome)
       return true
     end
 
-    local frame = task.frames[n]
-    setv(state, task.frames, n, nil)
+    setv(state, task, 'frame', frame.parent)
 
     if frame.kind == 'map' then
       outcome = new_outcome(
@@ -495,9 +499,16 @@ complete_task = function(state, task, outcome)
     elseif frame.kind == 'bind' then
       local input_pack = pack_(unpack_pack(outcome.pack))
       local next_activation = activation_child(frame.activation, ACT.and_then_result, outcome.activation)
+      -- The provisional values supplied by and_then are dynamically scoped to
+      -- its right-hand expression. Nested and_then continuations may install
+      -- their own guard inputs, but those must not leak back into an enclosing
+      -- continuation when search backtracks and re-enters it.
+      push_frame(state, task, { kind = 'guard_input_scope', previous = task.guard_input_pack })
       setv(state, task, 'guard_input_pack', input_pack)
       continue_task(state, task, frame.q, next_activation)
       return true
+    elseif frame.kind == 'guard_input_scope' then
+      setv(state, task, 'guard_input_pack', frame.previous)
     elseif frame.kind == 'wrap' then
       outcome = new_outcome(task, outcome.pack, compose_wrap(outcome.wrap, frame.fn))
     elseif frame.kind == 'group_lane' then
@@ -514,7 +525,7 @@ local function add_root(state, request, required_intents)
 
   local root = {
     serial = activation_id(request.activation_root), request = request, expr = request.op,
-    frames = {}, status = 'active',
+    status = 'active',
     activation = request.activation_root,
     required_intents = required_intents,
   }
@@ -538,7 +549,7 @@ local function start_product(state, task, op)
     local activation = activation_child(task.activation, ACT.product_lane, i)
     local child = {
       serial = activation_id(activation), root = task.root, expr = op.lanes[i],
-      frames = { { kind = 'group_lane', group = group, lane = i } },
+      frame = { kind = 'group_lane', group = group, lane = i },
       segment = segment, status = 'active',
       activation = activation,
       guard_input_pack = task.guard_input_pack,
@@ -1371,17 +1382,17 @@ local function reduce_one(state, task)
     continue_task(state, task, residual, activation_child(parent, ACT.guard))
     return 'progress'
   elseif kind == 'map' then
-    pushv(state, task.frames, { kind = 'map', fn = expr.fn })
+    push_frame(state, task, { kind = 'map', fn = expr.fn })
     continue_task(state, task, expr.p, activation_child(task.activation, ACT.map))
     return 'progress'
   elseif kind == 'and_then' then
-    pushv(state, task.frames, { kind = 'bind', q = expr.q, activation = task.activation })
+    push_frame(state, task, { kind = 'bind', q = expr.q, activation = task.activation })
     continue_task(state, task, expr.p, activation_child(task.activation, ACT.and_then_prefix))
     return 'progress'
   elseif kind == 'annotated' then
     local parent = task.activation
     if expr.post then
-      pushv(state, task.frames, { kind = 'wrap', fn = expr.post })
+      push_frame(state, task, { kind = 'wrap', fn = expr.post })
     end
     continue_task(state, task, expr.p, activation_child(parent, ACT.annotated))
     return 'progress'

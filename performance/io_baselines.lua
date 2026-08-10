@@ -33,6 +33,7 @@ package.path = table.concat({
 local fibers = require('fibers')
 local HostHold = require('fibers.io.internal.host_hold')
 local File = require('fibers.file')
+local MemoryFileProvider = require('fibers.file.memory_provider')
 local SimulatedHost = require('tests.support.simulated_host')
 local Runtime = require('fibers.runtime')
 local Socket = require('fibers.socket')
@@ -111,6 +112,85 @@ add('memory-stream-throughput', 'bytes', function()
   end)
 
   assert(#received == expected)
+  return expected
+end)
+
+local function file_host(provider)
+  local host = SimulatedHost.new({ auto_advance_time = true })
+  function host:file_provider()
+    return provider
+  end
+  return host
+end
+
+add('memory-stream-bounded-protocol', 'bytes', function()
+  local chunks = math.max(1, math.floor(64 * scale))
+  local chunk = string.rep('p', 4096)
+  local expected = chunks * #chunk
+  local received
+
+  fibers.run(function(scope)
+    local writer, reader = Stream.memory_pair({
+      label = 'io-baseline-bounded-protocol',
+      capacity = 4096,
+    })
+    local producer = scope:spawn(function()
+      assert(writer:write_all(string.rep(chunk, chunks)) == expected)
+      writer:shutdown_write('benchmark complete')
+    end):label('io-baseline-bounded-producer')
+
+    received = assert(reader:read_exactly(expected))
+    producer:await()
+    writer:close('benchmark complete')
+    reader:close('benchmark complete')
+  end)
+
+  assert(#received == expected)
+  return expected
+end)
+
+add('regular-file-read', 'bytes', function()
+  local chunks = math.max(1, math.floor(64 * scale))
+  local chunk = string.rep('r', 4096)
+  local expected = chunks * #chunk
+  local provider = MemoryFileProvider.new({ files = { ['/bench-read'] = string.rep(chunk, chunks) } })
+  local total = 0
+
+  fibers.run(function()
+    local opened = assert(File.open('/bench-read', 'rb', {
+      read_capacity = 65536,
+      read_chunk_size = 16384,
+    }))
+    while true do
+      local bytes = assert(opened:read(4096))
+      if bytes == '' then break end
+      total = total + #bytes
+    end
+    assert(opened:close('benchmark complete'))
+  end, { host = file_host(provider) })
+
+  assert(total == expected)
+  return total
+end)
+
+add('regular-file-write', 'bytes', function()
+  local chunks = math.max(1, math.floor(64 * scale))
+  local chunk = string.rep('w', 4096)
+  local expected = chunks * #chunk
+  local provider = MemoryFileProvider.new()
+
+  fibers.run(function()
+    local opened = assert(File.open('/bench-write', 'wb', {
+      write_chunk_size = 16384,
+    }))
+    for _ = 1, chunks do
+      assert(opened:write(chunk) == #chunk)
+    end
+    assert(opened:flush())
+    assert(opened:close('benchmark complete'))
+  end, { host = file_host(provider) })
+
+  assert(#provider.paths['/bench-write'].bytes == expected)
   return expected
 end)
 

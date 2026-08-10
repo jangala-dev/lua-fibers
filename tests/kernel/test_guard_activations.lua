@@ -143,6 +143,29 @@ local machine = 'kernel'
     eq(sequenced[3], 'value')
   end
 
+  -- and_then guard inputs are dynamically scoped. A successful nested
+  -- continuation may install different provisional values while it runs; if a
+  -- later conflict makes search revisit the enclosing guard through another
+  -- left proof, that guard must still receive the enclosing prefix result.
+  do
+    local seen = {}
+    local left = Op.choice(Op.always(7), Op.always(7), Op.always(7))
+    local op = left:and_then(Op.guard(function(value)
+      seen[#seen + 1] = value
+      return Op.always(1):and_then(Op.always(true)):and_then(Op.always(true))
+    end)):and_then(Op.never())
+
+    local rt = Runtime.new({ choice_seed = 1 })
+    rt:spawn_raw(function()
+      rt:perform(op)
+    end):label('guard-input-dynamic-scope')
+    eq(rt:run().tag, 'quiescent', machine .. ': exhausted search should remain blocked')
+    eq(#seen, 3, machine .. ': all three left proofs should be explored')
+    for i = 1, #seen do
+      eq(seen[i], 7, machine .. ': nested and_then input must not escape into enclosing guard')
+    end
+  end
+
   -- A relative sleep returned by and_then begins when that provisional
   -- progression activates, not when the outer perform begins. Repeated driver
   -- steps retain the resulting absolute deadline.

@@ -159,4 +159,40 @@ do
   assert_truthy(tostring(err):find('does not accept unexpected', 1, true))
 end
 
+
+-- Atomic byte facts cannot exceed bounded Flow capacity. Impossible exact
+-- reads fail immediately and leave buffered bytes untouched.
+do
+  local flow = Flow.new(2):label('public-bounded-exact')
+  local value, err, after
+  local st = fibers.try_run(function()
+    fibers.perform(flow:inlet():write_op('ab'))
+    value, err = fibers.perform(flow:outlet():read_exactly_op(3))
+    after = fibers.perform(flow:outlet():read_exactly_op(2))
+  end).runtime_status
+  assert_eq(st.tag, 'found')
+  assert_nil(value)
+  assert_eq(err, Errors.CAPACITY)
+  assert_eq(after, 'ab')
+end
+
+-- Delimiter and EOF proofs report capacity when a bounded committed buffer is
+-- saturated before the requested atomic fact can be established.
+do
+  local flow = Flow.new(2):label('public-bounded-proof')
+  local line, line_err, all, all_err, after
+  local st = fibers.try_run(function()
+    fibers.perform(flow:inlet():write_op('ab'))
+    line, line_err = fibers.perform(flow:outlet():read_line_op({ max = 8 }))
+    all, all_err = fibers.perform(flow:outlet():read_all_op({ max = 8 }))
+    after = fibers.perform(flow:outlet():read_exactly_op(2))
+  end).runtime_status
+  assert_eq(st.tag, 'found')
+  assert_nil(line)
+  assert_eq(line_err, Errors.CAPACITY)
+  assert_nil(all)
+  assert_eq(all_err, Errors.CAPACITY)
+  assert_eq(after, 'ab', 'capacity failures must not consume buffered bytes')
+end
+
 print('tests/public/test_flow.lua: ok')

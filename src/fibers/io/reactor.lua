@@ -15,6 +15,7 @@ local Interest = require('fibers.embed.external').Interest
 local UnsafeExternalMutation = require('fibers.embed.unsafe_external_mutation')
 local Errors = require('fibers.resource.flow.errors')
 local IOError = require('fibers.io.error')
+local Transfer = require('fibers.io.internal.flow_transfer')
 local Lifetime = require('fibers.lifetime')
 local Closure = require('fibers.closure')
 local IOAudit = require('fibers.internal.io_audit')
@@ -697,60 +698,20 @@ function Reactor:_service_read(entry)
     return true
   end
 
-  local bytes, err = entry.handle:read(space:capacity())
-  if bytes ~= nil and type(bytes) ~= 'string' then
-    masked_perform(self.runtime, space:fail_op(Errors.BACKEND_PROTOCOL_ERROR))
-    return self:_retire_entry(entry, Errors.BACKEND_PROTOCOL_ERROR)
-  end
-  if type(bytes) == 'string' and #bytes > space:capacity() then
-    masked_perform(self.runtime, space:fail_op(Errors.BACKEND_PROTOCOL_ERROR))
-    return self:_retire_entry(entry, Errors.BACKEND_PROTOCOL_ERROR)
-  end
-
-  if err == Errors.EOF or IOError.is_eof(err) then
-    if bytes and #bytes > 0 then
-      local n, commit_err = masked_perform(self.runtime, space:commit_op(bytes))
-      if not n then
-        masked_perform(self.runtime, space:fail_op(commit_err or Errors.BACKEND_PROTOCOL_ERROR))
-        return self:_retire_entry(entry, commit_err or Errors.BACKEND_PROTOCOL_ERROR)
-      end
-    else
-      masked_perform(self.runtime, space:release_op())
-    end
+  local status, value = Transfer.read_reserved(self.runtime, space, function(capacity)
+    return entry.handle:read(capacity)
+  end)
+  if status == 'eof' then
     masked_perform(self.runtime, entry.flow:inlet():close_op(Errors.EOF))
     return self:_retire_entry(entry, Errors.EOF)
-  end
-
-  if IOError.is_would_block(err) then
+  elseif status == 'would_block' then
     entry.would_block_count = entry.would_block_count + 1
-    if bytes ~= nil and bytes ~= '' then
-      masked_perform(self.runtime, space:fail_op(Errors.BACKEND_PROTOCOL_ERROR))
-      return self:_retire_entry(entry, Errors.BACKEND_PROTOCOL_ERROR)
-    end
-    masked_perform(self.runtime, space:release_op())
     self:_refresh(entry)
     return true
+  elseif status == 'error' then
+    return self:_retire_entry(entry, value)
   end
 
-  if err ~= nil then
-    if bytes ~= nil and bytes ~= '' then
-      masked_perform(self.runtime, space:fail_op(Errors.BACKEND_PROTOCOL_ERROR))
-      return self:_retire_entry(entry, Errors.BACKEND_PROTOCOL_ERROR)
-    end
-    masked_perform(self.runtime, space:fail_op(err))
-    return self:_retire_entry(entry, err)
-  end
-
-  if bytes == nil or bytes == '' then
-    masked_perform(self.runtime, space:fail_op(Errors.BACKEND_PROTOCOL_ERROR))
-    return self:_retire_entry(entry, Errors.BACKEND_PROTOCOL_ERROR)
-  end
-
-  local n, commit_err = masked_perform(self.runtime, space:commit_op(bytes))
-  if not n then
-    masked_perform(self.runtime, space:fail_op(commit_err or Errors.BACKEND_PROTOCOL_ERROR))
-    return self:_retire_entry(entry, commit_err or Errors.BACKEND_PROTOCOL_ERROR)
-  end
   self:_refresh(entry)
   return true
 end
@@ -778,25 +739,20 @@ function Reactor:_service_write(entry)
     entry.lease = lease
   end
 
-  local bytes = lease:bytes()
-  local n, err = entry.handle:write(bytes)
-  if n and n > 0 then
-    local ok, ack_err = masked_perform(self.runtime, lease:ack_op(n))
-    if not ok then
-      entry.lease = nil
-      masked_perform(self.runtime, entry.flow:outlet():fail_op(Errors.BACKEND_PROTOCOL_ERROR))
-      return self:_retire_entry(entry, ack_err or Errors.BACKEND_PROTOCOL_ERROR)
-    end
-    -- Lease handles are captured snapshots.  Reacquire after every
+  local status, value = Transfer.write_lease(self.runtime, lease, function(bytes)
+    return entry.handle:write(bytes)
+  end)
+  if status == 'progress' then
+    -- Lease handles are captured snapshots. Reacquire after every
     -- acknowledgement so a partial write observes the remaining suffix.
     entry.lease = nil
-  elseif IOError.is_would_block(err) or n == 0 then
+  elseif status == 'would_block' then
     entry.would_block_count = entry.would_block_count + 1
     -- Retain byte custody and rearm the one-shot readiness registration.
   else
     entry.lease = nil
-    masked_perform(self.runtime, entry.flow:outlet():fail_op(err or Errors.WRITE_ERROR))
-    return self:_retire_entry(entry, err or Errors.WRITE_ERROR)
+    masked_perform(self.runtime, entry.flow:outlet():fail_op(value or Errors.WRITE_ERROR))
+    return self:_retire_entry(entry, value)
   end
   self:_refresh(entry)
   return true

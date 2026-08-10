@@ -170,7 +170,7 @@ end
 
 File.Error = IOError
 File.RegularFile = Regular.RegularFile
-File.Request = Regular.Request
+File.Command = Regular.Command
 File.Job = Regular.Job
 File.submit_open_op = Regular.submit_open_op
 File.open_op = Regular.open_op

@@ -381,9 +381,18 @@ host:file_provider(runtime, opts) -> provider | nil
 
 A provider implements `open`, `rename`, `unlink`, `mkdir` and optionally
 `mkdir_p`. `open` must honour `exclusive` and `permissions` when supplied. Open
-returns a backend implementing `read`, `read_line`, `write`, `seek`, `flush`,
-`sync` and `close`. These methods may suspend their Fibers driver, but must not
-execute potentially blocking filesystem calls on the runtime thread.
+returns a backend implementing `read`, `write`, `seek`, `flush`, `sync` and
+`close`. Line framing and other byte contracts are Flow operations above this
+provider boundary; providers deal only in byte chunks.
+
+The completion-driven byte contract is deliberately small. `read(count)` returns
+a non-empty string, `''` for EOF, or `nil, error`; `write(bytes)` returns a
+positive consumed byte count or `nil, error`. A regular-file backend must not
+use `would_block`: the provider is responsible for suspending its private driver
+until the completion is authoritative. Partial writes are permitted and are
+settled through the same Flow lease law used by the socket Reactor. Backend
+methods may suspend their Fibers driver, but must not execute potentially
+blocking filesystem calls on the runtime thread.
 
 Linux FFI hosts return a shared `io_uring` provider when the ring probe passes.
 If a host has process support and supplies no native provider, Fibers selects the helper-process provider. The test-only SimulatedHost supplies an in-memory provider. There is no synchronous bootstrap fallback.

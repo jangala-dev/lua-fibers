@@ -1,6 +1,6 @@
 # I/O design
 
-This document specifies the trusted substrate shared by pipes, Streams, stream sockets, datagrams, processes and future regular-file facilities. Application use is documented in [I/O](../guide/io.md); portable Flow and Stream use is documented in [Resources](../guide/resources.md).
+This document specifies the trusted substrate shared by pipes, Streams, stream sockets, regular files, datagrams and processes. Application use is documented in [I/O](../guide/io.md); portable Flow and Stream use is documented in [Resources](../guide/resources.md).
 
 ## Host actions occur after commitment
 
@@ -12,6 +12,40 @@ After commitment, either a facility driver or the indexed reactor performs the
 authoritative host action. Readiness is only a hint that such an action may make
 progress; `read`, `write`, `accept`, `finish_connect` and process-exit probes may
 still return `would_block`.
+
+
+## One Flow byte plane, different host engines
+
+Streams and regular files share one data-plane law. Incoming host bytes enter a
+Flow only through a committed space reservation; outgoing bytes leave a Flow
+only while held by a committed lease. The internal Flow-transfer helper owns
+settlement of those reservations and leases, including partial writes, EOF,
+`would_block`, protocol failures and byte-custody acknowledgement.
+
+```text
+read side:   reserve Flow space -> host read  -> commit/release/fail space
+write side:  lease Flow bytes   -> host write -> acknowledge/retain/fail lease
+```
+
+What differs is only how the host engine becomes runnable. Stream sockets and
+pipes use Reactor readiness. Regular files use a private completion-driven
+Lifetime because a regular descriptor cannot truthfully be treated as a
+non-blocking readiness source. The Flow boundary after the host call is the
+same in both cases.
+
+Consequently a RegularFile data operation is not a request/completion RPC.
+`read_op`/`read_some_op` consumes RX Flow state transactionally. `write_op`
+transfers byte responsibility transactionally into the TX Flow. Host completion
+is relevant to `flush`, `sync`, cursor barriers and Closure, not to whether the
+byte admission transaction itself committed.
+
+A regular file additionally maintains cursor reconciliation state. Bounded
+read-ahead may move the provider cursor beyond the application cursor. Seek and
+write invalidate the current read generation and discard incompatible buffered
+bytes transactionally; stale in-flight reads cannot publish into the new
+generation. Before a cursor-sensitive host action, the driver rewinds the
+provider by the accumulated unread/stale byte debt. This preserves the logical
+file cursor without weakening Flow's monotonic endpoint-closure law at EOF.
 
 ## Continuous handle coverage
 
@@ -280,8 +314,9 @@ nil, another error          terminal read failure
 
 Ambiguous or oversized results fail the direction with a HostHandle protocol error.
 
-Regular files may block despite appearing ready. They should use an asynchronous
-host job service while retaining Flow leases as their byte boundary.
+Regular files may block despite appearing ready. Their private completion-driven
+driver therefore performs host calls outside search while using the same Flow
+reservations and leases as the readiness-driven Reactor.
 
 
 ## Reactor-owned host offers

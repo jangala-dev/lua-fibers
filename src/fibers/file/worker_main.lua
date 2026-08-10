@@ -68,9 +68,6 @@ local function response_ok(value)
   value = tostring(value)
   return write_all('OK ' .. tostring(#value) .. '\n' .. value)
 end
-local function response_eof()
-  return write_all('EOF 0\n')
-end
 local function response_data(value)
   value = value or ''
   return write_all('DATA ' .. tostring(#value) .. '\n' .. value)
@@ -483,38 +480,6 @@ local function handle_mode(mode, path, permissions, exclusive)
         else
           response_data(data or '')
         end
-      end
-    elseif op == 'READLINE' then
-      local keep, parts = rest == '1', {}
-      while true do
-        local byte, a, b = handle:read(1)
-        if byte == nil then
-          if a ~= nil then
-            local ec, em = error_values(a, b, 'EREAD')
-            response_error(ec, em)
-          elseif #parts == 0 then
-            response_eof()
-          else
-            response_data(table.concat(parts))
-          end
-          break
-        end
-        if byte == '' then
-          if #parts == 0 then
-            response_eof()
-          else
-            response_data(table.concat(parts))
-          end
-          break
-        end
-        if byte == '\n' then
-          if keep then
-            parts[#parts + 1] = byte
-          end
-          response_data(table.concat(parts))
-          break
-        end
-        parts[#parts + 1] = byte
       end
     elseif op == 'WRITE' then
       local count = tonumber(rest)

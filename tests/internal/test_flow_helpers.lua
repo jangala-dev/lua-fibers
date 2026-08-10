@@ -50,6 +50,26 @@ do
   assert_eq(later, 'abcdef')
 end
 
+-- peek is terminal-aware: it never consumes bytes, but EOF and failures are
+-- still observable rather than leaving a query suspended forever.
+do
+  local eof_flow = Flow.new(8):label('peek-eof-flow')
+  local failed_flow = Flow.new(8):label('peek-failed-flow')
+  local eof_value, eof_err, failed_value, failed_err
+  local failure = { kind = 'peek_failure' }
+  local st = fibers.try_run(function()
+    fibers.perform(eof_flow:inlet():close_op())
+    eof_value, eof_err = fibers.perform(eof_flow:outlet():peek_exactly_op(1))
+    fibers.perform(failed_flow:inlet():fail_op(failure))
+    failed_value, failed_err = fibers.perform(failed_flow:outlet():peek_exactly_op(1))
+  end).runtime_status
+  assert_status(st, 'found')
+  assert_nil(eof_value)
+  assert_eq(eof_err, Errors.EOF)
+  assert_nil(failed_value)
+  assert_eq(failed_err, failure)
+end
+
 -- read_until excludes the delimiter; read_including includes it. Both consume
 -- through the delimiter only when the selected world commits.
 do

@@ -28,6 +28,7 @@ local Scope = require('fibers.scope')
 local Task = require('fibers.task')
 local Flow = require('fibers.resource.flow')
 local HostHandle = require('fibers.io.handle')
+local File = require('fibers.file')
 
 local function rejects(label, fn)
   local ok = pcall(fn)
@@ -183,8 +184,36 @@ do
 
 end
 
+
+-- Regular-file bytes use the shared Flow data plane; the old per-operation
+-- Request/RPC surface must not creep back into v1.
+if File.Request ~= nil then
+  error('v1 File must not expose a data-plane Request type', 2)
+end
+for _, name in ipairs({
+  'submit_read_op', 'submit_read_exactly_op', 'submit_read_line_op',
+  'submit_write_op', 'submit_write_all_op',
+}) do
+  if File.RegularFile[name] ~= nil then
+    error('v1 RegularFile data plane must transact directly rather than submit ' .. name, 2)
+  end
+end
+if type(File.RegularFile.read_some_op) ~= 'function' or type(File.RegularFile.write_some_op) ~= 'function' then
+  error('v1 RegularFile must expose the shared Stream byte-plane vocabulary', 2)
+end
+for _, name in ipairs({ 'read_exactly', 'read_all', 'write_all' }) do
+  if type(File.RegularFile[name]) ~= 'function' or type(File.RegularFile[name .. '_op']) ~= 'function' then
+    error('v1 RegularFile bounded byte protocol must expose direct and atomic forms: ' .. name, 2)
+  end
+end
+
 -- Lua-file compatibility reads are deliberately absent from the v1 Stream surface.
 local left = Stream.memory_pair()
+for _, name in ipairs({ 'read_exactly', 'read_all', 'write_all' }) do
+  if type(left[name]) ~= 'function' or type(left[name .. '_op']) ~= 'function' then
+    error('v1 Stream bounded byte protocol must expose direct and atomic forms: ' .. name, 2)
+  end
+end
 if left.read ~= nil or left.read_op ~= nil then
   error('v1 Stream must not expose Lua-file read compatibility methods', 2)
 end

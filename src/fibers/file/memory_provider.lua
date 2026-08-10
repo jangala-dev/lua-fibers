@@ -83,24 +83,6 @@ function Backend:read(count)
   return out
 end
 
-function Backend:read_line(keep)
-  if self.closed then
-    return nil, IOError.closed('file', 'read_line', { path = self.path })
-  end
-  local bytes = data(self)
-  if self.position >= #bytes then
-    return nil
-  end
-  local nl = bytes:find('\n', self.position + 1, true)
-  local last = nl and (nl - 1) or #bytes
-  local out = bytes:sub(self.position + 1, last)
-  self.position = nl and nl or #bytes
-  if nl and keep then
-    out = out .. '\n'
-  end
-  return out
-end
-
 function Backend:write(bytes)
   if self.closed then
     return nil, IOError.closed('file', 'write', { path = self.path })

@@ -125,6 +125,10 @@ function Duplex:read_exactly_op(n)
   return endpoint(self, 'read'):read_exactly_op(n)
 end
 
+function Duplex:read_exactly(n)
+  return endpoint(self, 'read'):read_exactly(n)
+end
+
 
 function Duplex:read_until_op(separator, opts)
   return endpoint(self, 'read'):read_until_op(separator, opts)
@@ -138,6 +142,10 @@ end
 
 function Duplex:read_all_op(opts)
   return endpoint(self, 'read'):read_all_op(opts)
+end
+
+function Duplex:read_all(opts)
+  return endpoint(self, 'read'):read_all(opts)
 end
 
 
@@ -161,6 +169,12 @@ function Duplex:write_op(...)
 end
 function Duplex:write_some_op(bytes)
   return endpoint(self, 'write'):write_some_op(bytes)
+end
+function Duplex:write_all_op(...)
+  return endpoint(self, 'write'):write_all_op(write_bytes(...))
+end
+function Duplex:write_all(...)
+  return endpoint(self, 'write'):write_all(write_bytes(...))
 end
 function Duplex:flush_op()
   return endpoint(self, 'write'):flush_op()
@@ -297,6 +311,6 @@ function Stream.merge_lines_op(streams, opts)
 end
 Direct.install_static(Stream, { 'merge_lines' })
 
-Direct.install(Duplex, { 'read_some', 'read_exactly', 'read_until', 'read_line', 'read_all', 'write', 'write_some', 'flush', 'shutdown_read', 'shutdown_write', 'abort_write', 'close', 'abort', 'closed' })
+Direct.install(Duplex, { 'read_some', 'read_until', 'read_line', 'write', 'write_some', 'flush', 'shutdown_read', 'shutdown_write', 'abort_write', 'close', 'abort', 'closed' })
 
 return Stream

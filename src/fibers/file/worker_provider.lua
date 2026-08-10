@@ -96,9 +96,6 @@ local function read_response(stream, action)
   if not kind then
     return nil, n
   end
-  if kind == 'EOF' then
-    return nil, nil, 'EOF'
-  end
   if kind == 'OK' or kind == 'DATA' then
     local payload = ''
     if n > 0 then
@@ -196,13 +193,6 @@ end
 
 function Backend:read(count)
   local value, err = self:_request('read', 'READ ' .. tostring(count))
-  return value, err
-end
-function Backend:read_line(keep)
-  local value, err, kind = self:_request('read_line', 'READLINE ' .. (keep and '1' or '0'))
-  if kind == 'EOF' then
-    return nil
-  end
   return value, err
 end
 function Backend:write(bytes)

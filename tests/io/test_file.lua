@@ -49,20 +49,6 @@ local function memory_provider(initial)
     self.position = self.position + #out
     return out
   end
-  function Backend:read_line(keep)
-    local data = content(self)
-    if self.position >= #data then
-      return nil
-    end
-    local nl = data:find('\n', self.position + 1, true)
-    local last = nl and (nl - 1) or #data
-    local out = data:sub(self.position + 1, last)
-    self.position = nl and nl or #data
-    if nl and keep then
-      out = out .. '\n'
-    end
-    return out
-  end
   function Backend:write(bytes)
     if self.provider.max_write and #bytes > self.provider.max_write then
       bytes = bytes:sub(1, self.provider.max_write)
@@ -180,7 +166,7 @@ function tests.evented_regular_file_round_trip()
   end, { host = host_with_provider(provider) })
 end
 
-function tests.file_ops_return_values_and_submissions_are_explicit()
+function tests.file_data_ops_are_values_and_control_submissions_are_explicit()
   local provider = memory_provider({ ['/x'] = 'value' })
   fibers.run(function()
     assert(fibers.perform(file.read_all_op('/x', { max = 32 })) == 'value')
@@ -189,9 +175,22 @@ function tests.file_ops_return_values_and_submissions_are_explicit()
 
     local opened = assert(file.open('/x', 'rb', {}))
     assert(fibers.perform(opened:read_op(2)) == 'va')
+    local seek = fibers.perform(opened:submit_seek_op('set', 0))
+    assert(seek and fibers.perform(seek:result_op()) == 0)
+    assert(fibers.perform(opened:read_op(2)) == 'va')
+    assert(opened:close())
+  end, { host = host_with_provider(provider) })
+end
+
+function tests.regular_file_uses_stream_byte_plane_vocabulary()
+  local provider = memory_provider()
+  fibers.run(function()
+    local opened = assert(file.open('/byte-plane', 'w+b', { write_capacity = 2 }))
+    local n, rest = fibers.perform(opened:write_some_op('abcd'))
+    assert(n == 2 and rest == 'cd')
+    assert(opened:flush())
     assert(opened:seek('set', 0) == 0)
-    local request = fibers.perform(opened:submit_read_op(2))
-    assert(request and fibers.perform(request:result_op()) == 'va')
+    assert(fibers.perform(opened:read_some_op(2)) == 'ab')
     assert(opened:close())
   end, { host = host_with_provider(provider) })
 end
@@ -232,6 +231,17 @@ function tests.append_and_read_limit_validation()
   end, { host = host_with_provider(provider) })
 end
 
+function tests.write_all_spans_a_bounded_tx_flow()
+  local provider = memory_provider()
+  fibers.run(function()
+    local opened = assert(file.open('/bounded-write', 'wb', { write_capacity = 3 }))
+    assert(opened:write_all('abcdefgh') == 8)
+    assert(opened:flush())
+    assert(opened:close())
+    assert(file.read_all('/bounded-write', { max = 16 }) == 'abcdefgh')
+  end, { host = host_with_provider(provider) })
+end
+
 function tests.write_all_retries_partial_writes()
   local provider = memory_provider()
   provider.max_write = 2
@@ -241,22 +251,22 @@ function tests.write_all_retries_partial_writes()
   end, { host = host_with_provider(provider) })
 end
 
-function tests.queued_operations_preserve_order_and_close_is_idempotent()
+function tests.buffered_writes_and_control_barriers_preserve_program_order()
   local provider = memory_provider()
   fibers.run(function()
     local opened = assert(file.open('/ordered', 'w+b', {}))
-    local write_a = fibers.perform(opened:submit_write_op('abc'))
-    local seek_middle = fibers.perform(opened:submit_seek_op('set', 1))
-    local write_z = fibers.perform(opened:submit_write_op('Z'))
-    local rewind = fibers.perform(opened:submit_seek_op('set', 0))
-    local read_back = fibers.perform(opened:submit_read_op(3))
+    assert(fibers.perform(opened:write_op('abc')) == 3)
 
-    -- Await the last request first: completion still reflects admission order.
-    assert(read_back:result() == 'aZc')
-    assert(write_a:result() == 3)
+    -- A control submission captures the accepted-byte frontier. Its completion
+    -- therefore waits for earlier buffered writes without turning those writes
+    -- back into request/completion RPCs.
+    local seek_middle = fibers.perform(opened:submit_seek_op('set', 1))
     assert(seek_middle:result() == 1)
-    assert(write_z:result() == 1)
+
+    assert(fibers.perform(opened:write_op('Z')) == 1)
+    local rewind = fibers.perform(opened:submit_seek_op('set', 0))
     assert(rewind:result() == 0)
+    assert(fibers.perform(opened:read_op(3)) == 'aZc')
 
     assert(opened:close())
     assert(opened:close())
@@ -293,6 +303,105 @@ function tests.read_exactly_loops_and_reports_short_eof()
     assert(err.expected == 2 and err.received == 1)
     assert(opened:close())
   end, { host = host_with_provider(provider) })
+end
+
+
+function tests.read_op_races_actual_buffered_bytes_not_host_submission()
+  local provider = memory_provider({ ['/slow-read'] = 'payload' })
+  local original_open = provider.open
+  function provider:open(path, mode, opts)
+    local backend, err = original_open(self, path, mode, opts)
+    if not backend then return nil, err end
+    local original_read = backend.read
+    local first = true
+    function backend:read(count)
+      if first then
+        first = false
+        Sleep.sleep(0.02)
+      end
+      return original_read(self, count)
+    end
+    return backend
+  end
+
+  fibers.run(function()
+    local opened = assert(file.open('/slow-read', 'rb', {}))
+    local selected = fibers.perform(require('fibers.op').named_choice({
+      bytes = opened:read_op(7),
+      timeout = Sleep.sleep_op(0.005),
+    }))
+    assert(selected == 'timeout', 'read_op must wait for bytes, not merely host-read admission')
+    assert(opened:read(7) == 'payload')
+    assert(opened:close())
+  end, { host = host_with_provider(provider) })
+end
+
+function tests.seek_cur_reconciles_prefetched_read_ahead()
+  local provider = memory_provider({ ['/cursor'] = 'abcdef' })
+  fibers.run(function()
+    local opened = assert(file.open('/cursor', 'rb', { read_capacity = 32, read_chunk_size = 32 }))
+    assert(opened:read(2) == 'ab')
+    -- The host backend has read ahead to EOF, but `cur` is the application
+    -- cursor after the two bytes actually consumed.
+    assert(opened:seek('cur', 1) == 3)
+    assert(opened:read(1) == 'd')
+    assert(opened:close())
+  end, { host = host_with_provider(provider) })
+end
+
+function tests.inflight_prefetch_invalidated_by_write_cannot_move_logical_cursor()
+  local provider = memory_provider({ ['/stale-read'] = 'abcdef' })
+  local original_open = provider.open
+  function provider:open(path, mode, opts)
+    local backend, err = original_open(self, path, mode, opts)
+    if not backend then return nil, err end
+    local original_read = backend.read
+    local first = true
+    function backend:read(count)
+      if first then
+        first = false
+        Sleep.sleep(0.02)
+      end
+      return original_read(self, count)
+    end
+    return backend
+  end
+
+  fibers.run(function()
+    local opened = assert(file.open('/stale-read', 'r+b', { read_capacity = 32, read_chunk_size = 32 }))
+    -- The driver is allowed to have an old-generation prefetch in flight here.
+    -- Accepting the write invalidates that generation transactionally.
+    assert(fibers.perform(opened:write_op('Z')) == 1)
+    assert(opened:flush())
+    assert(opened:seek('set', 0) == 0)
+    assert(opened:read_exactly(6) == 'Zbcdef')
+    assert(opened:close())
+  end, { host = host_with_provider(provider) })
+end
+
+function tests.write_op_transfers_responsibility_and_flush_reports_host_failure()
+  local provider = memory_provider()
+  local original_open = provider.open
+  function provider:open(path, mode, opts)
+    local backend, err = original_open(self, path, mode, opts)
+    if not backend then return nil, err end
+    function backend:write(_bytes)
+      return nil, HostError.system('file', 'write', 'synthetic write failure', 'EIO', nil, { path = path })
+    end
+    return backend
+  end
+
+  local result = fibers.try_run(function()
+    local opened = assert(file.open('/write-failure', 'wb', {}))
+    -- Admission to the file-owned TX Flow is the write transaction.
+    assert(fibers.perform(opened:write_op('abc')) == 3)
+    local ok, err = opened:flush()
+    assert(ok == nil)
+    assert(HostError.is(err, 'system') and err.code == 'EIO')
+    opened:close('write failed')
+  end, { host = host_with_provider(provider) })
+  -- The failed TX responsibility remains visible when the file Lifetime closes.
+  assert(result.ok == false)
 end
 
 function tests.flush_sync_and_permissions_are_distinct()
@@ -526,6 +635,41 @@ function tests.native_evented_file_provider_when_available()
   pcall(os.remove, path)
   pcall(os.remove, directory)
   assert(result.ok, result:tostring())
+end
+
+
+function tests.bounded_file_ops_are_atomic_while_direct_methods_are_procedural()
+  local provider = memory_provider({ ['/bounded-byte-protocol'] = 'abcdefgh' })
+  fibers.run(function()
+    local opened = assert(file.open('/bounded-byte-protocol', 'r+b', {
+      read_capacity = 2,
+      read_chunk_size = 2,
+      write_capacity = 2,
+      write_chunk_size = 2,
+    }))
+
+    local exact, exact_err = fibers.perform(opened:read_exactly_op(3))
+    assert(exact == nil)
+    assert(HostError.is(exact_err, 'invalid_argument'))
+    assert(opened:read_exactly(5) == 'abcde')
+
+    assert(opened:seek('set', 0) == 0)
+    local all, all_err = fibers.perform(opened:read_all_op({ max = 16 }))
+    assert(all == nil)
+    assert(HostError.is(all_err, 'invalid_argument'))
+    assert(opened:seek('set', 0) == 0)
+    assert(opened:read_all({ max = 16, chunk_size = 2 }) == 'abcdefgh')
+
+    assert(opened:seek('set', 0) == 0)
+    local written, write_err = fibers.perform(opened:write_all_op('WXYZ'))
+    assert(written == nil)
+    assert(HostError.is(write_err, 'invalid_argument'))
+    assert(opened:write_all('WXYZ') == 4)
+    assert(opened:flush())
+    assert(opened:seek('set', 0) == 0)
+    assert(opened:read_exactly(4) == 'WXYZ')
+    assert(opened:close())
+  end, { host = host_with_provider(provider) })
 end
 
 local names = {}

@@ -512,6 +512,7 @@ local outlet = flow:outlet()
 ```lua
 inlet:write_op(value)
 inlet:write_some_op(value)
+inlet:write_all_op(value)
 inlet:reserve_some_op(n [, holder, meta])
 inlet:flush_op()
 inlet:close_op()
@@ -543,7 +544,12 @@ flow:abort_op()
 flow:closed_op()
 ```
 
-Direct twins exist for the listed public operations.
+The `_op` byte methods each describe one transactional byte decision. On bounded
+Flows, impossible exact/admission requests return `Flow.Error.CAPACITY`; delimiter
+and whole-input operations return the same error if the committed buffer saturates
+before their atomic fact can be established. Direct `read_exactly`, `read_all` and
+`write_all` are procedural conveniences which may perform several byte decisions.
+Other listed public operations have ordinary direct twins.
 
 ## `fibers.stream`
 
@@ -569,6 +575,7 @@ stream:read_line_op([opts])
 stream:read_all_op([opts])
 stream:write_op(...)
 stream:write_some_op(bytes)
+stream:write_all_op(...)
 stream:flush_op()
 stream:shutdown_read_op([reason])
 stream:shutdown_write_op([reason])
@@ -578,7 +585,7 @@ stream:abort_op([reason])
 stream:closed_op()
 ```
 
-Direct twins exist for the I/O operations.
+The direct `read_exactly`, `read_all` and `write_all` methods are procedural conveniences over repeated bounded byte decisions; the corresponding `_op` methods remain one transaction. Other I/O operations have ordinary direct twins.
 
 ## `fibers.file`
 
@@ -600,28 +607,34 @@ File.mkdir_p_op(path [, opts])
 
 Direct twins are `pipe`, `open`, `tmpfile`, `read_all`, `write_all`, `rename`, `unlink`, `mkdir` and `mkdir_p`.
 
-`submit_*_op` forms return Jobs or Requests where the caller needs selectable completion rather than the final value directly.
+Detached forms are typed by what has been admitted. Static path work such as `submit_read_all_op` returns a `File.Job`; `submit_open_op` returns the admitted `RegularFile`; RegularFile control submissions return a `File.Command`. Data-plane reads and writes have no Request layer: they transact directly on the file's Flow byte plane.
 
 ### RegularFile
 
 ```lua
 file:ready_op()
 file:read_op(count)
+file:read_some_op(count)
 file:read_exactly_op(count)
 file:read_all_op([opts])
 file:write_op(bytes)
+file:write_some_op(bytes)
 file:write_all_op(bytes)
 file:read_line_op([keep])
 file:seek_op([whence, offset])
 file:flush_op()
 file:rename_op(path)
 file:sync_op([opts])
+file:submit_seek_op([whence, offset])
+file:submit_flush_op()
+file:submit_rename_op(path)
+file:submit_sync_op([opts])
 file:close_op([reason])
 file:closed_op()
 file:filename()
 ```
 
-Direct twins exist for these operations.
+`read_op`/`read_some_op`, `read_exactly_op`, `read_all_op`, `write_op`/`write_some_op` and `write_all_op` each describe one atomic Flow-backed byte decision. The direct `read_exactly`, `read_all` and `write_all` methods are shared procedural byte protocols and may cross the configured Flow capacity through repeated transactions. Other ordinary I/O operations have direct twins. Control submissions return a `File.Command`; `command:result_op()` observes the corresponding host-side barrier after admission.
 
 ## `fibers.process`
 

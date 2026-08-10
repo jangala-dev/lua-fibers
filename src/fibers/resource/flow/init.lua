@@ -15,6 +15,8 @@ local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
 local Contract = require('fibers.internal.contract')
 local TrustedState = require('fibers.internal.trusted_state')
+local ByteProtocol = require('fibers.internal.byte_protocol')
+local perform = require('fibers.perform')
 
 local Ready, Wait = Machine.Ready, Machine.Wait
 local INF = math.huge
@@ -127,6 +129,10 @@ end
 
 local function free(flow, state)
   return flow._capacity == INF and INF or flow._capacity - retained(state)
+end
+
+local function buffer_saturated(flow, state)
+  return flow._capacity ~= INF and state.rope:length() >= flow._capacity
 end
 
 local function committed_closed(flow, endpoint)
@@ -280,7 +286,7 @@ T.read_until = select_when('read_until', function(state, payload)
   local finish = find_until(state, payload.sep)
   if finish then return true end
   if state.rope:length() > payload.limit and not state.rope:ends_with_prefix(payload.sep) then return true end
-  return committed_closed(payload.flow, 'input')
+  return committed_closed(payload.flow, 'input') or buffer_saturated(payload.flow, state)
 end, function(state, payload)
   if state.input_error then return Ready.same(nil, state.input_error) end
   local finish, data_len = find_until(state, payload.sep)
@@ -294,29 +300,67 @@ end, function(state, payload)
   if available > payload.limit and not state.rope:ends_with_prefix(payload.sep) then
     return Ready.same(nil, payload.err)
   end
-  if not committed_closed(payload.flow, 'input') then return Wait end
-  if available == 0 then return Ready.same(nil, Errors.EOF) end
-  local next = copy_state(state, true)
-  local partial = next.rope:take(available)
-  if payload.line then return Ready.write(next, partial) end
-  return Ready.write(next, nil, Errors.EOF, partial)
+  if committed_closed(payload.flow, 'input') then
+    if available == 0 then return Ready.same(nil, Errors.EOF) end
+    local next = copy_state(state, true)
+    local partial = next.rope:take(available)
+    if payload.line then return Ready.write(next, partial) end
+    return Ready.write(next, nil, Errors.EOF, partial)
+  end
+  if buffer_saturated(payload.flow, state) then return Ready.same(nil, Errors.CAPACITY) end
+  return Wait
 end, 50)
 
 T.read_all = select_when('read_all', function(state, payload)
-  return state.rope:length() > payload.max or committed_closed(payload.flow, 'input')
+  return state.rope:length() > payload.max
+    or committed_closed(payload.flow, 'input')
+    or buffer_saturated(payload.flow, state)
 end, function(state, payload)
   local available = state.rope:length()
   if available > payload.max then return Ready.same(nil, Errors.TOO_LARGE) end
-  if not committed_closed(payload.flow, 'input') then return Wait end
-  if available == 0 then return Ready.same('') end
-  local next = copy_state(state, true)
-  return Ready.write(next, next.rope:take(available))
+  if committed_closed(payload.flow, 'input') then
+    if available == 0 then return Ready.same('') end
+    local next = copy_state(state, true)
+    return Ready.write(next, next.rope:take(available))
+  end
+  if buffer_saturated(payload.flow, state) then return Ready.same(nil, Errors.CAPACITY) end
+  return Wait
 end, 50)
 
 T.peek = query('peek', function(state, payload)
-  if state.rope:length() < payload.n then return Wait end
-  return Ready.same(state.rope:peek(payload.n))
+  if state.input_error then return Ready.same(nil, state.input_error) end
+  if state.rope:length() >= payload.n then return Ready.same(state.rope:peek(payload.n)) end
+  if committed_closed(payload.flow, 'input') then return Ready.same(nil, Errors.EOF) end
+  return Wait
 end, 100)
+
+-- Trusted byte-plane observation/consumption helper. Unlike read_some, this is
+-- immediately ready even when no bytes are buffered. Seekable resources use it
+-- only after their own transactional EOF fact has established that no more
+-- bytes belong to the current generation.
+T.take_available = update('take_available', function(state, payload)
+  if state.input_error then return Ready.same(nil, state.input_error) end
+  local available = state.rope:length()
+  if payload.max ~= nil and available > payload.max then
+    return Ready.same(nil, Errors.TOO_LARGE)
+  end
+  local n = payload.n and math.min(payload.n, available) or available
+  if n == 0 then return Ready.same('') end
+  local next = copy_state(state, true)
+  return Ready.write(next, next.rope:take(n))
+end, 100)
+
+-- Trusted byte-plane helper -------------------------------------------------
+-- This is deliberately not installed on public endpoints. Seekable host
+-- resources use it to invalidate buffered read-ahead in the same transaction
+-- as their cursor-generation change.
+T.discard_available = update('discard_available', function(state)
+  local available = state.rope:length()
+  if available == 0 then return Ready.same(0) end
+  local next = copy_state(state, true)
+  next.rope:take(available)
+  return Ready.write(next, available)
+end)
 
 T.drop = select_when('drop', function(state, payload)
   return state.input_error ~= nil
@@ -544,6 +588,11 @@ function Inlet:write_some_op(value)
 end
 
 
+function Inlet:write_all_op(value)
+  return self:write_op(value)
+end
+
+
 function Inlet:reserve_some_op(n, holder, meta)
   n = count(n, 1, 'flow space reservation size', true)
   return live(self, function()
@@ -578,14 +627,24 @@ end
 function Outlet:read_exactly_op(n)
   n = count(n, 0, 'flow exact read size')
   if n == 0 then return Op.always('') end
-  return live(self, function() return transition(self._flow, T.read_exactly, { n = n }) end)
+  return live(self, function()
+    if self._flow._capacity ~= INF and n > self._flow._capacity then
+      return Op.always(nil, Errors.CAPACITY)
+    end
+    return transition(self._flow, T.read_exactly, { n = n })
+  end)
 end
 
 
 function Outlet:peek_exactly_op(n)
   n = count(n, 1, 'flow peek size')
   if n == 0 then return Op.always('') end
-  return live(self, function() return transition(self._flow, T.peek, { n = n }) end)
+  return live(self, function()
+    if self._flow._capacity ~= INF and n > self._flow._capacity then
+      return Op.always(nil, Errors.CAPACITY)
+    end
+    return transition(self._flow, T.peek, { n = n })
+  end)
 end
 
 
@@ -632,7 +691,12 @@ end
 function Outlet:drop_op(n)
   n = count(n, 0, 'flow drop size')
   if n == 0 then return Op.always(0) end
-  return live(self, function() return transition(self._flow, T.drop, { n = n }) end)
+  return live(self, function()
+    if self._flow._capacity ~= INF and n > self._flow._capacity then
+      return Op.always(nil, Errors.CAPACITY)
+    end
+    return transition(self._flow, T.drop, { n = n })
+  end)
 end
 
 
@@ -670,6 +734,21 @@ function Outlet:fail_op(err)
   return transition(self._flow, T.fail_write, { err = err })
 end
 
+
+-- Internal byte-plane operations -------------------------------------------
+function Outlet:_take_available_op(n)
+  n = count(n, 0, 'flow available read size')
+  return live(self, function() return transition(self._flow, T.take_available, { n = n }) end)
+end
+
+function Outlet:_take_all_available_op(max)
+  max = count(max, nil, 'flow available read max')
+  return live(self, function() return transition(self._flow, T.take_available, { max = max }) end)
+end
+
+function Outlet:_discard_available_op()
+  return live(self, function() return transition(self._flow, T.discard_available) end)
+end
 
 -- Lease operations ----------------------------------------------------------
 
@@ -791,14 +870,45 @@ Flow.Error = {
   CLOSED = Errors.CLOSED,
   BROKEN_PIPE = Errors.BROKEN_PIPE,
   TOO_LARGE = Errors.TOO_LARGE,
+  CAPACITY = Errors.CAPACITY,
   LINE_TOO_LONG = Errors.LINE_TOO_LONG,
   RETIRED = Errors.RETIRED,
 }
 
+local DEFAULT_PROTOCOL_CHUNK = 16 * 1024
+
+function Inlet:write_all(value)
+  value = bytes(value, 2)
+  if value == '' then return 0 end
+  local limit = self._flow._capacity
+  if limit == 0 then return nil, Errors.CAPACITY end
+  local chunk = limit == INF and #value or limit
+  return ByteProtocol.write_all(function(part) return perform(self:write_op(part)) end, value, chunk)
+end
+
+function Outlet:read_exactly(n)
+  n = count(n, 0, 'flow exact read size')
+  if n == 0 then return '' end
+  if self._flow._capacity == 0 then return nil, Errors.CAPACITY end
+  return ByteProtocol.read_exactly(function(want) return perform(self:read_some_op(want)) end, n, Errors.EOF)
+end
+
+function Outlet:read_all(opts)
+  opts = options(opts, { max = true, chunk_size = true }, 'read_all options')
+  if opts.max == nil then error('read_all expects opts.max', 2) end
+  local maximum = count(opts.max, nil, 'flow read_all max')
+  local chunk = count(opts.chunk_size, DEFAULT_PROTOCOL_CHUNK, 'flow read_all chunk_size', true)
+  return ByteProtocol.read_all(
+    function(want) return perform(self:read_some_op(want)) end,
+    function() return perform(self:peek_exactly_op(1)) end,
+    maximum, chunk, Errors.EOF, Errors.TOO_LARGE
+  )
+end
+
 Direct.install(Lease, { 'ack', 'release', 'fail' })
 Direct.install(SpaceLease, { 'commit', 'release', 'fail' })
 Direct.install(Inlet, { 'write', 'write_some', 'reserve_some', 'flush', 'close', 'closed', 'fail' })
-Direct.install(Outlet, { 'read_some', 'read_exactly', 'peek_exactly', 'read_until', 'read_line', 'read_all', 'drop', 'splice_to', 'lease_some', 'close', 'closed', 'fail' })
+Direct.install(Outlet, { 'read_some', 'peek_exactly', 'read_until', 'read_line', 'drop', 'splice_to', 'lease_some', 'close', 'closed', 'fail' })
 Direct.install(Flow, { 'abort', 'closed' })
 
 return Flow

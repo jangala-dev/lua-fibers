@@ -237,7 +237,7 @@ local inlet = flow:inlet()
 local outlet = flow:outlet()
 ```
 
-The capacity is the constructor argument; pass `nil` for an unbounded Flow. Attach optional diagnostic context separately with `:label(...)`.
+The capacity is the constructor argument; pass `nil` for an unbounded Flow. Capacity is semantic for atomic byte operations: a bounded Flow cannot establish an indivisible byte fact larger than the bytes it can retain. It is construction-time policy rather than a live-state observation. Attach optional diagnostic context separately with `:label(...)`.
 
 A Flow has one stable producer endpoint, the `Inlet`, and one stable consumer
 endpoint, the `Outlet`:
@@ -253,6 +253,7 @@ The complete producer surface is:
 ```lua
 inlet:write_op(bytes)
 inlet:write_some_op(bytes)
+inlet:write_all_op(bytes)
 inlet:reserve_some_op(maximum, holder, meta)
 inlet:flush_op()
 inlet:close_op(reason)
@@ -261,7 +262,11 @@ inlet:fail_op(error)
 ```
 
 `write_op` accepts the complete string or waits. It returns the number of bytes
-accepted, or `nil, error`.
+accepted, or `nil, error`. On a bounded Flow, a string larger than the Flow capacity
+cannot be one atomic admission and returns `nil, Flow.Error.CAPACITY` without
+changing the Flow. `write_all_op` has the same one-transaction meaning; the direct
+`write_all(bytes)` convenience performs as many bounded `write_op` admissions as
+required.
 
 `write_some_op` accepts a non-empty prefix when capacity is available. It
 returns:
@@ -303,8 +308,12 @@ outlet:fail_op(error)
 `read_some_op` waits for at least one byte and returns no more than the requested
 maximum. At terminal EOF it returns `nil, Flow.Error.EOF`.
 
-`read_exactly_op` waits for the requested count. If EOF arrives first, it
-returns:
+`read_exactly_op` waits for the requested count as one transaction. If `count`
+exceeds a finite Flow capacity, success is structurally impossible and the Option
+returns `nil, Flow.Error.CAPACITY` immediately without consuming bytes. The direct
+`read_exactly(count)` convenience is procedural: it may perform several
+`read_some_op` decisions and therefore may read more than the Flow capacity. If EOF
+arrives first, both forms report:
 
 ```text
 nil, Flow.Error.EOF, partial_bytes
@@ -320,7 +329,11 @@ outlet:read_until_op('\r\n\r\n', {
 ```
 
 `max` defaults to 8192. EOF before the separator returns `nil,
-Flow.Error.EOF, partial_bytes`.
+Flow.Error.EOF, partial_bytes`. A bounded Flow may use a larger declared `max`: if
+the separator has not arrived and the committed buffer actually saturates before
+the operation can establish either success or the declared limit, the operation
+returns `nil, Flow.Error.CAPACITY` without consuming the buffered prefix. This
+prevents an impossible atomic wait from masquerading as ordinary suspension.
 
 Delimiter matching is incremental. Flow's persistent Rope retains a KMP search
 state for each active separator. The first search scans the retained bytes once;
@@ -348,7 +361,12 @@ returns `nil, Flow.Error.EOF`.
 outlet:read_all_op({ max = 1024 * 1024 })
 ```
 
-Code which deliberately accepts unbounded input may pass `math.huge`.
+Code which deliberately accepts unbounded input may pass `math.huge`. On a bounded
+Flow, `read_all_op` is still one atomic EOF fact: if the buffer saturates before EOF
+or `max + 1` bytes establish `TOO_LARGE`, it returns `Flow.Error.CAPACITY` without
+consuming. The direct `read_all({ max=..., chunk_size=... })` convenience instead
+consumes incrementally across repeated byte decisions and can therefore read a
+result much larger than the Flow capacity.
 
 `peek_exactly_op` waits until the requested prefix is available without
 consuming it. `drop_op` consumes exactly the requested count.
@@ -531,11 +549,15 @@ stream:read_all_op(opts)
 
 stream:write_op(bytes)
 stream:write_some_op(bytes)
+stream:write_all_op(bytes)
 stream:flush_op()
 ```
 
-The methods delegate to the configured Flow endpoints. Facility authors use
-`reader()` and `writer()` when they need peeking, splicing or leases.
+The `_op` methods delegate to one transactional decision on the configured Flow
+endpoints. The direct `read_exactly`, `read_all` and `write_all` conveniences are
+procedural byte protocols and may perform several such decisions when the requested
+result exceeds a finite Flow capacity. Facility authors use `reader()` and
+`writer()` when they need peeking, splicing or leases.
 
 #### Stream closure
 

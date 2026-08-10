@@ -515,7 +515,6 @@ do
   assert_eq(Flow.Error.EOF, 'eof')
 end
 
-print('tests/test_stream_memory.lua: ok')
 
 -- Stream convenience operations retain the same option semantics.
 do
@@ -536,3 +535,70 @@ do
   assert(composed:reader() == read_flow:outlet())
   assert(composed:writer() == write_flow:inlet())
 end
+
+-- Bounded Streams distinguish one atomic byte decision from the procedural
+-- direct convenience. The op cannot establish more bytes than fit in one Flow;
+-- the direct method composes several honest decisions through the same buffer.
+do
+  local a, b = Stream.memory_pair({ label = 'bounded-exact-protocol', capacity = 2 })
+  local op_value, op_err, direct_value
+  local st = fibers.try_run(function()
+    op_value, op_err = fibers.perform(b:read_exactly_op(3))
+    local writer = fibers.spawn(function()
+      assert_eq(a:write_all('abcde'), 5)
+      assert_truthy(a:shutdown_write())
+    end)
+    direct_value = b:read_exactly(5)
+    writer:await()
+  end).runtime_status
+  assert_status(st, 'found')
+  assert_nil(op_value)
+  assert_eq(op_err, 'capacity')
+  assert_eq(direct_value, 'abcde')
+end
+
+-- read_all_op remains one atomic EOF fact and reports saturation without
+-- consuming; read_all() is the bounded procedural convenience and can drain a
+-- stream much larger than its Flow capacity.
+do
+  local a, b = Stream.memory_pair({ label = 'bounded-read-all-protocol', capacity = 2 })
+  local atomic, atomic_err, preserved, all
+  local st = fibers.try_run(function()
+    fibers.perform(a:writer():write_op('ab'))
+    atomic, atomic_err = fibers.perform(b:read_all_op({ max = 16 }))
+    preserved = fibers.perform(b:reader():read_exactly_op(2))
+
+    local writer = fibers.spawn(function()
+      assert_eq(a:write_all('cdefgh'), 6)
+      assert_truthy(a:shutdown_write())
+    end)
+    all = b:read_all({ max = 16, chunk_size = 2 })
+    writer:await()
+  end).runtime_status
+  assert_status(st, 'found')
+  assert_nil(atomic)
+  assert_eq(atomic_err, 'capacity')
+  assert_eq(preserved, 'ab')
+  assert_eq(all, 'cdefgh')
+end
+
+-- Atomic write-all is capacity bounded; the direct write_all procedure chunks
+-- the same bytes through repeated transactional admissions.
+do
+  local a, b = Stream.memory_pair({ label = 'bounded-write-all-protocol', capacity = 2 })
+  local atomic_n, atomic_err, received
+  local st = fibers.try_run(function()
+    atomic_n, atomic_err = fibers.perform(a:write_all_op('abc'))
+    local reader = fibers.spawn(function()
+      received = b:read_exactly(5)
+    end)
+    assert_eq(a:write_all('abcde'), 5)
+    reader:await()
+  end).runtime_status
+  assert_status(st, 'found')
+  assert_nil(atomic_n)
+  assert_eq(atomic_err, 'capacity')
+  assert_eq(received, 'abcde')
+end
+
+print('tests/test_stream_memory.lua: ok')

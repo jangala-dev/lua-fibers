@@ -7,10 +7,22 @@ version 1 custody and option semantics.
 
 ## Evented regular files
 
-Regular files are not readiness-driven: polling a regular descriptor does not
-prove that storage or filesystem work will complete without waiting. Fibers
-therefore executes every regular-file and path operation through an asynchronous
-provider and exposes no synchronous bootstrap file API.
+Regular files are completion-driven rather than readiness-driven: polling a
+regular descriptor does not prove that storage or filesystem work will complete
+without waiting. Fibers therefore keeps host file calls in a private file-driver
+Lifetime. The byte plane is nevertheless the same one used by Streams and
+sockets: bounded `Flow` state sits between the application and the host driver.
+
+```text
+                          Flow byte plane
+
+application reads  <---  RX Flow  <--- host read driver
+application writes --->  TX Flow  ---> host write driver
+```
+
+Sockets service the same Flow reservation/lease protocol from readiness events;
+regular files service it from completion-driven provider calls. Once bytes reach
+a Flow, the transactional semantics are identical.
 
 File operations require an active runtime:
 
@@ -29,48 +41,66 @@ fibers.run(function()
 end, { host = AutoIO.default() })
 ```
 
-Direct methods perform their corresponding `_op`; ordinary `_op` calls yield the
-operation's final value, as elsewhere in Fibers:
+`RegularFile:read_op(n)` is a single transactional byte decision. It consumes
+already published RX bytes, or becomes ready at logical EOF. It does not commit
+merely because a host read was submitted. A timeout therefore races actual byte
+availability:
 
 ```lua
-local contents, err = fibers.perform(
-  file.read_all_op('/etc/resolv.conf', { max = 65536 })
-)
+local which, value = fibers.perform(Op.named_choice({
+  bytes = f:read_op(4096),
+  timeout = Sleep.sleep_op(1),
+}))
 ```
 
-Callers that need detached ordered admission can use the explicit `submit_*_op`
-forms. These return a `File.Job` or `File.Request` held in custody, whose completion remains
-selectable through `result_op()`:
+`read_some_op(n)` is the Stream-style name for the same operation; `read_op(n)`
+is retained as the ordinary file spelling. `read_exactly_op` and `read_all_op`
+remain one transactional byte decision: if a finite read-ahead Flow cannot hold
+the fact required by that atomic operation they report a capacity error without
+consuming buffered bytes. The direct `read_exactly` and bounded `read_all` methods
+use the same shared procedural byte layer as Streams and may perform several
+`read_some_op` decisions. Fibers therefore never makes a buffer unbounded merely
+to pretend that a multi-decision protocol is one transaction.
 
-```lua
-local job = fibers.perform(file.submit_read_all_op('/etc/resolv.conf', { max = 65536 }))
-local contents, err = fibers.perform(job:result_op())
-```
-
-`file.open()` returns a regular file held in custody. Operations on one file are
-serialised in submission order:
+Writes follow the corresponding TX law. `write_op(bytes)` and `write_all_op(bytes)`
+mean that the file Lifetime has transactionally accepted responsibility for all
+of `bytes`; an atomic request larger than finite TX capacity reports a capacity
+error. The direct `write_all(bytes)` procedure chunks larger values through
+repeated admissions. `write_some_op` accepts as much as the current Flow capacity
+permits. `flush_op()` is the
+settlement barrier: it waits until every byte accepted before that command has
+reached the provider, then performs the provider flush operation. `sync_op()`
+adds the requested storage synchronisation boundary.
 
 ```lua
 local f = assert(file.open('/tmp/example', 'w+b'))
-assert(f:write('data'))
+assert(f:write('data') == 4)   -- responsibility transferred to f
+assert(f:flush())              -- accepted bytes reached the provider
 assert(f:seek('set', 0) == 0)
 assert(f:read_exactly(4) == 'data')
-assert(f:flush())
 assert(f:sync())
 assert(f:close())
 ```
 
+Read-ahead does not redefine the file cursor. The RegularFile tracks buffered
+read-ahead independently from the provider's host cursor. A seek or write
+transactionally invalidates incompatible buffered bytes and advances a read
+generation; stale in-flight prefetch is discarded. Before the next cursor-
+sensitive host action, the driver reconciles any read-ahead debt. Thus `seek
+("cur", ...)` is relative to bytes actually consumed by the application, not to
+how far the provider happened to prefetch.
+
+Detached admission remains explicit, but there is no data-plane File Request.
+Static path jobs such as `submit_read_all_op` return a `File.Job`. Open admission
+returns the admitted `RegularFile`. Cursor/durability controls such as
+`submit_seek_op`, `submit_flush_op`, `submit_sync_op` and `submit_rename_op`
+return a `File.Command`; its completion is selectable through `result_op()`.
+Ordinary reads and writes transact directly on the byte plane.
+
 The surface includes bounded `read_all`, `write_all`, `open`, `tmpfile`,
-`rename`, `unlink`, `mkdir` and `mkdir_p`. Open files support `read`,
-`read_exactly`, `read_line`, bounded `read_all`, `write`, `seek`, `flush`,
-`sync`, `rename`, `filename` and `close`.
-
-`flush` drains provider or language-level buffering. `sync` requests storage
-synchronisation and may use `fdatasync` when `data_only = true`:
-
-```lua
-assert(f:sync({ data_only = true }))
-```
+`rename`, `unlink`, `mkdir` and `mkdir_p`. Open files support `read`/`read_some`,
+`read_exactly`, `read_line`, bounded `read_all`, `write`/`write_some`, `seek`,
+`flush`, `sync`, `rename`, `filename` and `close`.
 
 Temporary files are created with exclusive naming and default permissions of
 `0600`. They are unlinked automatically when closed. Renaming one publishes it
@@ -129,13 +159,16 @@ stream:read_exactly_op(16)
 stream:read_line_op({ max = 8192 })
 stream:read_all_op({ max = 1024 * 1024 })
 stream:write_op('hello', ' ', 'world')
+stream:write_all_op('atomic bytes')
 stream:flush_op()
 stream:close_op()
 ```
 
 There is deliberately no Lua-file-style `read`/`read_op` compatibility shim.
 Choosing `read_some`, `read_exactly`, `read_line` or `read_all` states the byte
-contract at the call site.
+contract at the call site. The `_op` forms remain one transactional byte fact;
+the direct `read_exactly`, `read_all` and `write_all` conveniences may compose
+several such facts when a bounded Stream is smaller than the requested protocol.
 
 ## Processes
 
