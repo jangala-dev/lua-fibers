@@ -77,7 +77,7 @@ end
 function Engine.resume(engine, request, outcome, cancelled)
   local packed, wrap = outcome and outcome.pack or nil, outcome and outcome.wrap or nil
   request.order, request.op, request.interrupt, request.metadata, request.activation_root = nil, nil, nil, nil, nil
-  engine.runtime:_resume_fiber(request, cancelled, packed, wrap)
+  engine.runtime:_resume_fiber(request, true, cancelled, packed, wrap)
 end
 
 function Engine.interrupt(engine, token, cancelled)
@@ -235,7 +235,7 @@ local function candidate_can_resume_first(candidate, fiber, members)
 end
 
 local function strict_component(engine, fiber)
-  local provisional_admission = engine.runtime._ready_head <= engine.runtime._ready_tail
+  local provisional_admission = engine.runtime:_has_ready()
   local requests, component = component_requests(engine, fiber, provisional_admission)
   local members = {}
   for i = 1, #engine.pending do
@@ -286,7 +286,7 @@ function Engine:resolve_without_suspension(fiber)
 end
 
 local function pending_status(engine, refs, unknown)
-  local waits = Interest.summarise(Interest.merge(Proof.collect_interests(refs)))
+  local waits = Interest.summarise(Proof.collect_interests(refs))
   clear(refs)
   if unknown then
     return {
@@ -305,7 +305,7 @@ end
 local function search_admitted(engine, fiber, search_limit)
   local request = engine.pending[#engine.pending]
   if request ~= fiber then return nil end
-  local provisional_admission = engine.runtime._ready_head <= engine.runtime._ready_tail
+  local provisional_admission = engine.runtime:_has_ready()
   local candidate, ref, unknown = find_candidate(engine, request, search_limit, nil, nil, provisional_admission)
   return request, candidate, ref, unknown
 end
@@ -427,10 +427,7 @@ local function step(engine, opts)
     return pending_status(engine, refs, unknown)
   end
 
-  if #engine.pending == 0 then
-    if engine.runtime._live_fibers > 0 then return { tag = 'pending', kind = 'no-ready-work' } end
-    return { tag = 'idle', value = true }
-  end
+  if #engine.pending == 0 then return { tag = 'idle', value = true } end
 
   local committed, unknown, refs, start = scan_pending(engine, engine._step_cursor, search_limit)
   if committed then

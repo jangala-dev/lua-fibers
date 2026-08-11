@@ -12,7 +12,7 @@ local default_clock
 local finite_number = Contract.finite_number
 
 local function wake(runtime, leaf, deadline)
-  return Interest.timer(deadline, leaf.resource)
+  return Interest.timer(deadline)
 end
 
 local function absent(runtime, deadline)

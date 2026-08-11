@@ -14,31 +14,10 @@ local function require_optional(module_name, feature)
   error((feature or module_name) .. ' requires optional package module ' .. module_name .. ': ' .. tostring(module), 3)
 end
 
--- Internal perform-boundary interruption tokens.
-local InterruptToken = {}
-InterruptToken.__index = InterruptToken
-function InterruptToken:is_raised()
-  return self.raised == true
-end
-
+-- Internal perform-boundary interruption token.  Raising is capability-safe:
+-- the token exposes state only; committed interrupt Effects own mutation.
 local function new_interrupt(name)
-  return setmetatable({
-    name = name or 'interrupt',
-    version = 0,
-    raised = false,
-    reason = nil,
-    _fibers_interrupt = true,
-  }, InterruptToken)
-end
-
-local function raise_interrupt(token, reason)
-  if type(token) ~= 'table' or token._fibers_interrupt ~= true then
-    error('raise_interrupt expects an interrupt token', 2)
-  end
-  token.raised = true
-  token.reason = reason
-  token.version = (token.version or 0) + 1
-  return true
+  return { name = name or 'interrupt', raised = false, reason = nil, _fibers_interrupt = true }
 end
 
 local Runtime = {}
@@ -56,10 +35,6 @@ end
 
 local unpack_ = table.unpack or unpack
 local pack_ = Values.pack
-local function unpack_pack(p)
-  return unpack_(p, 1, p.n)
-end
-
 local Cancellation = {}
 Cancellation.__index = Cancellation
 Cancellation.__tostring = function(e)
@@ -134,57 +109,25 @@ function Runtime:_is_current_fiber()
   return running == f.co
 end
 
+local function phase_error(self, action, message, level)
+  return self:_fail('phase_error', message, { action = action, level = level or 0 })
+end
+
 function Runtime:_require_perform_allowed(level)
-  if self:_is_current_fiber() and self._phase == 'fiber' then
-    return true
-  end
-  return self:_fail('phase_error', 'perform may only be called by the currently resumed runtime fiber', {
-    action = 'perform',
-    phase = self._phase,
-    level = level or 0,
-  })
+  if self:_is_current_fiber() and self._phase == 'fiber' then return true end
+  return phase_error(self, 'perform', 'perform may only be called by the currently resumed runtime fiber', level)
 end
 
 function Runtime:_require_spawn_allowed(level)
-  if self._phase == 'external' or self._phase == 'fiber' then
-    return true
-  end
-  return self:_fail('phase_error', 'spawn may not be called from runtime internals', {
-    action = 'spawn',
-    phase = self._phase,
-    level = level or 0,
-  })
+  if self._phase == 'external' or self._phase == 'fiber' then return true end
+  return phase_error(self, 'spawn', 'spawn may not be called from runtime internals', level)
 end
 
 function Runtime:_require_driver_call(action, level)
-  if not self:_is_current_fiber() and self._phase == 'external' then
-    return true
-  end
-  return self:_fail('phase_error', tostring(action) .. ' may only be called by external driver code', {
-    action = action,
-    phase = self._phase,
-    level = level or 0,
-  })
+  if not self:_is_current_fiber() and self._phase == 'external' then return true end
+  return phase_error(self, action, tostring(action) .. ' may only be called by external driver code', level)
 end
 
-local function finish_phase_call(self, name, kind, fatal, committed, result)
-  if result[1] then return unpack_(result, 2, result.n) end
-  local err = result[2]
-  if type(err) == 'table' and err._fibers_error and not fatal then error(err, 0) end
-  if fatal then
-    return self:_fatal(kind or 'effect_error', err, { phase = name, committed = committed, level = 0 })
-  end
-  return self:_fail(kind or 'callback_error', err, { phase = name, level = 0 })
-end
-
-function Runtime:_set_phase(name)
-  local old = self._phase
-  self._phase = name
-  return old
-end
-function Runtime:_restore_phase(old)
-  self._phase = old
-end
 local function phase_pcall(self, name, fn, ...)
   local old = self:_set_phase(name)
   local result = pack_(pcall(fn, ...))
@@ -192,28 +135,32 @@ local function phase_pcall(self, name, fn, ...)
   return result
 end
 
-function Runtime:_call_in_phase(name, kind, fn, ...)
-  return finish_phase_call(self, name, kind, false, nil, phase_pcall(self, name, fn, ...))
-end
-function Runtime:_call_fatal_in_phase(name, kind, committed, fn, ...)
-  return finish_phase_call(self, name, kind, true, committed, phase_pcall(self, name, fn, ...))
-end
-
--- Trusted pre-commit authoring callbacks need stricter handling than ordinary
--- speculative callbacks. A Fibers-generated structured error (notably a
--- phase_error) retains its original classification, while an arbitrary callback
--- failure is a fatal contract error before commit. This prevents an author bug
--- from being mistaken for semantic candidate rejection.
-function Runtime:_call_contract_in_phase(name, kind, fn, ...)
-  local result = phase_pcall(self, name, fn, ...)
+local function phase_result(self, name, kind, fatal, committed, result)
   if result[1] then return unpack_(result, 2, result.n) end
   local err = result[2]
-  if type(err) == 'table' and err._fibers_error then error(err, 0) end
-  return self:_fatal(kind or 'effect_contract_error', err, {
-    phase = name,
-    committed = false,
-    level = 0,
-  })
+  if type(err) == 'table' and err._fibers_error and fatal ~= true then error(err, 0) end
+  if fatal ~= false then return self:_fatal(kind, err, { phase = name, committed = committed, level = 0 }) end
+  return self:_fail(kind, err, { phase = name, level = 0 })
+end
+
+function Runtime:_set_phase(name)
+  local old = self._phase
+  self._phase = name
+  return old
+end
+function Runtime:_restore_phase(old) self._phase = old end
+
+function Runtime:_call_in_phase(name, kind, fn, ...)
+  return phase_result(self, name, kind or 'callback_error', false, nil, phase_pcall(self, name, fn, ...))
+end
+function Runtime:_call_fatal_in_phase(name, kind, committed, fn, ...)
+  return phase_result(self, name, kind or 'effect_error', true, committed, phase_pcall(self, name, fn, ...))
+end
+
+-- Trusted pre-commit authoring failures are fatal, except Fibers-generated
+-- structured errors which retain their original classification.
+function Runtime:_call_contract_in_phase(name, kind, fn, ...)
+  return phase_result(self, name, kind or 'effect_contract_error', nil, false, phase_pcall(self, name, fn, ...))
 end
 
 local function instrumentation_option(value, label, level)
@@ -255,11 +202,6 @@ function Runtime.new(opts)
     _fibers_id = 'runtime-' .. tostring(next_runtime_id),
     host = opts.host or {},
     _phase = 'external',
-    _failed = nil,
-    _ready_fibers = {},
-    _ready_head = 1,
-    _ready_tail = 0,
-    _live_fibers = 0,
     _next_fiber_id = 0,
     instrumentation = instrumentation,
   }, Runtime))
@@ -344,27 +286,19 @@ local function spawn_unchecked(self, fn, scope, subject)
     _fibers_id = id,
     _fibers_label_subject = subject,
     co = coroutine.create(fn),
-    started = false,
     done = false,
     scope = scope,
   })
-  self._ready_tail = self._ready_tail + 1
-  self._ready_fibers[self._ready_tail] = fiber
-  self._live_fibers = self._live_fibers + 1
+  if self._ready_tail then self._ready_tail._ready_next = fiber else self._ready_head = fiber end
+  self._ready_tail = fiber
   local instrumentation = self.instrumentation
   if instrumentation then
     instrumentation:inc('fibers_spawned')
-    instrumentation:max('live_fibers', self._live_fibers)
-    instrumentation:max('ready_fibers', self._ready_tail - self._ready_head + 1)
   end
   return fiber
 end
 
-function Runtime:spawn_raw(fn)
-  self:_check_not_failed(2)
-  self:_require_spawn_allowed(2)
-  return spawn_unchecked(self, fn)
-end
+function Runtime:spawn_raw(fn) return self:_spawn_raw(fn) end
 
 function Runtime:_spawn_raw(fn, scope, subject)
   self:_check_not_failed(2)
@@ -378,7 +312,7 @@ function Runtime:_spawn_committed(fn, scope, subject)
 end
 
 function Runtime:_discharge_interrupt(token, reason)
-  raise_interrupt(token, reason)
+  token.raised, token.reason = true, reason
   return self.engine:interrupt(token, Runtime.cancelled(reason, token))
 end
 
@@ -393,7 +327,7 @@ function Runtime:_perform_current(op, interrupt, masked)
   if wrap then
     packed = wrap(packed)
   end
-  return unpack_pack(packed)
+  return unpack_(packed, 1, packed.n)
 end
 
 function Runtime:perform(op, opts)
@@ -411,14 +345,13 @@ function Runtime:_finish_fiber(fiber)
   -- its coroutine and dynamic scope graph must not be retained by the runtime.
   fiber.co = nil
   fiber.scope = nil
-  self._live_fibers = self._live_fibers - 1
   local instrumentation = self.instrumentation
   if instrumentation then
     instrumentation:inc('fibers_completed')
   end
 end
 
-function Runtime:_resume_fiber(fiber, a, b, c)
+function Runtime:_resume_fiber(fiber, resumed, a, b, c)
   local ok, yielded, yielded_op, yielded_interrupt
   local instrumentation = self.instrumentation
   if instrumentation then
@@ -427,10 +360,9 @@ function Runtime:_resume_fiber(fiber, a, b, c)
   local previous_runtime, previous_fiber = Context.runtime, self._current_fiber
   Context.runtime, self._current_fiber = self, fiber
   local old_phase = self:_set_phase('fiber')
-  if fiber.started then
+  if resumed then
     ok, yielded, yielded_op, yielded_interrupt = coroutine.resume(fiber.co, a, b, c)
   else
-    fiber.started = true
     ok, yielded, yielded_op, yielded_interrupt = coroutine.resume(fiber.co)
   end
   self:_restore_phase(old_phase)
@@ -453,25 +385,15 @@ function Runtime:_resume_fiber(fiber, a, b, c)
   end
 end
 
+function Runtime:_has_ready() return self._ready_head ~= nil end
+
 function Runtime:_start_one()
-  local head, tail = self._ready_head, self._ready_tail
-  if head > tail then
-    return nil
-  end
-
-  local fiber = self._ready_fibers[head]
-  self._ready_fibers[head] = nil
-  head = head + 1
-  if head > tail then
-    -- Reset the consumed queue so indices and the backing table do not grow
-    -- with the lifetime of a long-running runtime.
-    self._ready_head = 1
-    self._ready_tail = 0
-  else
-    self._ready_head = head
-  end
-
-  self:_resume_fiber(fiber)
+  local fiber = self._ready_head
+  if not fiber then return nil end
+  self._ready_head = fiber._ready_next
+  fiber._ready_next = nil
+  if not self._ready_head then self._ready_tail = nil end
+  self:_resume_fiber(fiber, false)
   return fiber
 end
 

@@ -142,7 +142,7 @@ do
     rt:perform(Op.emit(Effect.interrupt(token, 'stop')))
   end):label('raise-by-effect')
   run_all(rt)
-  assert_truthy(token:is_raised(), 'committed interrupt effect raises token')
+  assert_truthy(token.raised, 'committed interrupt effect raises token')
   assert_eq(token.reason, 'stop', 'committed interrupt effect records reason')
 end
 

@@ -31,29 +31,23 @@ local ADVANCE_OPTIONS = {
   max_seconds = Contract.non_negative_number,
 }
 
-local function copy(value, label)
-  return Contract.copy_table(value, label or 'table', 3)
-end
-
 local function default(value, fallback)
   return value == nil and fallback or value
 end
 
 local function runtime_options(opts, host)
-  local out = opts.runtime_options == nil and {} or copy(opts.runtime_options, 'Application runtime_options')
+  local out = Contract.copy_table(opts.runtime_options, 'Application runtime_options', 3)
   out.host = host
   return out
 end
 
 local function public_status(self, fields)
-  fields = fields or {}
   fields._fibers_embed_status = true
   if self._status_marker then fields[self._status_marker] = true end
   fields.application = self
   fields.runtime = self.runtime
   fields.scope = self.scope
   fields.result = self._result
-  self._status = fields
   if self.on_status then
     self.on_status(fields)
   end
@@ -61,14 +55,24 @@ local function public_status(self, fields)
 end
 
 local function earliest_deadline(status)
-  local interests = status and status.interests or {}
+  local interests = status.interests or {}
   return WaitSet.build(interests).deadline, interests
 end
 
+
+local function drain_external(self, limit)
+  local drain = self.host._drain_external
+  if type(drain) ~= 'function' or limit <= 0 then return true, 0 end
+  local ok, count = Protected.pcall(drain, self.host, limit)
+  count = count or 0
+  if ok and count > 0 and type(self.host._consume_wake) == 'function' then self.host:_consume_wake('external') end
+  return ok, count
+end
+
 local function unsupported_interest(self, interests)
-  local supports = self.supports_interest or self.host.supports_interest
+  local supports = self.host.supports_interest
   if type(supports) ~= 'function' then return nil end
-  for i = 1, #(interests or {}) do
+  for i = 1, #interests do
     local interest = interests[i]
     local ok, reason = supports(self.host, interest, self)
     if ok == false then
@@ -76,10 +80,6 @@ local function unsupported_interest(self, interests)
     end
   end
   return nil
-end
-
-local function runtime_has_ready(runtime)
-  return (runtime._ready_head or 1) <= (runtime._ready_tail or 0)
 end
 
 function Application.new(fn, opts)
@@ -103,18 +103,10 @@ function Application.new(fn, opts)
   local self = setmetatable({
     _fibers_embed_application = true,
     _status_marker = opts.status_marker,
-    _application_marker = opts.application_marker,
     host = host,
     runtime = runtime,
     scope = scope,
-    _root_fiber = nil,
-    _result = nil,
-    _status = nil,
-    _settled = false,
-    _advancing = false,
-    _closed = false,
     _owns_host = opts.owns_host ~= false,
-    _next_deadline = nil,
     max_steps_per_turn = default(opts.max_steps_per_turn, 128),
     max_work_per_step = default(opts.max_work_per_step, 512),
     max_external_per_turn = default(opts.max_external_per_turn, 4096),
@@ -122,7 +114,7 @@ function Application.new(fn, opts)
     on_status = opts.on_status,
   }, Application)
 
-  if self._application_marker then self[self._application_marker] = true end
+  if opts.application_marker then self[opts.application_marker] = true end
   self._root_fiber = RootSession.spawn_root(runtime, scope, fn, label, false)
   return self
 end
@@ -140,11 +132,11 @@ function Application:now()
 end
 
 function Application:_complete(runtime_status, runtime_error)
-  if self._settled then
+  if self._result then
     return public_status(self, {
       state = 'settled',
       reason = 'complete',
-      runtime_status = runtime_status or (self._status and self._status.runtime_status),
+      runtime_status = runtime_status or self._result.runtime_status,
       needs_immediate_resume = false,
     })
   end
@@ -152,7 +144,6 @@ function Application:_complete(runtime_status, runtime_error)
   local result = RootSession.complete(
     self.runtime, self.scope, self._root_fiber, runtime_status, runtime_error)
   self._result = result
-  self._settled = true
   if type(self._detach_scheduler) == 'function' then self:_detach_scheduler() end
   if type(self.host.mark_done) == 'function' then self.host:mark_done(result) end
   if self._owns_host and type(self.host.close) == 'function' then self.host:close() end
@@ -179,7 +170,6 @@ local function advance_limits(self, opts)
 end
 
 local function pending_turn(self, reason, runtime_status, fields)
-  fields = fields or {}
   local deadline, interests = earliest_deadline(runtime_status)
   fields.state = 'pending'
   fields.reason = reason
@@ -189,6 +179,11 @@ local function pending_turn(self, reason, runtime_status, fields)
   fields.needs_immediate_resume = fields.needs_immediate_resume == true
   self._next_deadline = deadline
   return public_status(self, fields)
+end
+
+local function leave(self, fn, ...)
+  self._advancing = false
+  return fn(self, ...)
 end
 
 ---Advance the application within one host-controlled execution horizon.
@@ -204,11 +199,11 @@ function Application:advance(opts)
   if self._closed then
     error('cannot advance a closed embedded application', 2)
   end
-  if self._settled then
+  if self._result then
     return public_status(self, {
       state = 'settled',
       reason = 'complete',
-      runtime_status = self._status and self._status.runtime_status,
+      runtime_status = self._result.runtime_status,
       needs_immediate_resume = false,
     })
   end
@@ -220,20 +215,9 @@ function Application:advance(opts)
   self._advancing = true
   if type(self.host._consume_wake) == 'function' then self.host:_consume_wake('advance') end
 
-  local external_count = 0
-  local ok_external, external_or_error = Protected.pcall(function()
-    if type(self.host._drain_external) == 'function' then
-      return self.host:_drain_external(max_external)
-    end
-    return 0
-  end)
+  local ok_external, external_count = drain_external(self, max_external)
   if not ok_external then
-    self._advancing = false
-    return self:_complete(nil, external_or_error)
-  end
-  external_count = external_or_error or 0
-  if external_count > 0 then
-    if type(self.host._consume_wake) == 'function' then self.host:_consume_wake('external') end
+    return leave(self, self._complete, nil, external_count)
   end
 
   local last_status
@@ -242,20 +226,17 @@ function Application:advance(opts)
       return self.runtime:step({ max_work = max_work })
     end)
     if not ok then
-      self._advancing = false
-      return self:_complete(last_status, status)
+      return leave(self, self._complete, last_status, status)
     end
     last_status = status
 
     if status and status.tag == 'idle' then
-      self._advancing = false
-      return self:_complete(status)
+      return leave(self, self._complete, status)
     end
 
-    local ready = runtime_has_ready(self.runtime)
+    local ready = self.runtime:_has_ready()
     if status and status.tag == 'quiescent' and not ready then
-      self._advancing = false
-      return self:_complete(status)
+      return leave(self, self._complete, status)
     end
 
     local hard_capacity = status
@@ -266,8 +247,7 @@ function Application:advance(opts)
         or status.reason == 'search_trail_limit'
       )
     if hard_capacity and not ready then
-      self._advancing = false
-      return pending_turn(self, 'proof-capacity', status, {
+      return leave(self, pending_turn, 'proof-capacity', status, {
         needs_immediate_resume = false,
         steps = step,
         external_deliveries = external_count,
@@ -277,14 +257,13 @@ function Application:advance(opts)
 
     local immediate = ready
       or status
-        and (status.tag == 'found' or status.kind == 'budget' or status.kind == 'started' or status.kind == 'no-ready-work' or status.interests_incomplete == true)
+        and (status.tag == 'found' or status.kind == 'budget' or status.kind == 'started' or status.interests_incomplete == true)
 
     if status and status.tag == 'pending' and status.kind == 'wakeup' then
       local deadline, interests = earliest_deadline(status)
       local unsupported, unsupported_reason = unsupported_interest(self, interests)
       if unsupported and not ready then
-        self._advancing = false
-        return pending_turn(self, 'unsupported-interest', status, {
+        return leave(self, pending_turn, 'unsupported-interest', status, {
           unsupported_interest = unsupported,
           unsupported_reason = unsupported_reason,
           needs_immediate_resume = false,
@@ -295,23 +274,16 @@ function Application:advance(opts)
       if ready then
         immediate = true
       elseif type(self.host._has_external) == 'function' and self.host:_has_external() then
-        local ok_more, delivered = Protected.pcall(function()
-          return self.host:_drain_external(max_external - external_count)
-        end)
+        local ok_more, delivered = drain_external(self, max_external - external_count)
         if not ok_more then
-          self._advancing = false
-          return self:_complete(status, delivered)
+          return leave(self, self._complete, status, delivered)
         end
-        external_count = external_count + (delivered or 0)
-        if (delivered or 0) > 0 then
-          if type(self.host._consume_wake) == 'function' then self.host:_consume_wake('external') end
-        end
-        immediate = (delivered or 0) > 0
+        external_count = external_count + delivered
+        immediate = delivered > 0
       elseif deadline ~= nil and deadline <= self:now() then
         immediate = true
       else
-        self._advancing = false
-        return pending_turn(self, 'wakeup', status, {
+        return leave(self, pending_turn, 'wakeup', status, {
           needs_immediate_resume = false,
           steps = step,
           external_deliveries = external_count,
@@ -320,8 +292,7 @@ function Application:advance(opts)
     end
 
     if self:now() >= horizon then
-      self._advancing = false
-      return pending_turn(self, 'horizon', status, {
+      return leave(self, pending_turn, 'horizon', status, {
         needs_immediate_resume = true,
         steps = step,
         external_deliveries = external_count,
@@ -330,8 +301,7 @@ function Application:advance(opts)
     end
 
     if not immediate then
-      self._advancing = false
-      return pending_turn(self, 'driver-yield', status, {
+      return leave(self, pending_turn, 'driver-yield', status, {
         needs_immediate_resume = true,
         steps = step,
         external_deliveries = external_count,
@@ -339,8 +309,7 @@ function Application:advance(opts)
     end
   end
 
-  self._advancing = false
-  return pending_turn(self, 'turn-budget', last_status, {
+  return leave(self, pending_turn, 'turn-budget', last_status, {
     needs_immediate_resume = true,
     steps = max_steps,
     external_deliveries = external_count,

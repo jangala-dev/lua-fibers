@@ -77,7 +77,6 @@ do
     { kind = 'timer', deadline = 3 },
   }).deadline
   Common.assert_eq(deadline, 3)
-  Common.assert_truthy(WaitSet.build({ { kind = 'timer', deadline = 1 }, { kind = 'external' } }).has_non_time)
 end
 
 print('tests/hosts/test_pure.lua: ok')

@@ -12,7 +12,7 @@ local Effect = require('fibers.effect')
 local EventQueue = require('fibers.resource.event_queue')
 local Signal = require('fibers.resource.signal')
 local Interest = require('fibers.embed.external').Interest
-local UnsafeExternalMutation = require('fibers.embed.unsafe_external_mutation')
+local External = require('fibers.embed.external')
 local Errors = require('fibers.resource.flow.errors')
 local IOError = require('fibers.io.error')
 local Transfer = require('fibers.io.internal.flow_transfer')
@@ -357,7 +357,7 @@ function Reactor:callback(spec)
 end
 
 function Reactor:_notify(kind, entry, reason, mode)
-  UnsafeExternalMutation.deliver(self.control, kind, entry, reason, mode)
+  External.unsafe_deliver(self.control, kind, entry, reason, mode)
 end
 
 function Reactor:_notify_demand(entry)
@@ -600,7 +600,7 @@ function Reactor:_retire_entry(entry, reason)
     end
   end
 
-  UnsafeExternalMutation.deliver(entry.retired_signal, retire_error == nil, retire_error)
+  External.unsafe_deliver(entry.retired_signal, retire_error == nil, retire_error)
   return retire_error == nil, retire_error
 end
 
@@ -625,7 +625,7 @@ function Reactor:_service_offer(entry)
   end
 
   if value ~= nil then
-    UnsafeExternalMutation.deliver(source._queue, value)
+    External.unsafe_deliver(source._queue, value)
     if source._one_shot then
       entry.retire_state = { kind = 'succeeded', reason = 'one-shot offer published' }
       entry.preserve_offers = true
@@ -890,7 +890,7 @@ function Reactor:hint(key, mode)
   for _, entry in pairs(registrations) do
     if entry.armed and not entry.retired and entry.mode == mode then
       entry.armed = false
-      UnsafeExternalMutation.deliver(self.ready, entry.id, entry.generation, entry.mode, entry.key)
+      External.unsafe_deliver(self.ready, entry.id, entry.generation, entry.mode, entry.key)
       delivered = true
     end
   end

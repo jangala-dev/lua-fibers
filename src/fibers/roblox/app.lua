@@ -37,16 +37,6 @@ function Application.new(fn, opts)
   opts.application_marker = '_fibers_roblox_application'
   opts.status_marker = '_fibers_roblox_status'
   local self = Base.new(fn, opts)
-  self._attached = false
-  self._task = host._task
-  self._turn_token = nil
-  self._deadline_token = nil
-  self._deadline_generation = 0
-  self._phase_connection = nil
-  self._turn_scheduled = false
-  self._reschedule = false
-  self._phase_requested = false
-  self._scheduling = nil
   self.runtime._fibers_roblox_application = self
   return setmetatable(self, Application)
 end
@@ -56,59 +46,39 @@ function Application.is(value)
 end
 
 function Application:_cancel_deadline()
-  self._deadline_generation = self._deadline_generation + 1
   safe_cancel(self._task, self._deadline_token)
   self._deadline_token = nil
 end
 
 function Application:_schedule_deadline(deadline)
   self:_cancel_deadline()
-  if deadline == nil or self._settled or self._closed then
+  if deadline == nil or self._result or self._closed then
     return
   end
-  local generation = self._deadline_generation
   local delay = math.max(0, deadline - self:now())
-  self._deadline_token = self._task.delay(delay, function()
-    if not self._settled and not self._closed and self._deadline_generation == generation then
+  local token
+  token = self._task.delay(delay, function()
+    if not self._result and not self._closed and self._deadline_token == token then
       self._deadline_token = nil
       self.host:wake('time')
     end
   end)
+  self._deadline_token = token
 end
 
 function Application:_request_event_turn(reason)
-  if self._settled or self._closed or not self._attached then
-    return false
-  end
-  if self._scheduling == 'phase' then
-    self._phase_requested = true
-    return true
-  end
-  if self._advancing then
-    self._reschedule = true
-    return true
-  end
+  if self._result or self._closed or not self._scheduling then return false end
+  if self._scheduling == 'phase' or self._advancing then return true end
   self:_cancel_deadline()
-  if self._turn_scheduled then
-    self._reschedule = true
-    return true
-  end
-  self._turn_scheduled = true
+  if self._turn_token then return true end
   self._turn_token = self._task.defer(function()
     self._turn_token = nil
-    self._turn_scheduled = false
-    if self._settled or self._closed or not self._attached then
-      return
-    end
+    if self._result or self._closed or not self._scheduling then return end
     local status = self:advance()
-    if self._settled then
-      return
-    end
-    if status.needs_immediate_resume or self._reschedule or self.host:_has_pending_wake() then
-      self._reschedule = false
+    if self._result then return end
+    if status.needs_immediate_resume or self.host:_has_pending_wake() then
       self:_request_event_turn(status.reason or reason or 'resume')
     else
-      self._reschedule = false
       self:_schedule_deadline(status.next_deadline)
     end
   end)
@@ -151,34 +121,18 @@ end
 
 function Application:_attach_phase(opts)
   local signal = resolve_phase(opts)
-  self._phase_requested = true
+  self.host:wake('phase')
   self._phase_connection = signal:Connect(function()
-    if self._settled or self._closed or not self._attached then
-      return
-    end
-    -- Defer the actual advance until other handlers at this engine resumption
-    -- point have had an opportunity to queue their observations.
-    if self._turn_scheduled then
-      return
-    end
-    self._turn_scheduled = true
+    if self._result or self._closed or not self._scheduling or self._turn_token then return end
+    -- Defer until other handlers at this engine resumption point have queued observations.
     self._turn_token = self._task.defer(function()
       self._turn_token = nil
-      self._turn_scheduled = false
-      if self._settled or self._closed or not self._attached then
-        return
-      end
+      if self._result or self._closed or not self._scheduling then return end
       local deadline_due = self._next_deadline ~= nil and self._next_deadline <= self:now()
-      if not opts.phase_always and not self._phase_requested and not deadline_due then
-        return
-      end
-      self._phase_requested = false
+      if not opts.phase_always and not self.host:_has_pending_wake() and not deadline_due then return end
       local status = self:advance()
-      if not self._settled then
-        self._next_deadline = status.next_deadline
-        if status.needs_immediate_resume or self.host:_has_pending_wake() then
-          self._phase_requested = true
-        end
+      if not self._result then
+        if status.needs_immediate_resume then self.host:wake('resume') end
       end
     end)
   end)
@@ -202,12 +156,11 @@ function Application:attach(opts)
   if self._closed then
     error('cannot attach a closed Roblox application', 2)
   end
-  if self._attached then
+  if self._scheduling then
     return self
   end
   local scheduling = opts.scheduling or 'event'
   self._task = self.host:require_task()
-  self._attached = true
   self._scheduling = scheduling
 
   self.host:set_wake_callback(function(reason)
@@ -223,16 +176,14 @@ function Application:attach(opts)
 end
 
 function Application:_detach_scheduler()
-  if not self._attached and not self._phase_connection and not self._turn_token then
+  if not self._scheduling and not self._phase_connection and not self._turn_token then
     return
   end
-  self._attached = false
+  self._scheduling = nil
   self.host:set_wake_callback(nil)
   self:_cancel_deadline()
   safe_cancel(self._task, self._turn_token)
   self._turn_token = nil
-  self._turn_scheduled = false
-  self._reschedule = false
   safe_disconnect(self._phase_connection)
   self._phase_connection = nil
 end

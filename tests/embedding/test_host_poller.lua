@@ -13,7 +13,7 @@ local FakeHandle = require('tests.support.fake_handle')
 local Runtime = require('fibers.runtime')
 local Stream = require('fibers.io.stream')
 local Scope = require('fibers.scope')
-local UnsafeExternalMutation = require('fibers.embed.unsafe_external_mutation')
+local External = require('fibers.embed.external')
 local State = require('tests.support.resource_state')
 require('fibers.diagnostics.io').install(require('fibers.diagnostics.io_observer'))
 
@@ -57,7 +57,7 @@ do
   end):label('root')
   assert_eq(rt:run().tag, 'found')
   local entry = stream._read_registration
-  UnsafeExternalMutation.deliver(
+  External.unsafe_deliver(
     rt.host_reactor.ready,
     entry._fibers_id,
     entry.generation - 1,
@@ -78,12 +78,12 @@ end
 -- The shared external event queue is the poller hot FIFO.
 do
   local EventQueue = require('fibers.resource.event_queue')
-  local UnsafeExternalMutation = require('fibers.embed.unsafe_external_mutation')
+  local External = require('fibers.embed.external')
   local q = EventQueue.new():label('poller-burst')
   local rt = Runtime.new()
   local consumed = 0
   for i = 1, 5000 do
-    UnsafeExternalMutation.deliver(q, i)
+    External.unsafe_deliver(q, i)
   end
   assert_eq(State.event_queue_length(q), 5000)
   rt:spawn_raw(function()
@@ -99,9 +99,9 @@ do
 
   -- A drain must include an existing front item and later arrivals held in the
   -- persistent back list. This is the shape used by scope lifetime events.
-  UnsafeExternalMutation.deliver(q, 'first')
-  UnsafeExternalMutation.deliver(q, 'second')
-  UnsafeExternalMutation.deliver(q, 'third')
+  External.unsafe_deliver(q, 'first')
+  External.unsafe_deliver(q, 'second')
+  External.unsafe_deliver(q, 'third')
   local drained
   rt:spawn_raw(function()
     drained = rt:perform(q:_drain_op())
@@ -154,7 +154,7 @@ do
   function poller_feed:set(...)
     delivered[#delivered + 1] = { feed = self, values = { ... } }
   end
-  assert_truthy(WaitSet.deliver(nil, plan.records[1], true, true))
+  assert_truthy(WaitSet.deliver(plan.records[1], true, true))
   assert_eq(#delivered, 2)
   assert_eq(delivered[1].feed, readiness_feed)
   assert_eq(delivered[2].feed, poller_feed)

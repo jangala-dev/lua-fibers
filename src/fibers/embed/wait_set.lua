@@ -19,23 +19,16 @@ function WaitSet.normalise_mode(mode)
 end
 
 function WaitSet.build(waits)
-  local set = {
-    waits = waits or {},
-    records = {},
-    by_key = {},
-    by_poll = {},
-    by_fd = {},
-    deadline = nil,
-    unsupported = false,
-    has_non_time = false,
-  }
+  waits = waits or {}
+  local by_key = {}
+  local set = { records = {}, by_poll = {}, by_fd = {}, deadline = nil, unsupported = false }
 
   local function ensure(key)
     if key == nil then
       set.unsupported = true
       return nil
     end
-    local record = set.by_key[key]
+    local record = by_key[key]
     if record then
       return record
     end
@@ -54,7 +47,7 @@ function WaitSet.build(waits)
       waits = {},
       poller = {},
     }
-    set.by_key[key] = record
+    by_key[key] = record
     set.by_poll[poll] = record
     if number ~= nil then
       set.by_fd[number] = record
@@ -63,15 +56,14 @@ function WaitSet.build(waits)
     return record
   end
 
-  for i = 1, #set.waits do
-    local wait = set.waits[i]
+  for i = 1, #waits do
+    local wait = waits[i]
     if wait and wait.kind == 'timer' then
       local deadline = wait.deadline
       if finite(deadline) and (set.deadline == nil or deadline < set.deadline) then
         set.deadline = deadline
       end
     elseif wait then
-      set.has_non_time = true
       if wait.kind == 'external' and wait.feed then
         if wait.external_kind == 'readiness' and wait.resource then
           local record = ensure(wait.readiness_key)
@@ -113,17 +105,6 @@ function WaitSet.readiness_waits(waits)
   return out
 end
 
-function WaitSet.poller_waits(waits)
-  local out = {}
-  for i = 1, #(waits or {}) do
-    local wait = waits[i]
-    if wait and wait.kind == 'external' and wait.external_kind == 'poller' and wait.poller and wait.feed then
-      out[#out + 1] = wait
-    end
-  end
-  return out
-end
-
 function WaitSet.delay_until(runtime, deadline)
   if deadline == nil then
     return nil
@@ -131,18 +112,12 @@ function WaitSet.delay_until(runtime, deadline)
   return math.max(0, deadline - runtime:now())
 end
 
-function WaitSet.timeout_ms(runtime, set_or_deadline)
-  local deadline = set_or_deadline
-  if type(set_or_deadline) == 'table' then
-    deadline = set_or_deadline.deadline
-  end
-  if deadline == nil then
-    return -1
-  end
-  return math.max(0, math.ceil((WaitSet.delay_until(runtime, deadline) or 0) * 1000))
+function WaitSet.timeout_ms(runtime, set)
+  if set.deadline == nil then return -1 end
+  return math.max(0, math.ceil((WaitSet.delay_until(runtime, set.deadline) or 0) * 1000))
 end
 
-function WaitSet.deliver(runtime, record, readable, writable)
+function WaitSet.deliver(record, readable, writable)
   if not record then
     return false
   end
@@ -172,7 +147,7 @@ function WaitSet.deliver(runtime, record, readable, writable)
   return delivered
 end
 
-function WaitSet.block_without_io(host, runtime, set, status)
+function WaitSet.block_without_io(host, runtime, set)
   if set.deadline ~= nil then
     local delay = WaitSet.delay_until(runtime, set.deadline) or 0
     if delay > 0 then

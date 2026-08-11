@@ -732,7 +732,6 @@ function Simulated.new(opts)
     for i = 1, #set.records do
       local record = set.records[i]
       delivered = WaitSet.deliver(
-        runtime,
         record,
         self:is_ready(record.key, 'read'),
         self:is_ready(record.key, 'write')

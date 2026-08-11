@@ -52,7 +52,7 @@ Current status shapes are:
 { tag = 'pending', kind = 'budget', interests_incomplete = true, ... }
     bounded search has not completed
 
-{ tag = 'pending', kind = 'started' | 'no-ready-work', ... }
+{ tag = 'pending', kind = 'started', ... }
     more driver work may be required
 
 { tag = 'quiescent', reason = ... }

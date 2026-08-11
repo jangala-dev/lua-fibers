@@ -8,7 +8,7 @@
 -- when blocking in poll/epoll or when delivering embedded callbacks.
 
 local External = require('fibers.embed.external')
-local UnsafeExternalMutation = require('fibers.embed.unsafe_external_mutation')
+local External = require('fibers.embed.external')
 local IOError = require('fibers.io.error')
 local IOAudit = require('fibers.internal.io_audit')
 local Label = require('fibers.internal.label')
@@ -30,7 +30,7 @@ end
 local function clear_local_hint(self, mode)
   mode = normalise_mode(mode)
   self[mode == 'read' and '_read_hint' or '_write_hint'] = false
-  if self._readiness then UnsafeExternalMutation.clear(self._readiness, mode) end
+  if self._readiness then External.unsafe_clear(self._readiness, mode) end
 end
 
 local function clear_hint(self, mode)
@@ -47,7 +47,7 @@ end
 local function mark_hint(self, mode)
   mode = normalise_mode(mode)
   self[mode == 'read' and '_read_hint' or '_write_hint'] = true
-  if self._readiness then UnsafeExternalMutation.deliver(self._readiness, mode, true) end
+  if self._readiness then External.unsafe_deliver(self._readiness, mode, true) end
   local host = self._host
   if host and type(host.set_readiness) == 'function' then
     host:set_readiness(self._key, mode, true)
@@ -133,8 +133,8 @@ local function ensure_readiness(self)
   local readiness = Readiness.new(self._key, nil)
   self._readiness = readiness
   Label.child(readiness, self, 'readiness')
-  if self._read_hint then UnsafeExternalMutation.deliver(readiness, 'read', true) end
-  if self._write_hint then UnsafeExternalMutation.deliver(readiness, 'write', true) end
+  if self._read_hint then External.unsafe_deliver(readiness, 'read', true) end
+  if self._write_hint then External.unsafe_deliver(readiness, 'write', true) end
   if self._runtime and not self._feed then
     self._feed = External.external_feed(self._runtime, readiness)
   end

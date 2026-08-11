@@ -71,10 +71,6 @@ function Feed.for_resource(runtime, resource)
   return feed
 end
 
-function Feed.is_feed(value)
-  return type(value) == 'table' and value._fibers_external_feed == true
-end
-
 function Feed:_deliver(...)
   return publish(self.spec, self.resource, self.spec.deliver, ...)
 end
@@ -128,11 +124,9 @@ local Interest = {}
 local INTEREST_DETAIL = {
   external_kind = true, readiness_key = true, mode = true, feed = true, poller = true,
 }
-local DRIVE_OPTIONS = { host = true, run = true, max_iterations = true, host_options = true }
-
-local function validate_keys(value, allowed, label, level)
-  return Contract.options(value, allowed, label, level or 3)
-end
+local DRIVE_OPTIONS = {
+  host = true, run = Contract.table, max_iterations = Contract.positive_integer, host_options = Contract.table,
+}
 local next_id = 0
 
 local function stable_resource_id(resource)
@@ -159,65 +153,39 @@ local function make(kind, key, fields)
   return fields
 end
 
-function Interest.is_interest(x)
-  return type(x) == 'table' and x._fibers_interest == true
-end
-
-function Interest.timer(deadline, resource, frontier)
-  return make('timer', tostring(deadline), {
-    deadline = deadline,
-    resource = resource,
-    frontier = frontier,
-    primitive = 'timer',
-  })
+function Interest.timer(deadline)
+  return make('timer', tostring(deadline), { deadline = deadline })
 end
 
 function Interest.external(resource, interest, detail)
   local rid = stable_resource_id(resource)
   local key = tostring(rid) .. ':' .. tostring(interest or 'ready')
   detail = detail or {}
-  validate_keys(detail, INTEREST_DETAIL, 'external interest detail', 2)
+  Contract.options(detail, INTEREST_DETAIL, 'external interest detail', 2)
   detail.resource = resource
   detail.interest = interest or 'ready'
   detail.external_kind = detail.external_kind or resource and resource.kind
-  detail.primitive = 'external-resource'
   return make('external', key, detail)
 end
 
-function Interest.merge(list)
+function Interest.summarise(list)
   local out, seen = {}, {}
   for i = 1, #(list or {}) do
     local interest = list[i]
-    local id = Interest.is_interest(interest) and interest.id or tostring(interest)
+    local managed = type(interest) == 'table' and interest._fibers_interest == true
+    local id = managed and interest.id or tostring(interest)
     if not seen[id] then
       seen[id] = true
-      out[#out + 1] = interest
-    end
-  end
-  return out
-end
-
-function Interest.summarise(list)
-  local out = {}
-  for i = 1, #(list or {}) do
-    local interest = list[i]
-    if Interest.is_interest(interest) then
-      out[#out + 1] = {
-        kind = interest.kind,
-        key = interest.key,
-        id = interest.id,
-        deadline = interest.deadline,
-        mode = interest.mode,
-        interest = interest.interest,
-        primitive = interest.primitive,
-        resource = interest.resource,
-        feed = interest.feed,
-        readiness_key = interest.readiness_key,
-        external_kind = interest.external_kind,
-        poller = interest.poller,
-      }
-    else
-      out[#out + 1] = interest
+      if managed then
+        out[#out + 1] = {
+          kind = interest.kind, key = interest.key, id = interest.id, deadline = interest.deadline,
+          mode = interest.mode, interest = interest.interest, resource = interest.resource,
+          feed = interest.feed, readiness_key = interest.readiness_key,
+          external_kind = interest.external_kind, poller = interest.poller,
+        }
+      else
+        out[#out + 1] = interest
+      end
     end
   end
   return out
@@ -239,7 +207,7 @@ end
 local function mutate(runtime, feed, action, expectation, apply, ...)
   runtime:_check_not_failed(3)
   runtime:_require_driver_call(action, 3)
-  if not Feed.is_feed(feed) then error(expectation, 3) end
+  if type(feed) ~= 'table' or feed._fibers_external_feed ~= true then error(expectation, 3) end
   if feed.runtime ~= runtime then error('external feed belongs to another runtime', 3) end
   apply(feed, ...)
   local engine = runtime.engine
@@ -273,12 +241,7 @@ function External.readiness(runtime, key)
 end
 
 function External.drive(runtime, opts)
-  opts = validate_keys(opts, DRIVE_OPTIONS, 'External.drive options', 2)
-  if opts.max_iterations ~= nil then
-    Contract.positive_integer(opts.max_iterations, 'External.drive opts.max_iterations', 2)
-  end
-  if opts.run ~= nil then Contract.table(opts.run, 'External.drive opts.run', 2) end
-  if opts.host_options ~= nil then Contract.table(opts.host_options, 'External.drive opts.host_options', 2) end
+  opts = Contract.options(opts, DRIVE_OPTIONS, 'External.drive options', 2)
   local host = opts.host or runtime.host
   local run_opts = opts.run
   local max_iterations = opts.max_iterations

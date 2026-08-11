@@ -97,7 +97,6 @@ do
     { kind = 'timer', deadline = 3 },
   }).deadline
   assert_eq(deadline, 3)
-  assert_truthy(WaitSet.build({ { kind = 'timer', deadline = 1 }, { kind = 'external' } }).has_non_time)
 end
 
 -- Host selection returns complete, indivisible families.

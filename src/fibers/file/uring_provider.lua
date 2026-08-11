@@ -6,7 +6,7 @@
 
 local Signal = require('fibers.resource.signal')
 local IOError = require('fibers.io.error')
-local UnsafeExternalMutation = require('fibers.embed.unsafe_external_mutation')
+local External = require('fibers.embed.external')
 local Reactor = require('fibers.io.reactor')
 local perform = require('fibers.perform')
 
@@ -535,7 +535,7 @@ function Provider:_drain()
     end
     self.pending[id] = nil
     req.keep = nil
-    UnsafeExternalMutation.deliver(req.signal, res)
+    External.unsafe_deliver(req.signal, res)
     head = head + 1
     drained = drained + 1
   end

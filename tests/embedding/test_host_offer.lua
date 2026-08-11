@@ -13,7 +13,7 @@ local Runtime = require('fibers.runtime')
 local FakeHandle = require('tests.support.fake_handle')
 local State = require('tests.support.resource_state')
 local Signal = require('fibers.resource.signal')
-local UnsafeExternalMutation = require('fibers.embed.unsafe_external_mutation')
+local External = require('fibers.embed.external')
 
 local function assert_eq(a, b, message)
   if a ~= b then error((message or 'assert_eq failed') .. ': expected ' .. tostring(b) .. ', got ' .. tostring(a), 2) end
@@ -225,7 +225,7 @@ do
       handle = handle,
       callback = function(registered_handle)
         registered_handle:clear_readable()
-        UnsafeExternalMutation.deliver(signal, 37)
+        External.unsafe_deliver(signal, 37)
         return true
       end,
     })

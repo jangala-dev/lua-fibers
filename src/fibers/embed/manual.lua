@@ -156,7 +156,6 @@ function Manual:block(runtime, waits, _status, opts)
   for i = 1, #set.records do
     local record = set.records[i]
     delivered = WaitSet.deliver(
-      runtime,
       record,
       self:_is_ready(record.key, 'read'),
       self:_is_ready(record.key, 'write')

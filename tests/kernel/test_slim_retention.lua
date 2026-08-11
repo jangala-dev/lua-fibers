@@ -43,10 +43,8 @@ do
     end
     local st = rt:run()
     eq(st.tag, 'idle', 'short-fiber batch should drain')
-    eq(rt._live_fibers, 0, 'runtime must not retain completed fibers as live')
-    eq(rt._ready_head, 1, 'ready queue head should reset')
-    eq(rt._ready_tail, 0, 'ready queue tail should reset')
-    eq(next(rt._ready_fibers), nil, 'ready queue backing table should be empty')
+    eq(rt._ready_head, nil, 'ready queue head should clear')
+    eq(rt._ready_tail, nil, 'ready queue tail should clear')
     for i = 1, #handles do
       eq(handles[i].done, true, 'completed handle should report done')
       eq(handles[i].co, nil, 'completed handle should release its coroutine')

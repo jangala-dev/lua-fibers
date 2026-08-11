@@ -776,7 +776,7 @@ function Posix.define(binding)
     local delivered = false
     for i = 1, #ready do
       local item = ready[i]
-      delivered = WaitSet.deliver(rt, item.record, item.read, item.write) or delivered
+      delivered = WaitSet.deliver(item.record, item.read, item.write) or delivered
     end
     if delivered then
       return true, 'readiness'
