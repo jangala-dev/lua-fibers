@@ -13,6 +13,16 @@ function NativeError.set(...)
   return out
 end
 
+function NativeError.names(values)
+  local out = {}
+  for name, value in pairs(values or {}) do
+    if type(name) == 'string' and name:match('^E[A-Z0-9_]+$') and type(value) == 'number' then
+      out[value] = out[value] or name
+    end
+  end
+  return out
+end
+
 function NativeError.number(value)
   if type(value) == 'table' and type(value.fd) == 'number' then
     return value.fd
@@ -36,6 +46,7 @@ function NativeError.new(opts)
   local current_errno = opts.current_errno
   local strerror = opts.strerror
   local names = opts.names or {}
+  local false_is_error = opts.false_is_error == true
   local Error = {}
 
   function Error.current_errno()
@@ -61,6 +72,18 @@ function NativeError.new(opts)
 
   function Error.name(number)
     return number ~= nil and names[number] or nil
+  end
+
+  function Error.result(value, a, b)
+    if value ~= nil and (not false_is_error or value ~= false) then return value end
+    local message, number = Error.split(a, b)
+    return nil, number, message
+  end
+
+  function Error.status(value, a, b)
+    if value ~= nil and (not false_is_error or value ~= false) then return true end
+    local message, number = Error.split(a, b)
+    return nil, number, message
   end
 
   function Error.detail(prefix, a, b)

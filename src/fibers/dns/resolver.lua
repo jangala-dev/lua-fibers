@@ -129,12 +129,7 @@ for key, rule in pairs({
   random_u16 = Contract.func, allow_weak_random = Contract.boolean,
 }) do CONSTRUCTOR_OPTIONS[key] = rule end
 
-local function copy_table(value, label)
-  value = value == nil and {} or Contract.table(value, label or 'table', 3)
-  local out = {}
-  for key, item in pairs(value) do out[key] = item end
-  return out
-end
+local copy_table = Contract.copy_table
 
 local function project(value, allowed)
   local out = {}
@@ -181,18 +176,7 @@ local function validate_options(value, extras, label)
   return value
 end
 
-local function copy_error(err)
-  if not IOError.is(err) then
-    return err
-  end
-  local fields = {}
-  for key, value in pairs(err) do
-    if key ~= '_fibers_io_error' and key ~= 'report' then
-      fields[key] = value
-    end
-  end
-  return IOError.new(err.kind, fields)
-end
+local function copy_error(err) return IOError.copy(err, 'report') end
 
 local function error_value(kind, code, message, fields)
   fields = copy_table(fields)

@@ -8,12 +8,10 @@ local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Address = require('fibers.net.address')
 local IOError = require('fibers.io.error')
-local HostHold = require('fibers.io.internal.host_hold')
 local IO = require('fibers.io.facility')
 local Activation = require('fibers.socket.activation')
 local Lifecycle = require('fibers.socket.lifecycle')
 local Connection = require('fibers.socket.connection')
-local Closure = require('fibers.closure')
 local HostOffer = require('fibers.io.offer')
 local Lifetime = require('fibers.lifetime')
 local Scope = require('fibers.scope')
@@ -64,23 +62,12 @@ local function close_socket(value, reason)
   return IO.close_value('socket', value, reason)
 end
 
-local function listener_closure(listener)
-  return Closure.request_then_wait(function(_ctx, _record, reason)
-    return listener:close_op(reason or 'scope closure')
-  end, function()
-    return listener:closed_op()
-  end, {
-    name = 'listener',
-    finish_result = Closure.require_ok('listener closure failed'),
-  })
-end
-
 function Listener:lifetime()
   return self._lifetime
 end
 
 local function local_address_now(listener)
-  local state = listener._lifecycle.state._location.value
+  local state = listener._lifecycle._location.value
   return state.address or listener._address
 end
 
@@ -90,7 +77,7 @@ end
 
 
 local function host_handle(listener)
-  local state = listener._lifecycle.state._location.value
+  local state = listener._lifecycle._location.value
   return state.handle
 end
 
@@ -98,11 +85,9 @@ local function accept_to_scope_op(listener, target_scope)
   return listener._offers:result_op():wrap(function(offer, source_err)
     if not offer then return nil, source_err end
     local address = local_address_now(listener)
-    return Connection.from_host_hold(
+    return Connection.from_host(
       Runtime.current(),
       target_scope,
-      listener._accepted_hold,
-      offer.key,
       offer.handle,
       Connection.options(listener._options, {
         label = Label.describe(listener, listener._fibers_id) .. ':connection',
@@ -191,19 +176,11 @@ local function accepted_offers(listener, opts)
       local handle, peer, accept_err = registered_handle:accept()
       if not handle then return nil, accept_err end
 
-      listener._accepted_seq = listener._accepted_seq + 1
-      local key = 'accepted-' .. tostring(listener._accepted_seq)
-      local held, hold_err = listener._accepted_hold:hold(key, handle, close_socket)
-      if not held then error(hold_err, 0) end
-      return { key = key, handle = handle, peer = peer }
+      return { handle = handle, peer = peer }
     end,
     dispose = function(offer, reason)
-      local discarded, discard_err = listener._accepted_hold:discard(
-        offer.key,
-        offer.handle,
-        reason or 'accepted offer discarded'
-      )
-      if not discarded then error(discard_err, 0) end
+      local closed, close_err = close_socket(offer.handle, reason or 'accepted offer discarded')
+      if not closed then error(close_err, 0) end
     end,
     closed_error = function(err)
       return IOError.closed('socket', 'accept', {
@@ -228,20 +205,16 @@ function Module.listen_op(address, opts)
     _fibers_id = id,
     _address = address,
     _lifecycle = ListenerLifecycle.new(address),
-    _host_hold = HostHold.new(),
-    _accepted_hold = HostHold.new(),
-    _accepted_seq = 0,
     _options = opts,
   }, Listener), opts.label)
   Label.child(listener._lifecycle, listener, 'lifecycle')
-  Label.child(listener._host_hold, listener, 'host-hold')
-  Label.child(listener._accepted_hold, listener, 'accepted-host-hold')
 
   Lifetime.define(listener, {
     label = opts.label,
     role = 'socket_listener',
-    closure = listener_closure(listener),
-    children = { listener._host_hold, listener._accepted_hold },
+    closure = IO._closeable_closure(listener, {
+      name = 'listener', reason = 'scope closure', finish_result = 'listener closure failed',
+    }),
   })
   local private_scope = Scope.for_lifetime(listener._lifetime)
   listener._private_scope = private_scope
@@ -252,8 +225,6 @@ function Module.listen_op(address, opts)
       host_method = 'create_listener',
       options = host_listener_options(opts),
       lifecycle = listener._lifecycle,
-      hold = listener._host_hold,
-      hold_key = 'listener',
       close = close_socket,
       domain = 'socket',
       action = 'listen',

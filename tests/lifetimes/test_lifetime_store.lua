@@ -33,6 +33,25 @@ do
   eq(runtime:_lifetime_store(), store, 'the Runtime reuses its LifetimeStore')
 end
 
+-- Lifetime topology is versioned per Lifetime node. Updating one boundary must
+-- not invalidate observations of an unrelated boundary in the same Runtime.
+do
+  local runtime = Runtime.new()
+  local a = Scope.new({ runtime = runtime, closure = Closure.supervisor({ child_failure = 'ignore' }) }):label('granularity-a')
+  local b = Scope.new({ runtime = runtime, closure = Closure.supervisor({ child_failure = 'ignore' }) }):label('granularity-b')
+  local store = runtime:_lifetime_store()
+  store:activate_boundary(a:lifetime())
+  store:activate_boundary(b:lifetime())
+  local a_location = a:lifetime()._lifetime_location
+  local b_location = b:lifetime()._lifetime_location
+  truthy(a_location ~= b_location, 'unrelated Lifetimes must use distinct forest locations')
+  local a_before, b_before = a_location.version, b_location.version
+  runtime:_spawn_raw(function() runtime:perform(a:seal_op()) end, a):label('seal-granularity-a')
+  runtime:run()
+  truthy(a_location.version > a_before, 'changed Lifetime location was not versioned')
+  eq(b_location.version, b_before, 'unrelated Lifetime location was invalidated')
+end
+
 -- A dormant Lifetime becomes live only through committed admission and the
 -- Runtime-local store is the sole owner of its topology.
 do

@@ -41,15 +41,7 @@ local function validate_command_keys(input)
   end
 end
 
-local function copy_table(value, label)
-  if value == nil then return {} end
-  Contract.table(value, label or 'table', 3)
-  local out = {}
-  for key, item in pairs(value) do
-    out[key] = item
-  end
-  return out
-end
+local copy_table = Contract.copy_table
 
 local function copy_spec(spec)
   local out = copy_table(spec)

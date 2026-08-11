@@ -26,11 +26,7 @@ local function state(grant, level)
   return value
 end
 
-local function copy_table(value)
-  local out = {}
-  for key, item in pairs(value or {}) do out[key] = item end
-  return out
-end
+local copy_table = Contract.copy_table
 
 local function copy_list(value)
   local out = {}
@@ -110,9 +106,8 @@ function Grant._new(grantor, holder, subject, rights, opts)
   local id = 'grant-' .. tostring(runtime._next_grant_id)
   local right_list = list_rights(rights)
   if opts.label ~= nil then Contract.non_empty_string(opts.label, 'Grant option label', 2) end
-  if opts.terms ~= nil then Contract.table(opts.terms, 'Grant terms', 2) end
   if opts.meta ~= nil then Contract.table(opts.meta, 'Grant meta', 2) end
-  local terms = copy_table(opts.terms)
+  local terms = copy_table(opts.terms, 'Grant terms', 2)
   for key in pairs(terms) do
     if key ~= 'transferable' then
       error('unsupported Grant term ' .. tostring(key), 2)

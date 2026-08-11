@@ -26,12 +26,13 @@ end
 
 function M.lifecycle(value)
   local lifecycle = value and (value._lifecycle or value.lifecycle or value)
-  local state = lifecycle and lifecycle.state
+  local state = lifecycle and (lifecycle._location and lifecycle or lifecycle.state)
   return state and state._location and state._location.value or nil
 end
 
 function M.completion(completion)
-  return completion and completion.state and completion.state._location.value or nil
+  return completion and (completion._location and completion._location.value
+    or completion.state and completion.state._location.value) or nil
 end
 
 function M.host_handle(value)

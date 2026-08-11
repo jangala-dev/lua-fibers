@@ -28,12 +28,6 @@ local function compose(opts)
     mode = opts.mode or 'composed',
     _reader = opts.reader,
     _writer = opts.writer,
-    _handle = opts.handle,
-    _reactor = opts.reactor,
-    _read_registration = nil,
-    _write_registration = nil,
-    _reactor_live = 0,
-    _handle_closed = false,
   }, Duplex), opts.label)
   local children = {}
   if opts.reader then children[#children + 1] = opts.reader end

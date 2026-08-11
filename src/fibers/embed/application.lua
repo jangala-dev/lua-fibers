@@ -7,12 +7,8 @@
 ---fiber progress; it is not semantic Retry and cannot enable `or_else`.
 
 local WaitSet = require('fibers.embed.wait_set')
-local Closure = require('fibers.closure')
 local Protected = require('fibers.protected')
-local Runtime = require('fibers.runtime')
-local Scope = require('fibers.scope')
-local ScopeOutcome = require('fibers.scope.outcome')
-local ScopeResult = ScopeOutcome.Result
+local RootSession = require('fibers.internal.root_session')
 local Contract = require('fibers.internal.contract')
 
 local Application = {}
@@ -36,14 +32,8 @@ local ADVANCE_OPTIONS = {
 }
 
 local function copy(value, label)
-  value = Contract.table(value, label or 'table', 3)
-  local out = {}
-  for key, item in pairs(value) do
-    out[key] = item
-  end
-  return out
+  return Contract.copy_table(value, label or 'table', 3)
 end
-
 
 local function default(value, fallback)
   return value == nil and fallback or value
@@ -103,11 +93,12 @@ function Application.new(fn, opts)
   end
 
   local label = opts.label or 'root'
-  local runtime = Runtime.new(runtime_options(opts, host))
-  local scope = Scope.new( {
-    runtime = runtime,
-    closure = opts.closure or Closure.nursery({ name = label }),
-  }):label(label)
+  local runtime, scope = RootSession.create({
+    host = host,
+    runtime_options = runtime_options(opts, host),
+    label = label,
+    closure = opts.closure,
+  })
 
   local self = setmetatable({
     _fibers_embed_application = true,
@@ -116,11 +107,10 @@ function Application.new(fn, opts)
     host = host,
     runtime = runtime,
     scope = scope,
-    _root_result = nil,
+    _root_fiber = nil,
     _result = nil,
     _status = nil,
     _settled = false,
-    _finalised = false,
     _advancing = false,
     _closed = false,
     _owns_host = opts.owns_host ~= false,
@@ -133,11 +123,7 @@ function Application.new(fn, opts)
   }, Application)
 
   if self._application_marker then self[self._application_marker] = true end
-  runtime:_spawn_raw(function()
-    self._root_result = scope:try_run(fn)
-    return self._root_result
-  end,  scope):label(label)
-
+  self._root_fiber = RootSession.spawn_root(runtime, scope, fn, label, false)
   return self
 end
 
@@ -163,50 +149,13 @@ function Application:_complete(runtime_status, runtime_error)
     })
   end
 
-  local finalise_error
-  if not self._finalised then
-    self._finalised = true
-    local ok, err = Protected.pcall(function()
-      return self.runtime:_finalize()
-    end)
-    if not ok then
-      finalise_error = err
-    end
-  end
-  runtime_error = runtime_error or finalise_error
-
-  local result = self._root_result
-  if runtime_error ~= nil then
-    local closure_failures = ScopeOutcome.closure_failures(runtime_error)
-    result = ScopeResult.fail({
-      reason = 'runtime_error',
-      primary = runtime_error,
-      report = self.scope:_make_report(runtime_error, {}, {
-        reason = 'runtime_error',
-        closure_failures = closure_failures,
-      }),
-      closure_failures = closure_failures,
-      runtime_status = runtime_status,
-    })
-  elseif result == nil then
-    result = ScopeResult.fail({
-      reason = 'runtime_pending',
-      primary = runtime_status,
-      report = self.scope:_make_report(runtime_status, {}, { reason = 'runtime_pending' }),
-      runtime_status = runtime_status,
-    })
-  end
-
-  result.runtime_status = runtime_status
-  result.runtime = self.runtime
-  result.scope = self.scope
+  local result = RootSession.complete(
+    self.runtime, self.scope, self._root_fiber, runtime_status, runtime_error)
   self._result = result
   self._settled = true
   if type(self._detach_scheduler) == 'function' then self:_detach_scheduler() end
   if type(self.host.mark_done) == 'function' then self.host:mark_done(result) end
-  if self._owns_host then
-    if type(self.host.close) == 'function' then self.host:close() end
-  end
+  if self._owns_host and type(self.host.close) == 'function' then self.host:close() end
 
   return public_status(self, {
     state = 'settled',

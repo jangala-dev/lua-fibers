@@ -52,29 +52,14 @@ function Activation.create(owner, spec)
     }))
   end
 
-  local held, hold_err = spec.hold:hold(spec.hold_key, handle, spec.close)
-  if not held then return fail(rt, spec.lifecycle, hold_err, true) end
   local address_ok, local_address = Protected.pcall(function()
     return type(handle.local_address) == 'function' and handle:local_address() or spec.address
   end)
   if not address_ok then
     local failure = IO.protocol_error(spec.domain, spec.action, local_address, { address = spec.address })
-    local discarded, discard_err = spec.hold:discard(spec.hold_key, handle, failure)
-    if not discarded then
-      failure = IOError.protocol(spec.domain, spec.action, 'host address query and handle disposal failed', {
-        address = spec.address,
-        errors = { failure, discard_err },
-        cause = failure,
-      })
-    end
+    failure = close_with_cleanup(failure, spec, handle, failure)
     fail(rt, spec.lifecycle, failure, true)
     error(failure, 0)
-  end
-
-  IOAudit.transfer(handle, owner, { kind = 'host_handle', role = spec.role })
-  local released, release_err = spec.hold:release(spec.hold_key, handle)
-  if not released then
-    return fail(rt, spec.lifecycle, close_with_cleanup(release_err, spec, handle, release_err), true)
   end
 
   local activated = IO.masked_perform(
@@ -88,6 +73,7 @@ function Activation.create(owner, spec)
     })
     return nil, close_with_cleanup(closed, spec, handle, spec.closed_reason)
   end
+  IOAudit.transfer(handle, owner, { kind = 'host_handle', role = spec.role })
   return owner
 end
 

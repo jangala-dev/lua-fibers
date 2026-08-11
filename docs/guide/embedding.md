@@ -366,7 +366,7 @@ and reaped before the failed call returns.
 
 A host may expose a narrower, explicit process contract when its native API lacks a required primitive. Capabilities are sparse: presence means support and absence means unsupported. The Nixio host therefore reports `process_close_fds = "known"` and `process_groups = "session"`; it omits `process_exec_proof` and `process_pass_fds`.
 
-Parent pipe endpoints are non-blocking HostHandles and enter the normal private host-hold, Stream and reactor path. The process handle itself is also audited. Exactly one supervisor has custody of signal decisions and exit observation. `open_exit_op` admits a reactor-owned one-shot completion beneath the process Scope; `exit_op` returns the cached authoritative terminal status once the provider has reaped the process exactly once.
+Parent pipe endpoints are non-blocking HostHandles and remain under lexical setup ownership until their Streams adopt them and enter the reactor path. The process handle itself is also audited. Exactly one supervisor has custody of signal decisions and exit observation. `open_exit_op` admits a reactor-owned one-shot completion beneath the process Scope; `exit_op` returns the cached authoritative terminal status once the provider has reaped the process exactly once.
 
 The Linux FFI family uses pidfds where available and timer-polled `waitpid` otherwise. The test-only SimulatedHost provides deterministic process completion and signalling. A host with no usable process contract omits `features.process` and the `start_process` method.
 

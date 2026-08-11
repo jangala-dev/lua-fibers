@@ -146,8 +146,9 @@ local bytes = reader:read_all({ max = 4096 })
 reader:close('complete')
 ```
 
-Internally, private host holds cover both handles until their Streams are
-admitted and take custody. Public callers receive the two Streams directly.
+Internally, the setup extent owns both raw handles until their Streams are
+admitted and adopt them. Any handle not adopted is closed before setup returns.
+Public callers receive the two Streams directly.
 
 ## Stream operations
 
@@ -851,10 +852,10 @@ repeated socket churn.
 
 ## Custody and host support
 
-Newly acquired handles enter private host holds before any fiber can yield.
-Accepted descriptors are placed in an accept-source hold before the reactor
-publishes their offer; unclaimed offers remain under that source's Lifetime and
-are closed during source retirement. Connected Streams remain in each Dial's
+Newly acquired handles remain under lexical setup ownership until a normal
+Fibers facility adopts them. Accepted descriptors pass directly into the
+accept-source queue; unclaimed offers remain accountable to that source and are
+closed during source retirement. Connected Streams remain in each Dial's
 private Scope until a caller commits their custody transfer. Listener and Dial
 Task, Scope and domain views share one Lifetime; no driver Task is a separate
 structural child of the public root. Resource Closure requests root shutdown

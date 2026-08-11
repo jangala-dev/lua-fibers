@@ -56,15 +56,19 @@ end
 
 local function test_latch_is_set_once()
   local latch = Latch.new():label('latch')
-  local first, second, value
+  local before, first, after, second, value
 
   run(function(runtime)
+    before = runtime:perform(latch:is_set_op())
     first = runtime:perform(latch:set_op('ready'))
+    after = runtime:perform(latch:is_set_op())
     second = runtime:perform(latch:set_op('ignored'))
     value = runtime:perform(latch:get_op())
   end)
 
+  eq(before, false)
   eq(first, true)
+  eq(after, true)
   eq(second, false)
   eq(value, 'ready')
 end

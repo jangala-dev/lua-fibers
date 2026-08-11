@@ -1,7 +1,9 @@
 -- Immutable operations: graph nodes, executable leaves and conservative shape.
 --
 -- Shape is advisory only. Exact readiness, absence and validation come from
--- executing leaves and their versioned proofs.
+-- executing leaves and their versioned proofs. In particular, has_wrap records
+-- only structurally visible post-commit continuations; guards may reveal wraps
+-- dynamically, and the search evaluator enforces that phase boundary.
 
 local Values = require('fibers.internal.values')
 local Algebra = require('fibers.internal.kernel.algebra')
@@ -20,7 +22,7 @@ local function children_have(items, field)
 end
 
 local function structural_wrap(kind, fields)
-  if kind == 'annotated' then return fields.post ~= nil or fields.p.has_wrap == true end
+  if fields.post ~= nil then return true end
   if kind == 'map' then return fields.p.has_wrap == true end
   if kind == 'and_then' or kind == 'or_else' then return fields.p.has_wrap == true or fields.q.has_wrap == true end
   if kind == 'choice' then return children_have(fields.choices, 'has_wrap') end
@@ -61,9 +63,7 @@ Operation.class = Op
 
 
 function Operation.labels(op)
-  if not Operation.is(op) then return nil end
-  if op.kind == 'annotated' then return op.labels end
-  return nil
+  return Operation.is(op) and op.labels or nil
 end
 
 function Operation.diagnostic_label(op)
@@ -344,7 +344,7 @@ local function describe_mode(op, seen, mode)
   elseif kind == 'or_else' then
     merge(out, describe_mode(op.p, seen, mode))
     if mode ~= 'preferred' then merge(out, describe_mode(op.q, seen, mode)) end
-  elseif kind == 'annotated' or kind == 'map' then
+  elseif kind == 'map' then
     merge(out, describe_mode(op.p, seen, mode))
   elseif kind == 'guard' then
     out.dynamic = true

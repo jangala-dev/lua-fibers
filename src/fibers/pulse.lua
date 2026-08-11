@@ -4,17 +4,12 @@ local Counter = require('fibers.resource.counter')
 local Op = require('fibers.op')
 local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
-local TrustedState = require('fibers.internal.trusted_state')
+local Completion = require('fibers.resource.completion')
 
 local Pulse = {}
 Pulse.__index = Pulse
 
-local OPEN = {}
 local next_id = 0
-
-local function closed(status)
-  return status ~= OPEN
-end
 
 local function non_negative_integer(value, label, level)
   if type(value) ~= 'number' or value < 0 or value % 1 ~= 0 then
@@ -30,10 +25,10 @@ function Pulse.new(initial)
   local pulse = Label.attach(setmetatable({
     _fibers_id = id,
     _version = Counter.new(initial),
-    _status = TrustedState.cell(OPEN),
+    _closed = Completion.new(),
   }, Pulse))
   Label.child(pulse._version, pulse, 'version')
-  Label.child(pulse._status, pulse, 'status')
+  Label.child(pulse._closed, pulse, 'closed')
   return pulse
 end
 
@@ -43,38 +38,30 @@ end
 
 
 function Pulse:why_op()
-  return self._status:read_op():map(function(status)
-    return closed(status) and status.reason or nil
+  return self._closed:read_op():map(function(state)
+    return state.kind == 'succeeded' and state.values[1] or nil
   end)
 end
 
-
 function Pulse:is_closed_op()
-  return self._status:read_op():map(closed)
+  return self._closed:read_op():map(function(state)
+    return state.kind ~= 'pending'
+  end)
 end
-
 
 function Pulse:signal_op()
   local signal = Op.each({
-    self._status:expect_op(OPEN),
+    self._closed:pending_op(),
     self._version:bump_op(),
   }):map(function(rows)
     return rows[2][1]
   end)
 
-  return signal:or_else(self._status:wait_until_op(closed):map(function()
-    return nil
-  end))
+  return signal:or_else(self._closed:success_op():map(function() return nil end))
 end
 
 function Pulse:close_op(reason)
-  local close = self._status:expect_op(OPEN):and_then(self._status:write_op({ reason = reason }):map(function()
-      return true
-    end))
-
-  return close:or_else(self._status:wait_until_op(closed):map(function()
-    return true
-  end))
+  return self._closed:publish_success_op(reason):map(function() return true end)
 end
 
 function Pulse:changed_op(last_seen)
@@ -84,8 +71,8 @@ function Pulse:changed_op(last_seen)
     return version, nil
   end)
 
-  local ended = self._status:wait_until_op(closed):map(function(status)
-    return nil, status.reason
+  local ended = self._closed:success_op():map(function(reason)
+    return nil, reason
   end)
 
   return changed:or_else(ended)

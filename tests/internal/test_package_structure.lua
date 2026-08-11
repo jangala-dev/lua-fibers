@@ -61,7 +61,7 @@ assert(require('fibers.diagnostics.io') == require('fibers.internal.io_audit'))
 
 local Ownership = require('packages.ownership')
 assert(Ownership.owner_name('fibers.internal.context') == 'fibers-core')
-assert(Ownership.owner_name('fibers.io.internal.host_hold') == 'fibers-io')
+assert(Ownership.owner_name('fibers.io.internal.acquired') == 'fibers-io')
 assert(Ownership.owner_name('fibers.embed.external') == 'fibers-core')
 assert(Ownership.owner_name('fibers.io.handle') == 'fibers-io')
 assert(Ownership.owner_name('fibers.io.nixio') == 'fibers-io-nixio')

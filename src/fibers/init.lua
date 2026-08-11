@@ -9,7 +9,7 @@ local Protected = require('fibers.protected')
 local Runtime = require('fibers.runtime')
 local Scope = require('fibers.scope')
 local perform = require('fibers.perform')
-local ScopeOutcome = require('fibers.scope.outcome')
+local RootSession = require('fibers.internal.root_session')
 local Contract = require('fibers.internal.contract')
 
 local M = { perform = perform }
@@ -67,22 +67,17 @@ function M.try_run(fn, opts)
   if type(fn) ~= 'function' then
     error('fibers.try_run expects a function', 2)
   end
-  local Closure = require('fibers.closure')
-  local ScopeResult = ScopeOutcome.Result
   local host = default_host(opts)
-  local rt = Runtime.new(runtime_options(opts, host))
   local root_label = opts.label or 'root'
-  local scope = Scope.new({
-    runtime = rt,
-    closure = opts.closure or Closure.nursery({ name = root_label }),
-  }):label(root_label)
-  local result
-  local runtime_status
+  local rt, scope = RootSession.create({
+    host = host,
+    runtime_options = runtime_options(opts, host),
+    label = root_label,
+    closure = opts.closure,
+  })
+  local root_fiber, runtime_status
   local ok, err = Protected.pcall(function()
-    rt:_spawn_raw(function()
-      result = scope:try_run(fn)
-      return result
-    end, scope, scope)
+    root_fiber = RootSession.spawn_root(rt, scope, fn, root_label, true)
     runtime_status = External.drive(rt, {
       host = host,
       run = opts.run,
@@ -90,40 +85,7 @@ function M.try_run(fn, opts)
       max_iterations = opts.max_iterations,
     })
   end)
-  local finalised, finalise_err = Protected.pcall(function()
-    return rt:_finalize()
-  end)
-  if ok and not finalised then
-    ok, err = false, finalise_err
-  end
-  if ok and result then
-    result.runtime_status = runtime_status
-    result.runtime = rt
-    result.scope = scope
-    return result
-  end
-  if not ok then
-    local closure_failures = ScopeOutcome.closure_failures(err)
-    return ScopeResult.fail({
-      reason = 'runtime_error',
-      primary = err,
-      report = scope:_make_report(err, {}, {
-        reason = 'runtime_error',
-        closure_failures = closure_failures,
-      }),
-      closure_failures = closure_failures,
-      runtime_status = runtime_status,
-    })
-  end
-  local pending = ScopeResult.fail({
-    reason = 'runtime_pending',
-    primary = runtime_status,
-    report = scope:_make_report(runtime_status, {}, { reason = 'runtime_pending' }),
-    runtime_status = runtime_status,
-  })
-  pending.runtime = rt
-  pending.scope = scope
-  return pending
+  return RootSession.complete(rt, scope, root_fiber, runtime_status, ok and nil or err)
 end
 
 function M.run(fn, opts)

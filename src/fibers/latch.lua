@@ -1,60 +1,22 @@
+local Completion = require('fibers.resource.completion')
 local Direct = require('fibers.internal.direct')
-local Label = require('fibers.internal.label')
-local TrustedState = require('fibers.internal.trusted_state')
 
 local Latch = {}
 Latch.__index = Latch
-
-local EMPTY = {}
-local NIL = {}
-local next_id = 0
-
-local function encode(value)
-  return value == nil and NIL or value
-end
-
-local function decode(value)
-  return value == NIL and nil or value
-end
+setmetatable(Latch, { __index = Completion })
 
 function Latch.new()
-  next_id = next_id + 1
-  local id = 'latch-' .. tostring(next_id)
-  local latch = Label.attach(setmetatable({
-    _fibers_id = id,
-    _state = TrustedState.cell(EMPTY),
-  }, Latch))
-  Label.child(latch._state, latch, 'state')
-  return latch
+  return setmetatable(Completion.new(), Latch)
 end
 
 function Latch:set_op(value)
-  local set = self._state:expect_op(EMPTY):and_then(self._state:write_op(encode(value)):map(function()
-      return true
-    end))
-
-  return set:or_else(self._state:wait_until_op(function(current)
-    return current ~= EMPTY
-  end):map(function()
-    return false
-  end))
+  return self:publish_success_op(value):map(function(first) return first == true end)
 end
 
-function Latch:get_op()
-  return self._state:wait_until_op(function(value)
-    return value ~= EMPTY
-  end):map(decode)
-end
-
+function Latch:get_op() return self:success_op() end
 function Latch:is_set_op()
-  return self._state:read_op():map(function(value)
-    return value ~= EMPTY
-  end)
+  return self:read_op():map(function(state) return state.kind ~= 'pending' end)
 end
-
-
-
 
 Direct.install(Latch, { 'set', 'get', 'is_set' })
-
 return Latch

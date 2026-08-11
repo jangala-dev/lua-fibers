@@ -68,9 +68,9 @@ local function key_id(key)
 end
 
 local function handle_hint_ready(entry)
-  local readiness = entry.handle and entry.handle._readiness
-  local state = readiness and readiness._location and readiness._location.value
-  return not not (state and state[entry.mode])
+  local handle = entry.handle
+  if not handle then return false end
+  return entry.mode == 'write' and handle._write_hint == true or handle._read_hint == true
 end
 
 local function masked_perform(rt, option)
@@ -472,7 +472,7 @@ function Reactor:_refresh(entry)
   if entry.service == 'offer' then
     if entry.closing then
       self:_retire_entry(entry, entry.close_reason or 'closing')
-    elseif entry.source._slots._location.value > 0 then
+    elseif entry.source._queue:_count() < entry.source._capacity then
       self:_arm(entry)
     else
       self:_disarm(entry)
@@ -604,36 +604,19 @@ function Reactor:_retire_entry(entry, reason)
   return retire_error == nil, retire_error
 end
 
-local function release_offer_slot(reactor, source)
-  local ok, err = masked_perform(reactor.runtime, source._slots:give_op())
-  if not ok then return nil, err end
-  return true
-end
-
 function Reactor:_service_offer(entry)
   local source = entry.source
   if entry.mode == 'poll' then
     entry.armed = false
     entry.next_poll = nil
   end
-  if source._slots._location.value <= 0 then
-    self:_refresh(entry)
-    return true
-  end
-
-  local reserved, reserve_err = masked_perform(self.runtime, source._slots:take_op())
-  if not reserved then
-    if reserve_err then
-      entry.retire_state = { kind = 'failed', error = reserve_err }
-      return self:_retire_entry(entry, 'offer capacity reservation failed')
-    end
+  if source._queue:_count() >= source._capacity then
     self:_refresh(entry)
     return true
   end
 
   local ok, value, err = call_nonyielding_pull(self, source._pull, entry.handle)
   if not ok then
-    release_offer_slot(self, source)
     local failure = IOError.is(value) and value or IOError.protocol(source._domain, source._action, tostring(value), {
       cause = value,
     })
@@ -655,12 +638,6 @@ function Reactor:_service_offer(entry)
     -- hint on every syscall.
     if entry.armed then self:hint(entry.key, entry.mode) end
     return true
-  end
-
-  local released, release_err = release_offer_slot(self, source)
-  if not released then
-    entry.retire_state = { kind = 'failed', error = release_err }
-    return self:_retire_entry(entry, 'offer capacity release failed')
   end
 
   if IOError.is_would_block(err) then
@@ -823,10 +800,6 @@ function Reactor:_handle_control(kind, entry, reason, mode)
   return true
 end
 
-local function control_pending(control)
-  return control ~= nil and control._location.value.count > 0
-end
-
 function Reactor:_next_poll_deadline()
   local deadline
   for _, entry in pairs(self.entries) do
@@ -873,7 +846,7 @@ end
 
 function Reactor:_drain_control(rt)
   local handled = 0
-  while handled < self.control_quantum and control_pending(self.control) do
+  while handled < self.control_quantum and self.control:_count() > 0 do
     -- The control queue has one consumer: this reactor task.  Inspecting its
     -- committed state before performing next_op avoids opening a second
     -- certified-fallback session merely to implement a non-blocking dequeue.

@@ -49,19 +49,19 @@ file cursor without weakening Flow's monotonic endpoint-closure law at EOF.
 
 ## Continuous handle coverage
 
-Every acquired host handle follows this lifecycle:
+Every acquired host handle follows this ownership progression:
 
 ```text
-created -> held -> admitted -> closing -> closed
+created -> acquired -> adopted -> closing -> closed
 ```
 
-`held` means that the running Lifetime covers the handle immediately after the
-irreversible host return and before permanent child admission. `admitted` means
-that a Stream, Listener, Dial or other structural Lifetime has taken custody.
-Failed partial construction closes every handle which remains in a host hold.
+`acquired` is lexical setup ownership immediately after the irreversible host
+return. It is deliberately not a Lifetime. `adopted` means that a Stream,
+Listener, Dial or other structural Lifetime now accounts for the handle. Failed
+partial construction closes every value which remains lexically acquired.
 
-A handle must never have two custodians. Moving a handle from a private host
-hold into a resource Lifetime is a hand-off, not a second acquisition.
+A handle must never have two owners. Adoption releases lexical setup ownership
+as the resource Lifetime takes responsibility.
 
 ## Reactor registrations
 
@@ -144,7 +144,7 @@ A Process is an external-resource Lifetime held in custody:
 Process
 ├── host process handle
 ├── supervisor task
-├── launch host hold
+├── lexical launch acquisitions (setup only)
 ├── generated standard Streams
 ├── optional Stream bridge tasks
 ├── reactor-owned exit completion
@@ -159,7 +159,7 @@ path closes partial pipes and reaps the failed child before returning.
 The supervisor is the single authority for signal delivery, exit observation
 and reaping. These invariants apply:
 
-- every child handle enters a host hold before the acquiring driver may yield;
+- every child handle remains lexically owned until a Stream or Process adopts it;
 - a returned Process has exactly one reap authority;
 - `result_op` becomes ready only after exactly-once reaping;
 - repeated result observations return the same tagged status;
@@ -361,11 +361,11 @@ reactor.
 ### Ownership
 
 The source is a Lifetime. Unclaimed results remain accountable to it until a committed `next_op()`
-transfers or consumes them. Accepted descriptors enter a
-source-owned `HostHold` before publication; source retirement closes every
-unclaimed descriptor. Conversion failure discards only the selected keyed hold
-entry, so other queued accepted handles remain valid. Connection-attempt handles
-remain under their Dial hold, and packet bytes remain in the bounded external
+transfers or consumes them. Accepted descriptors pass directly into the
+source-owned queue; source retirement closes every unclaimed descriptor.
+Conversion failure closes only the selected descriptor, so other queued accepted
+handles remain valid. Connection-attempt handles remain lexically owned until
+their Dial adopts or closes them, and packet bytes remain in the bounded external
 queue.
 
 `next_op()` exposes only an offer. `result_op()` additionally observes source

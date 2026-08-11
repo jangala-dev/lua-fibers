@@ -12,40 +12,8 @@ local ScopeOutcome = require('fibers.scope.outcome')
 local ScopeResult = ScopeOutcome.Result
 local Lifetime = require('fibers.lifetime')
 local Op = require('fibers.op')
-local Effect = require('fibers.effect')
 
 local Driver = {}
-
--- Closure bookkeeping is retained ordinary state rather than transaction-managed
--- state.  Record it through a committed effect so request_cancel_op remains a
--- fully transactional Op: speculative exploration and losing branches leave the
--- Closure object untouched, while downstream and_then composition remains valid.
-local CloseReasonKind
-CloseReasonKind = Effect.kind({
-  name = 'closure.close_reason',
-  key = function(payload) return payload.state end,
-  merge = function(a, b)
-    return { state = a.state, reason = a.reason ~= nil and a.reason or b.reason }
-  end,
-  prepare = function(_runtime, payload)
-    if type(payload.state) ~= 'table' then
-      error('closure close-reason effect requires retained Closure state', 0)
-    end
-    return {
-      kind = CloseReasonKind,
-      key = payload.state,
-      payload = payload,
-      discharge = function(_rt, entry, _log)
-        local state = entry.payload.state
-        state.close_reason = state.close_reason or entry.payload.reason
-      end,
-    }
-  end,
-})
-
-local function record_close_reason_effect(state, reason)
-  return Effect.of(CloseReasonKind, { state = state, reason = reason })
-end
 
 local function pack(...)
   return { n = select('#', ...), ... }
@@ -111,12 +79,10 @@ local function record_entry(state, child, exit)
   if state.processed[child] then
     return state.processed[child], false
   end
-  state.sequence = state.sequence + 1
   local entry = {
     child = child,
     lifetime = child,
     exit = exit,
-    sequence = state.sequence,
     decision_applied = false,
   }
   state.processed[child] = entry
@@ -138,7 +104,6 @@ local function apply_decision(scope, state, decision, reason)
       cancel_body = decision.cancel_body == true,
       cancel_children = decision.cancel_children == true,
     }))
-    state.close_reason = state.close_reason or close_reason
   end
 end
 
@@ -149,7 +114,7 @@ local function apply_child_entry(scope, state, entry)
   entry.decision_applied = true
   local exit = entry.exit
   local decision = normalise_decision(
-    call_closure(state.closure, 'on_child_outcome', scope._lifetime, state, entry.lifetime, exit),
+    call_closure(scope._lifetime._closure, 'on_child_outcome', scope._lifetime, state, entry.lifetime, exit),
     exit
   )
   apply_decision(scope, state, decision, exit and (exit.error or exit.reason or exit) or nil)
@@ -185,12 +150,9 @@ function Driver.request_cancel_op(scope, reason)
       return Op.always(false, recorded_reason)
     end
     if close_op then
-      return close_op:and_then(Op.emit(record_close_reason_effect(
-          state,
-          decision.reason or recorded_reason
-        )):map(function()
-          return true, recorded_reason
-        end))
+      return close_op:map(function()
+        return true, recorded_reason
+      end)
     end
     return Op.always(true, recorded_reason)
   end))
@@ -400,7 +362,6 @@ function Driver.run(scope, fn, closure, on_body_exit)
 
   local state = state_for(scope)
   state.active = true
-  state.closure = closure
 
   local fiber = assert(rt._current_fiber, 'Scope:run requires a current fiber')
   local previous_scope = fiber.scope
@@ -480,10 +441,6 @@ end
 
 function Driver.try_run(scope, fn)
   return Driver.run(scope, fn, scope._lifetime._closure or {})
-end
-
-function Driver.run_raising(scope, fn)
-  return Driver.try_run(scope, fn):raise()
 end
 
 return Driver

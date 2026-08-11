@@ -53,13 +53,7 @@ function Readiness.new(key, initial_mode)
     }, Readiness),
     Kind
   )
-  r._location = Facility.location(r, {
-    algebra = 'machine',
-    domain = 'external',
-    value = { read = false, write = false },
-    clone_value = clone_state,
-  })
-  External.attach(r, r._location, deliver, clear)
+  External._machine(r, { read = false, write = false }, clone_state, deliver, clear)
   r._read_op, r._write_op = false, false
   return r
 end
@@ -77,16 +71,12 @@ function Readiness:readiness_op(selected)
     end
     return StateMachine.Ready.same(true, key, selected)
   end)
-  local option = Facility.op(StateMachine._compile(self._location, self, transition, {
-    wake = function(rt)
-      return Interest.external(r, selected .. ':' .. tostring(key), {
-        external_kind = 'readiness',
-        readiness_key = key,
-        mode = selected,
-        feed = ExternalFeed.for_resource(rt, r),
-      })
-    end,
-  }))
+  local option = External._op(self, transition, function(rt)
+    return Interest.external(r, selected .. ':' .. tostring(key), {
+      external_kind = 'readiness', readiness_key = key, mode = selected,
+      feed = ExternalFeed.for_resource(rt, r),
+    })
+  end)
   self[field] = option
   return option
 end

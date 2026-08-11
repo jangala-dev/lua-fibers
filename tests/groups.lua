@@ -133,7 +133,7 @@ return {
   },
   internal = {
     'tests/internal/test_context.lua',
-    'tests/internal/test_host_hold.lua',
+    'tests/internal/test_acquired.lua',
     'tests/internal/test_managed_value.lua',
     'tests/internal/test_package_structure.lua',
     'tests/internal/test_closed_op_conformance.lua',
@@ -149,6 +149,7 @@ return {
     'tests/internal/test_flow_stream_adversarial.lua',
     'tests/internal/test_flow_validation.lua',
     'tests/internal/test_protected.lua',
+    'tests/internal/test_native_file_sync.lua',
   },
   reference = {
     'tests/reference/test_evaluator.lua',

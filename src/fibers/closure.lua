@@ -155,10 +155,9 @@ function Closure.supervisor(opts)
   return setmetatable(contract, Supervisor)
 end
 
-function Supervisor:on_child_outcome(_parent, state, _child, exit)
-  if type(exit) == 'table' and exit.tag == 'failed' and self.child_failure == 'fail_at_exit'
-      and not state.first_child_failure then
-    state.first_child_failure = state.child_failures[#state.child_failures]
+function Supervisor:on_child_outcome(_parent, _state, _child, exit)
+  if type(exit) == 'table' and exit.tag == 'failed' and self.child_failure == 'fail_at_exit' then
+    return { fail_boundary = true }
   end
   return {}
 end

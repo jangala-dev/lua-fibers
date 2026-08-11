@@ -8,7 +8,6 @@
 -- when blocking in poll/epoll or when delivering embedded callbacks.
 
 local External = require('fibers.embed.external')
-local Readiness = require('fibers.io.readiness')
 local UnsafeExternalMutation = require('fibers.embed.unsafe_external_mutation')
 local IOError = require('fibers.io.error')
 local IOAudit = require('fibers.internal.io_audit')
@@ -30,9 +29,8 @@ end
 
 local function clear_local_hint(self, mode)
   mode = normalise_mode(mode)
-  if self._readiness then
-    UnsafeExternalMutation.clear(self._readiness, mode)
-  end
+  self[mode == 'read' and '_read_hint' or '_write_hint'] = false
+  if self._readiness then UnsafeExternalMutation.clear(self._readiness, mode) end
 end
 
 local function clear_hint(self, mode)
@@ -48,9 +46,8 @@ end
 
 local function mark_hint(self, mode)
   mode = normalise_mode(mode)
-  if self._readiness then
-    UnsafeExternalMutation.deliver(self._readiness, mode, true)
-  end
+  self[mode == 'read' and '_read_hint' or '_write_hint'] = true
+  if self._readiness then UnsafeExternalMutation.deliver(self._readiness, mode, true) end
   local host = self._host
   if host and type(host.set_readiness) == 'function' then
     host:set_readiness(self._key, mode, true)
@@ -92,8 +89,10 @@ function Handle.new(opts)
     _key = key,
     _handle = opts.handle or key,
     _host = opts.host,
-    _readiness = opts.readiness or Readiness.new(key, nil),
+    _readiness = opts.readiness,
     _feed = opts.feed,
+    _read_hint = false,
+    _write_hint = false,
     _read = opts.read,
     _write = opts.write,
     _shutdown_read = opts.shutdown_read,
@@ -104,11 +103,9 @@ function Handle.new(opts)
     _attach_stream = opts.attach_stream,
     _ready = opts.ready,
     _runtime = nil,
-    _stream = nil,
     _fibers_host_handle = true,
   }, Handle)
   Label.attach(handle, opts.label)
-  if opts.readiness == nil then Label.child(handle._readiness, handle, 'readiness') end
   IOAudit.created(handle, { kind = 'host_handle' })
   return handle
 end
@@ -130,14 +127,31 @@ function Handle:readiness_key()
   return self._key
 end
 
+local function ensure_readiness(self)
+  if self._readiness then return self._readiness end
+  local Readiness = require('fibers.io.readiness')
+  local readiness = Readiness.new(self._key, nil)
+  self._readiness = readiness
+  Label.child(readiness, self, 'readiness')
+  if self._read_hint then UnsafeExternalMutation.deliver(readiness, 'read', true) end
+  if self._write_hint then UnsafeExternalMutation.deliver(readiness, 'write', true) end
+  if self._runtime and not self._feed then
+    self._feed = External.external_feed(self._runtime, readiness)
+  end
+  return readiness
+end
+
 function Handle:bind_runtime(rt)
-  if self._runtime == rt and self._feed then
+  if self._runtime == rt then
     IOAudit.bind(self, rt)
+    if self._readiness and not self._feed then
+      self._feed = External.external_feed(rt, self._readiness)
+    end
     return self
   end
   self._runtime = rt
   IOAudit.bind(self, rt)
-  if not self._feed then
+  if self._readiness and not self._feed then
     self._feed = External.external_feed(rt, self._readiness)
   end
   local bind = self._bind_runtime
@@ -148,7 +162,6 @@ function Handle:bind_runtime(rt)
 end
 
 function Handle:attach_stream(stream)
-  self._stream = stream
   IOAudit.transfer(self, stream, { kind = 'host_handle', role = 'stream_handle' })
   local attach = self._attach_stream
   if attach then
@@ -163,7 +176,8 @@ function Handle:ready_op(mode)
   if ready then
     return ready(self, mode)
   end
-  return mode == 'write' and self._readiness:writable_op() or self._readiness:readable_op()
+  local readiness = ensure_readiness(self)
+  return mode == 'write' and readiness:writable_op() or readiness:readable_op()
 end
 
 function Handle:read_ready_op()

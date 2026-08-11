@@ -10,7 +10,6 @@ local IOError = require('fibers.io.error')
 local Address = require('fibers.net.address')
 local IO = require('fibers.io.facility')
 local DialLifecycle = require('fibers.socket.dial.lifecycle')
-local Closure = require('fibers.closure')
 local Protected = require('fibers.protected')
 local perform = require('fibers.perform')
 local Direct = require('fibers.internal.direct')
@@ -33,32 +32,14 @@ local function named_strategy()
   return require('fibers.socket.dial.named')
 end
 
-local function copy_error(err)
-  if not IOError.is(err) then return err end
-  local out = {}
-  for key, value in pairs(err) do out[key] = value end
-  return setmetatable(out, getmetatable(err))
-end
-
 local function attach_report(err, report)
   if report == nil then return err end
-  local out = copy_error(err)
+  local out = IOError.copy(err)
   if not IOError.is(out) then
     out = IOError.system('socket', 'dial', tostring(err), nil, nil)
   end
   out.report = report
   return out
-end
-
-local function dial_closure(dial)
-  return Closure.request_then_wait(function(_ctx, _record, reason)
-    return dial:close_op(reason or 'scope closure')
-  end, function()
-    return dial:closed_op()
-  end, {
-    name = 'dial',
-    finish_result = Closure.require_ok('dial closure failed'),
-  })
 end
 
 local function closed_result(state)
@@ -87,7 +68,7 @@ end
 
 local function publish_failure(dial, rt, err, fatal, report)
   err = attach_report(err, report)
-  local state = dial._lifecycle.state._location.value
+  local state = dial._lifecycle._location.value
   local op
   if state.kind == 'closing' then
     op = dial._lifecycle:closed_op(state.reason, err, fatal, report)
@@ -98,7 +79,7 @@ local function publish_failure(dial, rt, err, fatal, report)
 end
 
 local function publish_cancelled(dial, rt, cancellation)
-  local state = dial._lifecycle.state._location.value
+  local state = dial._lifecycle._location.value
   local closed = cancelled_error(dial, cancellation)
   local report = state.report
     or dial._strategy.terminal_report(dial, 'cancelled', closed, rt:now())
@@ -260,12 +241,13 @@ local function new_op(endpoint, opts, strategy)
   }, Dial), opts.label)
   Label.child(dial._lifecycle, dial, 'lifecycle')
 
-  return IO.admit_driven_lifetime_op(scope, dial, {
-    operation = 'socket.dial_op',
+  return scope:_drive_op( dial, {
     label = Label.get(dial),
     role = 'socket_dial',
-    closure = dial_closure(dial),
-    causal_states = { dial._lifecycle.state },
+    closure = IO._closeable_closure(dial, {
+      name = 'dial', reason = 'scope closure', finish_result = 'dial closure failed',
+    }),
+    causal_states = { dial._lifecycle },
     run = function(driver_scope) return driver(dial, driver_scope) end,
   })
 end

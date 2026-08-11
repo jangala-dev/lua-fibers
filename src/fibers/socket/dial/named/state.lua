@@ -29,18 +29,7 @@ local function copy_list(values)
   return out
 end
 
-local function copy_error_fields(err)
-  if not IOError.is(err) then
-    return err
-  end
-  local fields = {}
-  for key, value in pairs(err) do
-    if key ~= '_fibers_io_error' and key ~= 'report' then
-      fields[key] = value
-    end
-  end
-  return IOError.new(err.kind, fields)
-end
+local function copy_error_fields(err) return IOError.copy(err, 'report') end
 
 local function copy_family(info)
   return {

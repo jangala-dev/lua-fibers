@@ -13,14 +13,10 @@ if not ok_nixio or type(nixio) ~= 'table' then
 end
 
 local const = nixio.const or {}
-local names = {}
-for name, value in pairs(const) do
-  if type(name) == 'string' and name:match('^E[A-Z0-9_]+$') and type(value) == 'number' then
-    names[value] = names[value] or name
-  end
-end
-local native_error =
-  NativeError.new({ current_errno = nixio.errno, strerror = nixio.strerror, names = names })
+local names = NativeError.names(const)
+local native_error = NativeError.new({
+  current_errno = nixio.errno, strerror = nixio.strerror, names = names, false_is_error = true,
+})
 local open_objects = setmetatable({}, { __mode = 'k' })
 
 local function list_open_objects()
@@ -32,25 +28,9 @@ local function list_open_objects()
 end
 local support_cache = {}
 
-local function split(a, b)
-  local message, number = native_error.split(a, b)
-  if number == nil and type(nixio.errno) == 'function' then
-    number = tonumber(nixio.errno())
-  end
-  return message, number
-end
-
-local function native_result(value, a, b)
-  if value ~= nil and value ~= false then return value end
-  local message, number = split(a, b)
-  return nil, number, message
-end
-
-local function native_status(value, a, b)
-  if value ~= nil and value ~= false then return true end
-  local message, number = split(a, b)
-  return nil, number, message
-end
+local split = native_error.split
+local native_result = native_error.result
+local native_status = native_error.status
 
 local function no_error(a, b)
   if a == nil and b == nil then

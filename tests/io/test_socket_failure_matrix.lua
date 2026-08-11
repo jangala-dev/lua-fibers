@@ -16,7 +16,6 @@ local socket = require('fibers.socket')
 local SimulatedHost = require('tests.support.simulated_host')
 local HostError = require('fibers.io.error')
 local Handle = require('fibers.io.handle')
-local HostHold = require('fibers.io.internal.host_hold')
 local Connection = require('fibers.socket.connection')
 local Runtime = require('fibers.runtime')
 local Protected = require('fibers.protected')
@@ -272,13 +271,11 @@ do
   IOAudit.assert_clean(result.runtime, { label = 'listener address accessor failure' })
 end
 
--- Once a held connected handle has become a Stream, address discovery must not
--- be able to strand that Stream in the target Scope. The hold is released first;
+-- Once a connected host handle has become a Stream, address discovery must not
+-- be able to strand that Stream in the target Scope. The Stream owns the handle;
 -- an accessor defect aborts the new Stream and returns a structured error.
 do
   local result = fibers.try_run(function(scope)
-    local hold = HostHold.new()
-    assert(fibers.perform(scope:admit_op(hold)))
     local closed = 0
     local handle = Handle.new({
       label = 'bad-connected-address-handle',
@@ -295,20 +292,16 @@ do
     function handle:peer_address()
       return socket.ipv4_address('192.0.2.2', 80)
     end
-    assert(hold:hold('socket', handle, function(value, reason) return value:close(reason) end))
 
-    local connection, err = Connection.from_host_hold(
+    local connection, err = Connection.from_host(
       Runtime.current(),
       scope,
-      hold,
-      'socket',
       handle,
       { action = 'open_connection', address = socket.ipv4_address('192.0.2.1', 80) }
     )
     assert_eq(connection, nil)
     assert_truthy(HostError.is(err, 'protocol'))
     assert_truthy(tostring(err):match('injected connected local_address defect'))
-    assert_truthy(hold:is_empty(), 'converted handle must no longer remain in HostHold')
     assert_eq(closed, 1, 'failed address discovery must abort the admitted Stream')
   end, { host = SimulatedHost.new() })
 
@@ -321,8 +314,6 @@ end
 do
   local returned_err
   local result = fibers.try_run(function(scope)
-    local hold = HostHold.new()
-    assert(fibers.perform(scope:admit_op(hold)))
     local handle = Handle.new({
       label = 'bad-connected-address-cleanup-handle',
       read = function() return nil, HostError.would_block('socket', 'read') end,
@@ -333,11 +324,10 @@ do
     })
     function handle:local_address() error('injected connected address defect') end
     function handle:peer_address() return socket.ipv4_address('192.0.2.2', 80) end
-    assert(hold:hold('socket', handle, function(value, reason) return value:close(reason) end))
 
     local connection
-    connection, returned_err = Connection.from_host_hold(
-      Runtime.current(), scope, hold, 'socket', handle,
+    connection, returned_err = Connection.from_host(
+      Runtime.current(), scope, handle,
       { action = 'open_connection', address = socket.ipv4_address('192.0.2.1', 80) }
     )
     assert_eq(connection, nil)
@@ -351,7 +341,7 @@ do
 end
 
 
--- If a failed direct connection attempt also fails to close its held handle,
+-- If a failed direct connection attempt also fails to close its acquired handle,
 -- the cleanup defect must be retained in the Dial result rather than discarded.
 do
   local close_calls = 0

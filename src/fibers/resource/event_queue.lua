@@ -1,6 +1,5 @@
 -- Externally fed persistent FIFO.
 
-local Op = require('fibers.op')
 local Facility = require('fibers.resource.authoring')
 local StateMachine = require('fibers.resource.machine')
 local External = require('fibers.embed.external')
@@ -93,24 +92,14 @@ end
 
 local function wake(runtime, leaf) return interest(leaf.resource, runtime) end
 
-local function option(queue, transition)
-  return Facility.op(StateMachine._compile(queue._location, queue, transition, { wake = wake }))
-end
-
 function EventQueue.new(interest_factory)
   if interest_factory ~= nil and type(interest_factory) ~= 'function' then
     error('EventQueue.new expects an interest factory function or nil', 2)
   end
   local queue = Facility.identity(setmetatable({ _interest_factory = interest_factory }, EventQueue), Kind)
-  queue._location = Facility.location(queue, {
-    algebra = 'machine',
-    domain = 'external',
-    value = { count = 0, head = 1 },
-    clone_value = clone,
-  })
-  External.attach(queue, queue._location, deliver, clear)
-  queue._next_op = option(queue, Next)
-  queue._drain_cached_op = option(queue, Drain)
+  External._machine(queue, { count = 0, head = 1 }, clone, deliver, clear)
+  queue._next_op = External._op(queue, Next, wake)
+  queue._drain_cached_op = External._op(queue, Drain, wake)
   return queue
 end
 
@@ -123,6 +112,7 @@ function EventQueue:_drain_op()
   return self._drain_cached_op
 end
 
+function EventQueue:_count() return self._location.value.count end
 
 Direct.install(EventQueue, { 'next' })
 

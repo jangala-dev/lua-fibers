@@ -4,7 +4,7 @@ local file = require('fibers.file')
 local AutoIO = require('fibers.io.auto')
 local SimulatedHost = require('tests.support.simulated_host')
 local HostError = require('fibers.io.error')
-local MemoryProvider = require('fibers.file.memory_provider')
+local MemoryProvider = require('tests.support.memory_file_provider')
 
 local tests = {}
 

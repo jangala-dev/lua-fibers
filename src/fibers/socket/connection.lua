@@ -1,4 +1,4 @@
--- Construction and held-host-handle transfer for connected socket Streams.
+-- Construction and ownership transfer for connected socket Streams.
 
 local IOError = require('fibers.io.error')
 local IO = require('fibers.io.facility')
@@ -45,21 +45,13 @@ local function abort_with_cleanup(rt, connection, primary, action, address)
   )
 end
 
-function Connection.from_host_hold(rt, scope, host_hold, key, handle, opts)
+function Connection.from_host(rt, scope, handle, opts)
   local action = opts.action or 'open_connection'
   local connection
   local opened, open_err = Protected.pcall(function()
     connection = IO.open_handle_stream(rt, scope, handle, {
-      label = opts.label,
-      read = true,
-      write = true,
-      capacity = opts.capacity,
-      read_capacity = opts.read_capacity,
-      write_capacity = opts.write_capacity,
-      chunk_size = opts.chunk_size,
-      read_chunk_size = opts.read_chunk_size,
-      write_chunk_size = opts.write_chunk_size,
-    })
+      label = opts.label, read = true, write = true,
+    }, opts)
   end)
   if not opened then
     local failure = IOError.normalise(open_err, {
@@ -67,20 +59,14 @@ function Connection.from_host_hold(rt, scope, host_hold, key, handle, opts)
       action = action,
       address = opts.address,
     })
-    local discarded, discard_err = host_hold:discard(key, handle, failure)
-    if not discarded then
-      return nil, IOError.protocol('socket', action, 'connection opening and handle disposal failed', {
-        address = opts.address,
-        errors = { failure, discard_err },
-        cause = failure,
-      })
-    end
-    return nil, failure
-  end
-
-  local released, release_err = host_hold:release(key, handle)
-  if not released then
-    return nil, abort_with_cleanup(rt, connection, release_err, action, opts.address)
+    local cleanup = {}
+    IOError.capture_cleanup(cleanup, 'socket', action .. '_handle_close', { address = opts.address },
+      IO.close_value, 'socket', handle, failure)
+    return nil, IOError.with_cleanup(
+      failure, 'socket', action,
+      'connection opening and handle disposal both failed', cleanup,
+      { address = opts.address }
+    )
   end
 
   local addressed, local_address, peer_address = Protected.pcall(function()

@@ -3,11 +3,15 @@
 local Op = require('fibers.op')
 local Facility = require('fibers.resource.authoring')
 local StateMachine = require('fibers.resource.machine')
-local Label = require('fibers.internal.label')
-local TrustedState = require('fibers.internal.trusted_state')
+local Cell = require('fibers.resource.cell')
+local StateResource = require('fibers.internal.state_resource')
+local ValueSemantics = require('fibers.internal.value_semantics')
 
 local Completion = {}
 Completion.__index = Completion
+Completion.read_op = Cell.read_op
+Completion.transition_op = StateMachine.transition_op
+Completion.select_op = Cell.select_op
 
 local Kind = Facility.kind('completion')
 local Ready = StateMachine.Ready
@@ -25,36 +29,25 @@ local Publish = StateMachine.isolated_update('completion.publish', function(curr
 end)
 
 function Completion.new()
-  local completion = Facility.identity(setmetatable({}, Completion), Kind)
-  completion.state = TrustedState.machine({ kind = 'pending' })
-  Label.child(completion.state, completion, 'state')
-  return completion
+  return StateResource.init(Facility.identity(setmetatable({}, Completion), Kind),
+    { kind = 'pending' }, 'machine', ValueSemantics.trusted, 'Completion state')
 end
 
-function Completion:_is_pending()
-  return self.state._location.value.kind == 'pending'
-end
-
+function Completion:_is_pending() return self._location.value.kind == 'pending' end
 function Completion:publish_success_op(...)
-  return self.state:transition_op(Publish, { kind = 'succeeded', values = Facility.pack(...) })
+  return self:transition_op(Publish, { kind = 'succeeded', values = Facility.pack(...) })
 end
-
-function Completion:publish_failure_op(error)
-  return self.state:transition_op(Publish, { kind = 'failed', error = error })
-end
-
-function Completion:publish_cancelled_op(reason)
-  return self.state:transition_op(Publish, { kind = 'cancelled', reason = reason })
-end
+function Completion:publish_failure_op(error) return self:transition_op(Publish, { kind = 'failed', error = error }) end
+function Completion:publish_cancelled_op(reason) return self:transition_op(Publish, { kind = 'cancelled', reason = reason }) end
 
 function Completion:terminal_op()
-  return self.state:select_op(function(state)
+  return self:select_op(function(state)
     if state.kind ~= 'pending' then return Op.always(state) end
   end)
 end
 
 function Completion:pending_op()
-  return self.state:select_op(function(state)
+  return self:select_op(function(state)
     if state.kind == 'pending' then return Op.always(true) end
     return Op.never()
   end)
@@ -71,7 +64,7 @@ function Completion:result_op()
 end
 
 function Completion:success_op()
-  return self.state:select_op(function(state)
+  return self:select_op(function(state)
     if state.kind == 'succeeded' then
       return Op.always(unpack_(state.values, 1, state.values.n))
     end
@@ -80,7 +73,7 @@ function Completion:success_op()
 end
 
 function Completion:failure_op()
-  return self.state:select_op(function(state)
+  return self:select_op(function(state)
     if state.kind == 'failed' then return Op.always(state.error) end
     if state.kind == 'cancelled' then return Op.always(state.reason) end
     if state.kind == 'succeeded' then return Op.never() end

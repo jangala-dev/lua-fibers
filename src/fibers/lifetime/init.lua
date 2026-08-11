@@ -46,13 +46,7 @@ local function wait_for(cell, pred)
 end
 
 local function initial_closure_state()
-  return { processed = {}, child_exits = {}, child_failures = {}, sequence = 0 }
-end
-
-local function copy_list(xs)
-  local out = {}
-  for i = 1, #(xs or {}) do out[i] = xs[i] end
-  return out
+  return { processed = {}, child_exits = {}, child_failures = {} }
 end
 
 -- Dormant topology is ordinary Lua data, so validate it explicitly before it
@@ -107,7 +101,7 @@ end
 
 local LIFETIME_OPTIONS = {
   parent = true, value = true, standalone_boundary = true, body = true, closure = true,
-  role = true, rights = true, meta = true, offers = true, label = true, children = true, runtime = true,
+  role = true, rights = true, meta = true, label = true, children = true, runtime = true,
 }
 local DEFINE_OPTIONS = {
   body = true, closure = true, role = true, rights = true, meta = true, children = true, label = true,
@@ -137,14 +131,12 @@ function Lifetime.new(opts)
     _body_result = TrustedState.cell(pending()):label(node_kind .. '-body-result'),
     _outcome = TrustedState.cell(pending()):label(node_kind .. '-outcome'),
     _closure_state = initial_closure_state(),
-    _offers = opts.offers,
   }, Node)
   Label.attach(node)
   if opts.label ~= nil then Label.set(node, opts.label, 2) end
   Label.child(node._cancel, node, 'cancellation')
   Label.child(node._body_result, node, 'body-result')
   Label.child(node._outcome, node, 'outcome')
-  if type(node._offers) == 'table' then Label.child(node._offers, node, 'offers') end
 
   -- The dependency index uses this marker to connect an observer of a
   -- Lifetime's terminal outcome to the currently pending operations which can
@@ -322,7 +314,7 @@ function Node:_bind_runtime_committed(runtime)
     error('Lifetime already belongs to another Runtime', 2)
   end
   self._runtime = runtime
-  runtime:_lifetime_store():attach_boundary(self)
+  runtime:_lifetime_store():attach_node(self)
   return self
 end
 
@@ -341,8 +333,9 @@ end
 
 function Node:_record_map()
   if self._admitted then error('cannot reconstruct records for an admitted Lifetime', 2) end
-  local out = {}
+  local out, members, descendant_admitted = {}, {}, false
   walk_construction_tree(self, function(node, parent)
+    if node ~= self and node._admitted then descendant_admitted = true end
     local rec = {
       closure = node._closure,
       role = node._role,
@@ -353,11 +346,10 @@ function Node:_record_map()
       meta = node._meta,
     }
     out[node] = rec
-    if parent ~= nil then
-      out[parent].children[#out[parent].children + 1] = node
-    end
+    members[#members + 1] = node
+    if parent ~= nil then out[parent].children[#out[parent].children + 1] = node end
   end)
-  return out
+  return out, members, descendant_admitted
 end
 
 local function closure_state(node)
@@ -365,8 +357,10 @@ local function closure_state(node)
     return node._terminal_phase or 'dormant', 0
   end
   local _, _, boundary = node._runtime:_lifetime_store():_node_parts(node)
+  local location = node._lifetime_location
   return (boundary and boundary.closure_phase) or node._terminal_phase or 'dormant',
-    (boundary and boundary.version) or 0
+    (location and location.version) or 0,
+    (boundary and boundary.closure_reason) or node._terminal_reason
 end
 
 function Node:closed_op()
@@ -381,6 +375,23 @@ function Node:closed_op()
     return store:changed_op(node, version):and_then(
       Op.guard(function(...) return wait(...) end)
     )
+  end
+  return wait()
+end
+
+function Node:_close_requested()
+  local phase, _, reason = closure_state(self)
+  return phase ~= 'dormant' and phase ~= 'open', reason
+end
+
+function Node:close_requested_op()
+  local node = self
+  local function wait()
+    local requested, reason = node:_close_requested()
+    if requested then return Op.always(reason) end
+    if not node._runtime then return Op.never() end
+    local _, version = closure_state(node)
+    return node._runtime:_lifetime_store():changed_op(node, version):and_then(Op.guard(wait))
   end
   return wait()
 end

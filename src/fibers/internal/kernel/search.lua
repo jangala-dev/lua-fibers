@@ -350,7 +350,7 @@ end
 local leaf_kind = Operation.leaf_kind
 local PACK_TRUE = pack_(true)
 local ACT = {
-  annotated = {}, and_then_prefix = {}, and_then_result = {}, choice = {}, exchange = {},
+  and_then_prefix = {}, and_then_result = {}, choice = {}, exchange = {},
   fallback = {}, guard = {}, map = {}, preferred = {}, product_lane = {}, product_result = {},
   transition = {}, witness = {},
 }
@@ -361,6 +361,20 @@ end
 
 local function new_outcome(task, packed, wrap)
   return { pack = packed, wrap = wrap, activation = task and task.activation or nil }
+end
+
+-- A wrap is a one-way transition from transactional evaluation to the
+-- participant's post-commit continuation. Structural has_wrap checks reject
+-- phase crossings that are visible when an Option is built; guards can reveal
+-- wraps only during search, so completed outcomes must enforce the same
+-- invariant here before map or and_then consumes their values transactionally.
+local function require_transactional_outcome(state, outcome, action)
+  if not outcome.wrap then return end
+  state.engine.runtime:_fail(
+    'phase_error',
+    action .. ' cannot be applied after wrap: wrap is a post-commit boundary',
+    { action = action, phase = 'search', level = 0 }
+  )
 end
 
 local function map_count(values)
@@ -491,12 +505,14 @@ complete_task = function(state, task, outcome)
     setv(state, task, 'frame', frame.parent)
 
     if frame.kind == 'map' then
+      require_transactional_outcome(state, outcome, 'map')
       outcome = new_outcome(
         task,
         pack_(state.engine.runtime:_call_in_phase('map', 'callback_error', frame.fn, unpack_pack(outcome.pack))),
         nil
       )
     elseif frame.kind == 'bind' then
+      require_transactional_outcome(state, outcome, 'and_then')
       local input_pack = pack_(unpack_pack(outcome.pack))
       local next_activation = activation_child(frame.activation, ACT.and_then_result, outcome.activation)
       -- The provisional values supplied by and_then are dynamically scoped to
@@ -1048,13 +1064,11 @@ local function collect_defeat_effects(expr, out)
   if not expr then
     return out
   end
+  for i = 1, #(expr.defeats or {}) do
+    out[#out + 1] = expr.defeats[i]
+  end
   local kind = expr.kind
-  if kind == 'annotated' then
-    for i = 1, #(expr.defeats or {}) do
-      out[#out + 1] = expr.defeats[i]
-    end
-    return collect_defeat_effects(expr.p, out)
-  elseif kind == 'product' then
+  if kind == 'product' then
     for i = 1, #expr.lanes do
       collect_defeat_effects(expr.lanes[i], out)
     end
@@ -1373,6 +1387,7 @@ end
 local function reduce_one(state, task)
   local expr = task.expr
   local kind = expr.kind
+  if expr.post then push_frame(state, task, { kind = 'wrap', fn = expr.post }) end
   if kind == 'always' then
     return complete_task(state, task, new_outcome(task, expr.vals)) and 'progress' or 'conflict'
   elseif kind == 'guard' then
@@ -1388,13 +1403,6 @@ local function reduce_one(state, task)
   elseif kind == 'and_then' then
     push_frame(state, task, { kind = 'bind', q = expr.q, activation = task.activation })
     continue_task(state, task, expr.p, activation_child(task.activation, ACT.and_then_prefix))
-    return 'progress'
-  elseif kind == 'annotated' then
-    local parent = task.activation
-    if expr.post then
-      push_frame(state, task, { kind = 'wrap', fn = expr.post })
-    end
-    continue_task(state, task, expr.p, activation_child(parent, ACT.annotated))
     return 'progress'
   elseif kind == 'consequence' then
     pushv(state, ensure_table(state, 'effects'), expr.effect)

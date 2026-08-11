@@ -13,7 +13,6 @@ local IOError = require('fibers.io.error')
 local DNSResolver = require('fibers.dns.resolver')
 local IO = require('fibers.io.facility')
 local Protected = require('fibers.protected')
-local Closure = require('fibers.closure')
 local perform = require('fibers.perform')
 local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
@@ -43,18 +42,6 @@ local function validate_resolve_options(value)
   end
   return opts
 end
-
-local function query_closure(query)
-  return Closure.request_then_wait(function(_ctx, _record, reason)
-    return query:close_op(reason or 'resolver query closure')
-  end, function()
-    return query:closed_op()
-  end, {
-    name = 'resolver_query',
-    finish_result = Closure.require_ok('resolver query closure failed'),
-  })
-end
-
 
 local FAMILIES = { 'inet6', 'inet4' }
 
@@ -165,10 +152,7 @@ function Query:close_op(reason)
 end
 
 function Query:closed_op()
-  local terminal = self:_families_op():map(function()
-    return true
-  end)
-  return IO.closed_after_driver_op(self._driver, terminal)
+  return IO.closed_after_driver_op(self._driver)
 end
 
 local function normalise_addresses(values, endpoint, allow_empty, expected_family)
@@ -412,10 +396,10 @@ local function drive(query, opts)
       end)
     end
   end)
-  if ok then return end
+  if ok then return true end
   if Runtime.is_cancelled(thrown) then
     publish_cancelled(rt, query, thrown.reason or 'resolver query cancelled')
-    return
+    return true
   end
   local failure = IO.protocol_error('resolver', 'resolve', thrown, { endpoint = query._endpoint })
   for i = 1, #FAMILIES do
@@ -448,11 +432,13 @@ function Module.resolve_op(endpoint, opts)
   Label.child(query._family_completions.inet6, query, 'inet6')
   Label.child(query._family_completions.inet4, query, 'inet4')
 
-  return IO.admit_driven_lifetime_op(scope, query, {
-    operation = 'socket.resolve_op',
+  return scope:_drive_op( query, {
     label = Label.get(query),
     role = 'resolver_query',
-    closure = query_closure(query),
+    closure = IO._closeable_closure(query, {
+      name = 'resolver_query', reason = 'resolver query closure',
+      finish_result = 'resolver query closure failed',
+    }),
     causal_states = {
       query._family_completions.inet6.state,
       query._family_completions.inet4.state,

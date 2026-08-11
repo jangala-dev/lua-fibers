@@ -43,6 +43,14 @@ function Contract.table(v, l, n)
   return check(type(v) == 'table', v, l, 'must be a table', n)
 end
 
+function Contract.copy_table(v, l, n)
+  if v == nil then return {} end
+  Contract.table(v, l or 'table', n or 3)
+  local out = {}
+  for key, item in pairs(v) do out[key] = item end
+  return out
+end
+
 function Contract.func(v, l, n)
   return check(type(v) == 'function', v, l, 'must be a function', n)
 end

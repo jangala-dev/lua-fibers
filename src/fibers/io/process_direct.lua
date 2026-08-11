@@ -11,7 +11,6 @@ local Direct = {}
 
 local ACTION = {
   cwd = 'chdir',
-  session = 'setsid',
   group = 'setpgid',
   environment = 'environment',
   stdio = 'stdio',
@@ -38,6 +37,50 @@ function Direct.new(spec)
     if value ~= nil then
       pcall(spec.close, value)
     end
+  end
+
+  local function environment(process_spec)
+    if process_spec.env_mode == 'replace' then
+      local ok, errno = spec.clear_environment()
+      if not ok then return nil, errno end
+    end
+    for _, name in ipairs(process_spec.unset_env or {}) do
+      local ok, errno = spec.unset_environment(tostring(name))
+      if not ok then return nil, errno end
+    end
+    for name, value in pairs(process_spec.env or {}) do
+      local ok, errno = spec.set_environment(tostring(name), tostring(value))
+      if not ok then return nil, errno end
+    end
+    return true
+  end
+
+  local function close_inherited(process_spec, error_write)
+    local keep, ordered = { [error_write] = true }, { error_write }
+    for _, value in ipairs(process_spec.pass_fds or {}) do
+      local fd = tonumber(value)
+      if not fd or fd < 0 or fd ~= math.floor(fd) then return nil, spec.invalid_argument end
+      if fd >= 3 and not keep[fd] then keep[fd], ordered[#ordered + 1] = true, fd end
+      if fd >= 3 then
+        local ok, errno = spec.set_cloexec(fd, false)
+        if not ok then return nil, errno end
+      end
+    end
+    if process_spec.close_fds == false then return true end
+    table.sort(ordered)
+    local maximum = tonumber(spec.open_max()) or 1024
+    local function close_interval(first, last)
+      if first > last then return true end
+      if spec.close_range and spec.close_range(first, last) then return true end
+      for fd = first, last do if not keep[fd] then close(fd) end end
+      return true
+    end
+    local first = 3
+    for i = 1, #ordered do
+      local fd = ordered[i]
+      if fd >= first then close_interval(first, fd - 1); first = fd + 1 end
+    end
+    return close_interval(first, maximum - 1)
   end
 
   local function write_all(value, bytes)
@@ -181,31 +224,31 @@ function Direct.new(spec)
           child_fail(error_write, 'group', errno)
         end
       end
-      local env_ok, env_errno = spec.environment(process_spec)
+      local env_ok, env_errno = environment(process_spec)
       if not env_ok then
         child_fail(error_write, 'environment', env_errno)
       end
       local stdio_ok, stdio_errno = IO.install_child(stdio, {
-        targets = spec.stdio.targets,
-        stdout = spec.stdio.stdout,
-        same = spec.stdio.same,
+        targets = { stdin = 0, stdout = 1, stderr = 2 },
+        stdout = 1,
+        same = function(a, b) return a == b end,
         duplicate = function(source, target)
-          local ok, errno = spec.stdio.duplicate(source, target)
+          local ok, errno = spec.duplicate(source, target)
           return ok, nil, errno
         end,
         open_null = function(which)
-          local value, errno = spec.stdio.open_null(which)
+          local value, errno = spec.open_null(which)
           return value, nil, errno
         end,
         keep = function(value)
-          return spec.stdio.keep(value, error_write)
+          return value == 0 or value == 1 or value == 2 or value == error_write
         end,
         close = close,
       })
       if not stdio_ok then
         child_fail(error_write, 'stdio', stdio_errno)
       end
-      local close_ok, close_errno = spec.close_inherited(process_spec, error_write)
+      local close_ok, close_errno = close_inherited(process_spec, error_write)
       if not close_ok then
         child_fail(error_write, 'close_fds', close_errno)
       end

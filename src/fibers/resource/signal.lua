@@ -34,14 +34,8 @@ end
 
 function Signal.new()
   local signal = Facility.identity(setmetatable({}, Signal), Kind)
-  signal._location = Facility.location(signal, {
-    algebra = 'machine',
-    domain = 'external',
-    value = { ready = false },
-    clone_value = clone,
-  })
-  External.attach(signal, signal._location, deliver, clear)
-  signal._wait_op = Facility.op(StateMachine._compile(signal._location, signal, Wait, { wake = wake }))
+  External._machine(signal, { ready = false }, clone, deliver, clear)
+  signal._wait_op = External._op(signal, Wait, wake)
   return signal
 end
 

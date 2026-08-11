@@ -12,7 +12,7 @@ local FlowErrors = require('fibers.resource.flow.errors')
 local Cell = require('fibers.resource.cell')
 local Counter = require('fibers.resource.counter')
 local Transfer = require('fibers.io.internal.flow_transfer')
-local ByteProtocol = require('fibers.internal.byte_protocol')
+local BytePlane = require('fibers.file.internal.byte_plane')
 local IO = require('fibers.io.facility')
 local Mailbox = require('fibers.mailbox')
 local Protected = require('fibers.protected')
@@ -99,9 +99,9 @@ local Job = {}
 Job.__index = Job
 local next_file, next_command, next_job, next_temp = 0, 0, 0, 0
 
-local DEFAULT_CHUNK = 16 * 1024
+local DEFAULT_CHUNK = BytePlane.DEFAULT_CHUNK
 local DEFAULT_READ_CAPACITY = 64 * 1024
-local DEFAULT_MAX = 16 * 1024 * 1024
+local DEFAULT_MAX = BytePlane.DEFAULT_MAX
 local FILE_MODES = {
   r = true, rb = true, w = true, wb = true, a = true, ab = true,
   ['r+'] = true, ['r+b'] = true, ['rb+'] = true,
@@ -130,25 +130,7 @@ local function mode_capabilities(mode)
     first == 'w' or first == 'a' or mode:find('+', 1, true) ~= nil
 end
 
-local function validate_read_limits(opts, level)
-  local max = opts and opts.max or DEFAULT_MAX
-  local chunk = opts and opts.chunk_size or DEFAULT_CHUNK
-  level = (level or 1) + 1
-  if type(max) ~= 'number' or max < 0 or max ~= math.floor(max) then
-    error('file read max must be a non-negative integer', level)
-  end
-  if type(chunk) ~= 'number' or chunk < 1 or chunk ~= math.floor(chunk) then
-    error('file read chunk_size must be a positive integer', level)
-  end
-  return max, chunk
-end
-
-local function validate_count(count, label, level)
-  if type(count) ~= 'number' or count < 0 or count ~= math.floor(count) then
-    error(label .. ' expects a non-negative integer', level or 3)
-  end
-  return count
-end
+local validate_read_limits = BytePlane.validate_read_limits
 
 local function validate_capacity(value, default, label)
   if value == nil then return default end
@@ -202,286 +184,30 @@ local function publish(rt, completion, ok, ...)
   return IO.masked_perform(rt, completion:publish_failure_op((...)))
 end
 
-local function file_closed_error(file, action, reason)
-  return IOError.closed('file', action, { path = file._path, reason = reason })
-end
-
-local function require_direction(file, side, action)
-  if side == 'read' and not file._read_flow then
-    return nil, IOError.invalid_argument('file', action, { path = file._path, message = 'file is not readable' })
-  end
-  if side == 'write' and not file._write_flow then
-    return nil, IOError.invalid_argument('file', action, { path = file._path, message = 'file is not writable' })
-  end
-  return true
-end
-
-local function normalise_flow_error(file, action, err)
-  if err == nil then return nil end
-  if IOError.is(err) then return err end
-  if err == FlowErrors.CLOSED or err == FlowErrors.BROKEN_PIPE or err == FlowErrors.RETIRED or err == FlowErrors.EOF then
-    return file_closed_error(file, action, err)
-  end
-  if err == FlowErrors.CAPACITY then
-    return IOError.invalid_argument('file', action, { path = file._path, message = 'operation exceeds configured buffer capacity' })
-  end
-  if err == FlowErrors.LINE_TOO_LONG or err == FlowErrors.TOO_LARGE then
-    return IOError.system('file', action, 'buffered read exceeds configured limit', 'EFBIG', nil, { path = file._path })
-  end
-  return IOError.normalise(err, { domain = 'file', action = action, path = file._path })
-end
-
-local function file_closure(file)
-  return Closure.request_then_wait(function(_ctx, _record, reason)
-    return file:close_op(reason or 'file scope closure')
-  end, function()
-    return file:closed_op()
-  end, {
-    name = 'regular_file',
-    finish_result = function(ok, err)
-      if not ok and file._backend ~= nil then error(err or 'file closure failed', 0) end
-      return true
-    end,
-  })
-end
+local file_closed_error = BytePlane.closed_error
+local normalise_flow_error = BytePlane.normalise_error
+local invalidate_read_op = BytePlane.invalidate_read_op
 
 function RegularFile:ready_op()
-  return self._ready_completion:result_op()
+    return self._ready_completion:result_op()
 end
-function RegularFile:is_file() return true end
-function RegularFile:filename() return self._path end
+
+function RegularFile:is_file()
+    return true
+end
+
+function RegularFile:filename()
+    return self._path
+end
+
 function RegularFile:closed_op()
-  return IO.closed_after_driver_op(self._driver, self._closed_completion:result_op(), { require_returned = true })
+  return IO.closed_after_driver_op(self._driver)
 end
 
-local function eof_fallback(file, op)
-  return op:or_else(file._eof:expect_op(true):map(function() return nil, FlowErrors.EOF end))
-end
-
-function RegularFile:read_op(count)
-  count = validate_count(count, 'File:read_op', 2)
-  if count == 0 then return Op.always('') end
-  local ok, err = require_direction(self, 'read', 'read')
-  if not ok then return Op.always(nil, err) end
-  if not self._closed_completion:_is_pending() then return Op.always(nil, file_closed_error(self, 'read')) end
-  return eof_fallback(self, self._read_flow:outlet():read_some_op(count)):map(function(bytes, read_err)
-    if bytes ~= nil then return bytes end
-    if read_err == FlowErrors.EOF then return '' end
-    return nil, normalise_flow_error(self, 'read', read_err)
-  end)
-end
-
-function RegularFile:read_some_op(count)
-  return self:read_op(count)
-end
-
-local function read_some_protocol(file, count)
-  local value, err = perform(file:read_op(count))
-  if value == '' then return nil, FlowErrors.EOF end
-  return value, err
-end
-
-function RegularFile:read_exactly_op(count)
-  count = validate_count(count, 'File:read_exactly_op', 2)
-  if count == 0 then return Op.always('') end
-  local ok, err = require_direction(self, 'read', 'read_exactly')
-  if not ok then return Op.always(nil, err) end
-  if not self._closed_completion:_is_pending() then
-    return Op.always(nil, file_closed_error(self, 'read_exactly'))
-  end
-  local capacity = self._read_flow._capacity
-  if capacity ~= math.huge and count > capacity then
-    return Op.always(nil, normalise_flow_error(self, 'read_exactly', FlowErrors.CAPACITY))
-  end
-
-  return self._eof:read_op():and_then(Op.guard(function(at_eof)
-    local read = at_eof and self._read_flow:outlet():_take_available_op(count)
-      or self._read_flow:outlet():read_exactly_op(count)
-    return read:map(function(value, read_err)
-      if value ~= nil and #value == count then return value end
-      if read_err ~= nil then
-        return nil, normalise_flow_error(self, 'read_exactly', read_err)
-      end
-      local partial = value or ''
-      return nil, IOError.eof('file', 'read_exactly', {
-        path = self._path,
-        expected = count,
-        received = #partial,
-      })
-    end)
-  end))
-end
-
-function RegularFile:read_exactly(count)
-  count = validate_count(count, 'File:read_exactly', 2)
-  if count == 0 then return '' end
-  local value, err, partial = ByteProtocol.read_exactly(
-    function(want) return read_some_protocol(self, want) end,
-    count,
-    FlowErrors.EOF
-  )
-  if value ~= nil then return value end
-  if err ~= FlowErrors.EOF then return nil, err end
-  return nil, IOError.eof('file', 'read_exactly', {
-    path = self._path,
-    expected = count,
-    received = #(partial or ''),
-  })
-end
-
-function RegularFile:read_line_op(keep)
-  local ok, err = require_direction(self, 'read', 'read_line')
-  if not ok then return Op.always(nil, err) end
-  if not self._closed_completion:_is_pending() then return Op.always(nil, file_closed_error(self, 'read_line')) end
-  local capacity = self._read_flow._capacity
-  local line = self._read_flow:outlet():read_line_op({
-    keep_terminator = keep == true,
-    max = capacity == math.huge and DEFAULT_MAX or math.max(0, capacity - 1),
-  })
-  local preferred = line:map(function(value, read_err) return 'line', value, read_err end)
-  local at_eof = self._eof:expect_op(true)
-    :and_then(self._read_flow:outlet():read_some_op(capacity):or_else(Op.always('')))
-    :map(function(value, read_err) return 'eof', value, read_err end)
-  return preferred:or_else(at_eof):map(function(source, value, read_err)
-    if source == 'eof' then return value ~= '' and value or nil end
-    if value ~= nil then return value end
-    if read_err == nil or read_err == FlowErrors.EOF then return nil end
-    return nil, normalise_flow_error(self, 'read_line', read_err)
-  end)
-end
-
-local function peek_more_or_eof_op(file)
-  local buffered = file._read_flow:outlet():peek_exactly_op(1):map(function(byte, err)
-    return 'buffered', byte, err
-  end)
-  local at_eof = file._eof:expect_op(true):map(function() return 'eof' end)
-  return buffered:or_else(at_eof)
-end
-
-function RegularFile:read_all_op(opts)
-  local max = validate_read_limits(opts, 2)
-  local ok, err = require_direction(self, 'read', 'read_all')
-  if not ok then return Op.always(nil, err) end
-  if not self._closed_completion:_is_pending() then
-    return Op.always(nil, file_closed_error(self, 'read_all'))
-  end
-
-  return self._eof:read_op():and_then(Op.guard(function(at_eof)
-    local read = at_eof and self._read_flow:outlet():_take_all_available_op(max)
-      or self._read_flow:outlet():read_all_op({ max = max })
-    return read:map(function(value, read_err)
-      if value ~= nil then return value end
-      return nil, normalise_flow_error(self, 'read_all', read_err)
-    end)
-  end))
-end
-
-function RegularFile:read_all(opts)
-  local max, chunk = validate_read_limits(opts, 2)
-  local value, err = ByteProtocol.read_all(
-    function(want) return read_some_protocol(self, want) end,
-    function()
-      local source, byte, read_err = perform(peek_more_or_eof_op(self))
-      if source == 'eof' then return nil, FlowErrors.EOF end
-      return byte, read_err
-    end,
-    max,
-    chunk,
-    FlowErrors.EOF,
-    FlowErrors.TOO_LARGE
-  )
-  if value ~= nil then return value end
-  if err == FlowErrors.TOO_LARGE then
-    return nil, IOError.system('file', 'read_all', 'file exceeds configured maximum', 'EFBIG', nil, {
-      path = self._path,
-      max = max,
-    })
-  end
-  return nil, normalise_flow_error(self, 'read_all', err)
-end
-
-local function invalidate_read_op(file)
-  if not file._read_flow then return Op.always(0) end
-  return file._read_flow:outlet():_discard_available_op():and_then(Op.guard(function(discarded)
-    return file._read_generation:bump_op()
-      :and_then(file._rewind:add_op(discarded))
-      :and_then(file._eof:write_op(false))
-      :map(function() return discarded end)
-  end))
-end
-
-function RegularFile:write_op(bytes)
-  if type(bytes) ~= 'string' then error('File:write_op expects a string', 2) end
-  if bytes == '' then return Op.always(0) end
-  local ok, err = require_direction(self, 'write', 'write')
-  if not ok then return Op.always(nil, err) end
-  if not self._closed_completion:_is_pending() then return Op.always(nil, file_closed_error(self, 'write')) end
-  local capacity = self._write_flow._capacity
-  if capacity ~= math.huge and #bytes > capacity then
-    return Op.always(nil, normalise_flow_error(self, 'write', FlowErrors.CAPACITY))
-  end
-  return self._write_flow:inlet():write_op(bytes):and_then(Op.guard(function(n, write_err)
-    if n == nil then return Op.always(nil, normalise_flow_error(self, 'write', write_err)) end
-    return invalidate_read_op(self)
-      :and_then(self._accepted:add_op(n))
-      :map(function() return n end)
-  end))
-end
-
-function RegularFile:write_some_op(bytes)
-  if type(bytes) ~= 'string' then error('File:write_some_op expects a string', 2) end
-  if bytes == '' then return Op.always(0, '') end
-  local ok, err = require_direction(self, 'write', 'write_some')
-  if not ok then return Op.always(nil, bytes, err) end
-  if not self._closed_completion:_is_pending() then
-    return Op.always(nil, bytes, file_closed_error(self, 'write_some'))
-  end
-  return self._write_flow:inlet():write_some_op(bytes):and_then(Op.guard(function(n, rest, write_err)
-    if n == nil then
-      return Op.always(nil, rest, normalise_flow_error(self, 'write_some', write_err))
-    end
-    if n == 0 then return Op.always(0, rest) end
-    return invalidate_read_op(self)
-      :and_then(self._accepted:add_op(n))
-      :map(function() return n, rest end)
-  end))
-end
-
-function RegularFile:write_all_op(bytes)
-  return self:write_op(bytes)
-end
-
-function RegularFile:write_all(bytes)
-  if type(bytes) ~= 'string' then error('File:write_all expects a string', 2) end
-  if bytes == '' then return 0 end
-  local capacity = self._write_flow and self._write_flow._capacity or 0
-  if capacity == 0 then
-    local ok, err = require_direction(self, 'write', 'write_all')
-    if not ok then return nil, err end
-    return nil, normalise_flow_error(self, 'write_all', FlowErrors.CAPACITY)
-  end
-  local chunk = capacity == math.huge and #bytes or capacity
-  return ByteProtocol.write_all(function(part) return perform(self:write_op(part)) end, bytes, chunk)
-end
-
-local function write_parts(...)
-  local parts = {}
-  for i = 1, select('#', ...) do
-    local value = select(i, ...)
-    if type(value) ~= 'string' and type(value) ~= 'number' then
-      error('File:write expects strings or numbers', 3)
-    end
-    parts[i] = tostring(value)
-  end
-  return table.concat(parts)
-end
-
-function RegularFile:write(...)
-  return perform(self:write_op(write_parts(...)))
-end
+BytePlane.install(RegularFile)
 
 local function control_submission(file, kind, args, invalidate)
-  if not file._closed_completion:_is_pending() then
+  if file._lifetime:_close_requested() then
     return Op.always(nil, file_closed_error(file, kind))
   end
   local command = new_command(kind, args)
@@ -539,7 +265,7 @@ function RegularFile:rename_op(path)
 end
 
 function RegularFile:close_op(reason)
-  if not self._closed_completion:_is_pending() then return self:closed_op() end
+  if self._lifetime:_close_requested() then return self:closed_op() end
   local command = new_command('close', { reason = reason })
   local close_ops = { invalidate = invalidate_read_op(self) }
   if self._read_flow then
@@ -719,8 +445,7 @@ local function drive_file(file, opts)
   local provider, provider_err = Provider.for_runtime(rt, opts)
   if not provider then
     publish(rt, file._ready_completion, false, provider_err)
-    publish(rt, file._closed_completion, false, provider_err)
-    return
+    return nil, provider_err
   end
 
   local backend, open_err
@@ -746,8 +471,7 @@ local function drive_file(file, opts)
     publish(rt, file._ready_completion, false, failure)
     if file._read_flow then IO.masked_perform(rt, file._read_flow:inlet():fail_op(failure)) end
     if file._write_flow then IO.masked_perform(rt, file._write_flow:outlet():fail_op(failure)) end
-    publish(rt, file._closed_completion, false, failure)
-    return
+    return nil, failure
   end
 
   file._backend = backend
@@ -768,9 +492,8 @@ local function drive_file(file, opts)
         publish(rt, command.completion, false, failure)
       end
       if stop then
-        publish(rt, file._closed_completion, failure == nil, failure == nil and true or failure)
         if not called then error(failure, 0) end
-        return
+        return failure == nil and true or nil, failure
       end
     elseif action == 'write' then
       service_write(file, backend, item)
@@ -780,8 +503,7 @@ local function drive_file(file, opts)
       local target = IO.masked_perform(rt, file._accepted:read_op())
       drain_writes_to(file, backend, target)
       local ok, err = backend:close('file control queue closed')
-      publish(rt, file._closed_completion, ok ~= nil and ok ~= false, ok ~= nil and ok ~= false and true or err)
-      return
+      return ok ~= nil and ok ~= false and true or nil, err
     end
   end
 end
@@ -813,7 +535,6 @@ local function new_file_op(path, mode, opts, operation, temporary)
     _accepted = Counter.new(0),
     _eof = Cell.new(false),
     _ready_completion = Completion.new(),
-    _closed_completion = Completion.new(),
     _provider_opts = opts,
     _temporary = temporary == true,
     _written = 0,
@@ -827,7 +548,6 @@ local function new_file_op(path, mode, opts, operation, temporary)
   Label.child(file._accepted, file, 'accepted')
   Label.child(file._eof, file, 'eof')
   Label.child(file._ready_completion, file, 'ready')
-  Label.child(file._closed_completion, file, 'closed')
 
   local children = {}
   if read_flow then
@@ -841,15 +561,21 @@ local function new_file_op(path, mode, opts, operation, temporary)
     children[#children + 1] = write_flow:outlet()
   end
 
-  return IO.admit_driven_lifetime_op(scope, file, {
-    operation = operation,
+  return scope:_drive_op( file, {
     label = Label.get(file),
     role = 'regular_file',
-    closure = file_closure(file),
+    closure = IO._closeable_closure(file, {
+      name = 'regular_file',
+      reason = 'file scope closure',
+      finish_result = function(ok, err)
+        if not ok and file._backend ~= nil then error(err or 'file closure failed', 0) end
+        return true
+      end,
+    }),
     children = children,
     run = function()
-      local ok, err = Protected.pcall(drive_file, file, opts)
-      if ok then return end
+      local ok, value, err = Protected.pcall(drive_file, file, opts)
+      if ok then return value, err end
       local rt = Runtime.current()
       local failure = Runtime.is_cancelled(err)
           and file_closed_error(file, 'driver', err.reason or 'file driver cancelled')
@@ -874,8 +600,8 @@ local function new_file_op(path, mode, opts, operation, temporary)
       if file._read_flow then IO.masked_perform(rt, file._read_flow:inlet():fail_op(failure)) end
       if file._write_flow then IO.masked_perform(rt, file._write_flow:outlet():fail_op(failure)) end
       if file._ready_completion:_is_pending() then publish(rt, file._ready_completion, false, failure) end
-      if file._closed_completion:_is_pending() then publish(rt, file._closed_completion, false, failure) end
       if not Runtime.is_cancelled(err) then error(failure, 0) end
+      return nil, failure
     end,
   })
 end
@@ -919,8 +645,7 @@ local function path_job_op(action, fn, opts)
   local job = Label.attach(setmetatable({
     _fibers_id = 'file-' .. action .. '-' .. tostring(next_job),
   }, Job), opts.label)
-  local submission = IO.admit_driven_lifetime_op(scope, job, {
-    operation = operation,
+  local submission = scope:_drive_op( job, {
     label = Label.get(job),
     role = 'file_job',
     closure = Closure.none(),

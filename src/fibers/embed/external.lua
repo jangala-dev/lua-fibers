@@ -23,6 +23,20 @@ function External.attach(resource, location, deliver, clear)
   return resource
 end
 
+function External._machine(resource, value, clone, deliver, clear)
+  local Facility = require('fibers.resource.authoring')
+  resource._location = Facility.location(resource, {
+    algebra = 'machine', domain = 'external', value = value, clone_value = clone,
+  })
+  return External.attach(resource, resource._location, deliver, clear)
+end
+
+function External._op(resource, transition, wake)
+  local Facility = require('fibers.resource.authoring')
+  local Machine = require('fibers.resource.machine')
+  return Facility.op(Machine._compile(resource._location, resource, transition, { wake = wake }))
+end
+
 local function publish(spec, resource, fn, ...)
   if type(fn) ~= 'function' then error('resource does not support this external mutation', 3) end
   local value = fn(spec.location.value, resource, ...)

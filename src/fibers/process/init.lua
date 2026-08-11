@@ -10,19 +10,15 @@
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Cell = require('fibers.resource.cell')
-local StateMachine = require('fibers.resource.machine')
 local CommandModule = require('fibers.process.command')
 local IOError = require('fibers.io.error')
 local FlowErrors = require('fibers.resource.flow.errors')
-local HostHold = require('fibers.io.internal.host_hold')
+local Acquired = require('fibers.io.internal.acquired')
 local Completion = require('fibers.resource.completion')
 local IO = require('fibers.io.facility')
 local HostProcess = require('fibers.io.process')
 local IOAudit = require('fibers.internal.io_audit')
-local Lifetime = require('fibers.lifetime')
 local Task = require('fibers.task')
-local Scope = require('fibers.scope')
-local Closure = require('fibers.closure')
 local Protected = require('fibers.protected')
 local Sleep = require('fibers.sleep')
 local Exit = Task.Exit
@@ -35,53 +31,6 @@ local next_process = 0
 
 local function process_label(proc)
   return Label.describe(proc, proc._fibers_id or 'process')
-end
-
-local Lifecycle = {}
-Lifecycle.__index = Lifecycle
-
-local Ready = StateMachine.Ready
-
-local request_close = StateMachine.isolated_update('process.request_close', function(current, reason)
-  if current.requested then
-    return Ready.same(true, current.reason)
-  end
-  return Ready.write({ requested = true, reason = reason or 'process closed' }, true, reason)
-end)
-
-local function wait_for(cell, predicate)
-  return Cell.match_op(cell, predicate)
-end
-
-function Lifecycle.new()
-  local value = Label.attach(setmetatable({
-    state = TrustedState.cell({ kind = 'created' }),
-    close_request = TrustedState.machine({ requested = false, reason = nil }),
-  }, Lifecycle))
-  Label.child(value.state, value, 'state')
-  Label.child(value.close_request, value, 'close-request')
-  return value
-end
-
-function Lifecycle:state_op()
-  return self.state:read_op()
-end
-
-function Lifecycle:set_state_op(value)
-  return self.state:write_op(value)
-end
-
-function Lifecycle:request_close_op(reason)
-  return self.close_request:transition_op(request_close, reason)
-end
-
-function Lifecycle:close_requested_op()
-  return wait_for(self.close_request, function(value)
-    if value.requested then
-      return true, value.reason
-    end
-    return false
-  end)
 end
 
 local Module = {}
@@ -103,17 +52,6 @@ end
 
 local function close_process_endpoint(value, reason)
   return IO.close_value('process_pipe', value, reason)
-end
-
-local function process_closure(proc)
-  return Closure.request_then_wait(function(_ctx, _record, reason)
-    return proc:request_close_op(reason or 'scope closure')
-  end, function()
-    return proc:closed_op()
-  end, {
-    name = 'process',
-    finish_result = Closure.require_ok('process closure failed'),
-  })
 end
 
 function Process:lifetime()
@@ -162,13 +100,13 @@ function Process:result_op()
 end
 
 function Process:request_close_op(reason)
-  return self._lifecycle:request_close_op(reason)
+  return self._lifetime:request_close_op(reason or 'process closed'):map(function(_, recorded)
+    return true, recorded
+  end)
 end
 
 function Process:closed_op()
-  return IO.closed_after_driver_op(self._task, self._closed_completion:result_op(), {
-    require_returned = true,
-  })
+  return IO.closed_after_driver_op(self._driver)
 end
 
 local function process_not_running(proc, action, state)
@@ -180,7 +118,7 @@ end
 
 function Process:signal_op(signal, target)
   target = target or self._command._spec.shutdown.target or 'process'
-  return self._lifecycle:state_op():and_then(Op.guard(function(state)
+  return self._state:read_op():and_then(Op.guard(function(state)
     if state.kind ~= 'running' and state.kind ~= 'closing' then
       return Op.always(nil, process_not_running(self, 'signal', state))
     end
@@ -385,23 +323,15 @@ local function endpoint_opts(spec, which)
   return configured, nil, nil
 end
 
-local function open_parent_stream(rt, scope, handle, which, opts)
+local function open_parent_stream(rt, scope, handle, which, opts, label)
   local read = which == 'stdout' or which == 'stderr'
   return IO.open_handle_stream(rt, scope, handle, {
-    label = opts.label .. ':' .. which,
-    read = read,
-    write = not read,
-    capacity = opts.capacity,
-    read_capacity = opts.read_capacity,
-    write_capacity = opts.write_capacity,
-    chunk_size = opts.chunk_size,
-    read_chunk_size = opts.read_chunk_size,
-    write_chunk_size = opts.write_chunk_size,
-  })
+    label = label .. ':' .. which, read = read, write = not read,
+  }, opts)
 end
 
 local function publish_state(rt, proc, state)
-  return IO.masked_perform(rt, proc._lifecycle:set_state_op(state))
+  return IO.masked_perform(rt, proc._state:write_op(state))
 end
 
 local function publish_launch_failure(rt, proc, err)
@@ -415,9 +345,6 @@ local function publish_launch_failure(rt, proc, err)
     if proc._stderr_pipe_stream and proc._stderr_pipe_stream ~= proc._stdout_pipe_stream then
       proc._stderr_pipe_stream:abort(err)
     end
-    if proc._host_hold then
-      proc._host_hold:close(err)
-    end
     if proc._host_process then
       proc._host_process:close(err)
     end
@@ -425,7 +352,6 @@ local function publish_launch_failure(rt, proc, err)
   publish_state(rt, proc, { kind = 'failed', error = err })
   IO.masked_perform(rt, proc._launch_completion:publish_failure_op(err))
   IO.masked_perform(rt, proc._exit_completion:publish_failure_op(err))
-  IO.masked_perform(rt, proc._closed_completion:publish_success_op(true))
 end
 
 local function publish_exit(rt, proc, status)
@@ -484,9 +410,8 @@ local function finish_close(proc, reason)
   return true
 end
 
-local function supervise(proc, driver_scope, opts)
+local function supervise(proc, driver_scope, opts, acquired)
   local rt = Runtime.current()
-  local host_hold = proc._host_hold
   local spec = copy_spec(proc._command._spec)
   local stdin_mode, stdin_source, stdin_redirect = endpoint_opts(spec, 'stdin')
   local stdout_mode, stdout_destination, stdout_redirect = endpoint_opts(spec, 'stdout')
@@ -512,18 +437,9 @@ local function supervise(proc, driver_scope, opts)
   end
   endpoints = endpoints or {}
 
-  local entries = {
-    { key = 'process', value = host_process, close = close_host_process },
-  }
+  acquired:hold('process', host_process, close_host_process)
   for _, which in ipairs({ 'stdin', 'stdout', 'stderr' }) do
-    if endpoints[which] then
-      entries[#entries + 1] = { key = which, value = endpoints[which], close = close_process_endpoint }
-    end
-  end
-  local held, hold_err = host_hold:hold_many(entries)
-  if not held then
-    publish_launch_failure(rt, proc, hold_err)
-    return
+    if endpoints[which] then acquired:hold(which, endpoints[which], close_process_endpoint) end
   end
 
   if type(host_process.bind_runtime) == 'function' then
@@ -534,7 +450,7 @@ local function supervise(proc, driver_scope, opts)
   proc._host_process = host_process
   proc._pid = type(host_process.pid) == 'function' and host_process:pid() or host_process.pid
   IOAudit.transfer(host_process, proc, { kind = 'process_handle', role = 'process' })
-  host_hold:release('process', host_process)
+  acquired:release('process', host_process)
 
   local exit_opened, exit_open_err = perform(host_process:open_exit_op(driver_scope))
   if not exit_opened then
@@ -556,15 +472,9 @@ local function supervise(proc, driver_scope, opts)
       if type(handle.bind_runtime) == 'function' then
         handle:bind_runtime(rt)
       end
-      local ok, stream_or_err = Protected.pcall(open_parent_stream, rt, driver_scope, handle, which, {
-        label = process_label(proc),
-        capacity = opts.capacity,
-        read_capacity = opts.read_capacity,
-        write_capacity = opts.write_capacity,
-        chunk_size = opts.chunk_size,
-        read_chunk_size = opts.read_chunk_size,
-        write_chunk_size = opts.write_chunk_size,
-      })
+      local ok, stream_or_err = Protected.pcall(
+        open_parent_stream, rt, driver_scope, handle, which, opts, process_label(proc)
+      )
       if not ok then
         publish_launch_failure(
           rt,
@@ -578,7 +488,7 @@ local function supervise(proc, driver_scope, opts)
         return
       end
       proc['_' .. which .. '_pipe_stream'] = stream_or_err
-      host_hold:release(which, handle)
+      acquired:release(which, handle)
     end
   end
 
@@ -638,10 +548,11 @@ local function supervise(proc, driver_scope, opts)
   IO.masked_perform(rt, proc._launch_completion:publish_success_op(proc))
 
   local status
-  if not proc._lifecycle.close_request._location.value.requested == true then
+  local close_requested = proc._lifetime:_close_requested()
+  if not close_requested then
     local event, value, err = perform(Op.named_choice({
       exit = proc._host_process:exit_op(),
-      close = proc._lifecycle:close_requested_op(),
+      close = proc._lifetime:close_requested_op(),
     }))
     if event == 'exit' then
       status = value
@@ -651,8 +562,10 @@ local function supervise(proc, driver_scope, opts)
     end
   end
 
-  if not status and proc._lifecycle.close_request._location.value.requested == true then
-    local reason = proc._lifecycle.close_request._location.value.reason or 'process closed'
+  close_requested = proc._lifetime:_close_requested()
+  if not status and close_requested then
+    local _, reason = proc._lifetime:_close_requested()
+    reason = reason or 'process closed'
     publish_state(rt, proc, { kind = 'closing', pid = proc._pid, reason = reason })
     if proc._stdin_pipe_stream then
       Protected.pcall(function()
@@ -684,26 +597,30 @@ local function supervise(proc, driver_scope, opts)
     publish_exit(rt, proc, status)
   end
 
-  if not proc._lifecycle.close_request._location.value.requested == true then
-    perform(proc._lifecycle:close_requested_op())
-  end
-  local reason = proc._lifecycle.close_request._location.value.reason or 'process closed'
+  close_requested = proc._lifetime:_close_requested()
+  if not close_requested then perform(proc._lifetime:close_requested_op()) end
+  local _, reason = proc._lifetime:_close_requested()
+  reason = reason or 'process closed'
   publish_state(rt, proc, { kind = 'closing', pid = proc._pid, reason = reason, status = status })
   local closed, close_err = finish_close(proc, reason)
   proc._close_error = proc._close_error or close_err
   if closed and not proc._close_error then
     publish_state(rt, proc, { kind = 'closed', pid = proc._pid, status = status })
-    IO.masked_perform(rt, proc._closed_completion:publish_success_op(true))
-  else
+    else
     publish_state(rt, proc, { kind = 'closed', pid = proc._pid, status = status, error = proc._close_error })
-    IO.masked_perform(rt, proc._closed_completion:publish_failure_op(proc._close_error))
   end
 end
 
 local function driver_body(proc, driver_scope, opts)
-  local ok, err = Protected.pcall(supervise, proc, driver_scope, opts)
+  local acquired = Acquired.new()
+  local ok, err = Protected.pcall(supervise, proc, driver_scope, opts, acquired)
+  local cleanup_ok, cleanup_err = acquired:close(ok and 'process setup completed' or err)
+  if ok and not cleanup_ok then
+    ok, err = false, cleanup_err
+  end
   if ok then
-    return
+    if proc._close_error then return nil, proc._close_error end
+    return true
   end
   local rt = Runtime.current()
   local failure = IOError.is(err) and err
@@ -717,9 +634,11 @@ local function driver_body(proc, driver_scope, opts)
     IO.masked_perform(rt, proc._exit_completion:publish_failure_op(failure))
   end
   proc._close_error = failure
-  if proc._closed_completion:_is_pending() then
-    IO.masked_perform(rt, proc._closed_completion:publish_failure_op(failure))
+  local state = proc._state._location.value
+  if state.kind ~= 'failed' then
+    publish_state(rt, proc, { kind = 'closed', pid = proc._pid, status = proc._status, error = failure })
   end
+  return nil, failure
 end
 
 function Command:launch_op(opts)
@@ -749,12 +668,10 @@ function Command:launch_op(opts)
       kind = 'process',
       _fibers_id = id,
       _command = command,
-      _lifecycle = Lifecycle.new(),
+      _state = TrustedState.cell({ kind = 'created' }),
       _launch_completion = Completion.new(),
       _exit_completion = Completion.new(),
-      _closed_completion = Completion.new(),
       _communicating = false,
-      _host_hold = HostHold.new(),
       _host_process = nil,
       _stdin_stream = nil,
       _stdout_stream = nil,
@@ -763,31 +680,19 @@ function Command:launch_op(opts)
       _status = nil,
       _close_error = nil,
     }, Process), opts.label)
-    Label.child(proc._lifecycle, proc, 'lifecycle')
+    Label.child(proc._state, proc, 'state')
     Label.child(proc._launch_completion, proc, 'launch')
     Label.child(proc._exit_completion, proc, 'exit')
-    Label.child(proc._closed_completion, proc, 'closed')
-    Label.child(proc._host_hold, proc, 'host-hold')
-    Lifetime.define(proc, {
+    local admitted = parent_scope:_drive_op(proc, {
       label = opts.label,
       role = 'process',
-      closure = process_closure(proc),
-      children = { proc._host_hold },
+      closure = IO._closeable_closure(proc, {
+        name = 'process', reason = 'scope closure', request = 'request_close_op',
+        finish_result = 'process closure failed',
+      }),
+      run = function(driver_scope) return driver_body(proc, driver_scope, opts) end,
     })
-    local private_scope = Scope.for_lifetime(proc._lifetime)
-    proc._task = Task._new(function()
-      return private_scope:run(function(driver_scope)
-        return driver_body(proc, driver_scope, opts)
-      end)
-    end, parent_scope, {
-      lifetime = proc._lifetime,
-      closure = parent_scope._lifetime._closure,
-      label = opts.label,
-    })
-
-    return scope:admit_op(proc)
-      :and_then(proc._task:spawn_effect_op())
-      :map(function() return proc end)
+    return admitted
   end)
 end
 

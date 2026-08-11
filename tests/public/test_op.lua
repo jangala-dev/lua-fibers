@@ -65,6 +65,22 @@ local function assert_truthy(value, msg)
   end
 end
 
+local function assert_error_kind(ok, err, kind, msg)
+  if ok then
+    fail((msg or 'expected error') .. ': call succeeded')
+  end
+  if type(err) ~= 'table' or err.kind ~= kind then
+    fail(
+      (msg or 'wrong error kind')
+        .. ': expected '
+        .. tostring(kind)
+        .. ', got '
+        .. tostring(type(err) == 'table' and err.kind or err)
+    )
+  end
+  return err
+end
+
 local function assert_status(status, tag, msg)
   if not status or status.tag ~= tag then
     fail(
@@ -1016,6 +1032,71 @@ local function test_map_and_and_then_reject_options_containing_wraps()
   assert_eq(ok_outer_wrap, true, 'outer wrap remains valid on a product containing lane-local wraps')
 end
 
+local function test_map_rejects_wrap_revealed_dynamically_by_guard()
+  local rt = new_runtime()
+  local wrapped, mapped = 0, 0
+
+  local hidden_wrap = Op.guard(function()
+    return Op.always('x'):wrap(function(v)
+      wrapped = wrapped + 1
+      return v .. ':wrapped'
+    end)
+  end)
+
+  rt:spawn_raw(function()
+    rt:perform(hidden_wrap:map(function(v)
+      mapped = mapped + 1
+      return v .. ':mapped'
+    end))
+  end):label('dynamic-wrap-map-boundary')
+
+  local ok, err = pcall(function()
+    return rt:run()
+  end)
+  err = assert_error_kind(ok, err, 'phase_error', 'map must reject a wrap revealed during search')
+  assert_eq(err.action, 'map', 'dynamic map phase error identifies the transactional consumer')
+  assert_eq(wrapped, 0, 'post-commit wrap does not run when the phase crossing is rejected')
+  assert_eq(mapped, 0, 'transactional map does not run across the post-commit boundary')
+end
+
+local function test_and_then_rejects_wrap_revealed_dynamically_by_guard()
+  local rt = new_runtime()
+  local wrapped, rhs_entered = 0, 0
+
+  local hidden_wrap = Op.guard(function()
+    return Op.always('x'):wrap(function(v)
+      wrapped = wrapped + 1
+      return v
+    end)
+  end)
+
+  rt:spawn_raw(function()
+    rt:perform(hidden_wrap:and_then(Op.guard(function()
+      rhs_entered = rhs_entered + 1
+      return Op.always('next')
+    end)))
+  end):label('dynamic-wrap-and-then-boundary')
+
+  local ok, err = pcall(function()
+    return rt:run()
+  end)
+  err = assert_error_kind(ok, err, 'phase_error', 'and_then must reject a wrap revealed during search')
+  assert_eq(err.action, 'and_then', 'dynamic and_then phase error identifies the transactional consumer')
+  assert_eq(wrapped, 0, 'post-commit wrap does not run when sequencing is rejected')
+  assert_eq(rhs_entered, 0, 'and_then does not enter its transactional RHS across a wrap boundary')
+end
+
+local function test_wrap_revealed_dynamically_by_guard_is_valid_at_terminal_boundary()
+  local status, values = one_perform(Op.always('prefix'):and_then(Op.guard(function()
+    return Op.always('result'):wrap(function(v)
+      return v .. ':wrapped'
+    end)
+  end)))
+
+  assert_status(status, 'found', 'a dynamic wrap is valid when no transactional consumer follows it')
+  assert_eq(values[1], 'result:wrapped')
+end
+
 local function test_choice_normalises_nested_lists_and_choice_nodes()
   local nested =
     Op.choice(Op.never(), { Op.never(), { Op.always('that') } }, Op.choice(Op.never(), Op.always('your')))
@@ -1172,6 +1253,9 @@ local tests = {
   test_product_lane_wraps_apply_inside_out_after_commit,
   test_together_lane_wraps_apply_after_internal_rendezvous,
   test_map_and_and_then_reject_options_containing_wraps,
+  test_map_rejects_wrap_revealed_dynamically_by_guard,
+  test_and_then_rejects_wrap_revealed_dynamically_by_guard,
+  test_wrap_revealed_dynamically_by_guard_is_valid_at_terminal_boundary,
   test_each_and_together_internal_rendezvous_topology,
   test_together_is_parallel_not_sequential_for_cell_views,
   test_choice_backtracks_around_product_conflict,

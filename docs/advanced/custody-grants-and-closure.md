@@ -458,14 +458,13 @@ ontology.
 ## 8. Host acquisition
 
 An irreversible host call may return a handle before the next transactional
-admission can run. Fibers covers that short interval with a private host hold.
-The hold is internal runtime machinery, not a fourth Lifetime law or an
-application-facing facility.
+admission can run. During that setup interval Fibers keeps lexical ownership of
+the raw value. It is not a Lifetime and is never exposed to application code.
 
 The observable law is simply:
 
-> A returned host value is immediately accountable to the current Lifetime and
-> either becomes a normal child Lifetime or closes with that Lifetime.
+> A returned host value is owned continuously: setup either adopts it into the
+> normal Lifetime graph or closes it before the setup extent exits.
 
 ## 9. Core laws
 

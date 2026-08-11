@@ -39,6 +39,15 @@ function Error.is(err, kind)
     and (kind == nil or err.kind == kind)
 end
 
+function Error.copy(err, omit)
+  if not Error.is(err) then return err end
+  local out = {}
+  for key, value in pairs(err) do
+    if key ~= omit then out[key] = value end
+  end
+  return setmetatable(out, ErrorMT)
+end
+
 function Error.unsupported(domain, action, fields)
   return Error.new(
     'unsupported',

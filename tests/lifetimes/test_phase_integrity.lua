@@ -141,21 +141,21 @@ do
 
   runtime:spawn_raw(function()
     local cancel_option = scope:request_cancel_op('lost-cancellation')
-    eq(LifetimeState.closure_state(scope).close_reason, nil,
-      'constructing cancellation must not mutate closure_state')
+    eq((LifetimeState.boundary(scope) or {}).closure_reason, nil,
+      'constructing cancellation must not commit a Lifetime close reason')
     eq(LifetimeState.closure_state(scope).closure, nil,
       'constructing cancellation must not cache Closure state')
     local losing = cancel_option
       :and_then(Op.never())
       :or_else(Op.always('fallback'))
     fallback = runtime:perform(losing)
-    eq(LifetimeState.closure_state(scope).close_reason, nil,
-      'defeated cancellation must not mutate closure_state')
+    eq((LifetimeState.boundary(scope) or {}).closure_reason, nil,
+      'defeated cancellation must not commit a Lifetime close reason')
     eq(LifetimeState.interrupt(scope).raised, false, 'defeated cancellation must not raise the interrupt')
 
     committed = runtime:perform(scope:request_cancel_op('committed-cancellation'))
-    eq(LifetimeState.closure_state(scope).close_reason, 'committed-cancellation',
-      'committed cancellation records its close reason post-commit')
+    eq((LifetimeState.boundary(scope) or {}).closure_reason, 'committed-cancellation',
+      'committed cancellation records the Lifetime close reason post-commit')
   end):label('phase-cancel-driver')
 
   local status = run_to_rest(runtime)

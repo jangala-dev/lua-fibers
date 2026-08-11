@@ -6,7 +6,7 @@ local Counter = require('fibers.resource.counter')
 local Op = require('fibers.op')
 local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
-local TrustedState = require('fibers.internal.trusted_state')
+local Completion = require('fibers.resource.completion')
 
 local Mailbox = {}
 local Tx = {}
@@ -16,7 +16,6 @@ Mailbox.__index = Mailbox
 Tx.__index = Tx
 Rx.__index = Rx
 
-local NO_REASON = {}
 local next_id = 0
 
 local function tx(mailbox, handle)
@@ -24,21 +23,14 @@ local function tx(mailbox, handle)
 end
 
 local function reason_op(mailbox)
-  return mailbox._reason:read_op():map(function(reason)
-    return reason ~= NO_REASON and reason or nil
+  return mailbox._reason:read_op():map(function(state)
+    return state.kind == 'succeeded' and state.values[1] or nil
   end)
 end
 
 local function remember_reason_op(mailbox, reason)
   if reason == nil then return Op.always(true) end
-
-  local remember = mailbox._reason:expect_op(NO_REASON):and_then(mailbox._reason:write_op(reason))
-
-  return remember:or_else(mailbox._reason:wait_until_op(function(value)
-    return value ~= NO_REASON
-  end):map(function()
-    return true
-  end))
+  return mailbox._reason:publish_success_op(reason):map(function() return true end)
 end
 
 local function drop_op(mailbox)
@@ -83,7 +75,7 @@ local function new_mailbox(capacity, accept, full)
     _accept = accept,
     _messages = Channel.new(capacity),
     _senders = refs,
-    _reason = TrustedState.cell(NO_REASON),
+    _reason = Completion.new(),
     _dropped = Counter.new(0),
   }, Mailbox))
   Label.child(mailbox._messages, mailbox, 'messages')

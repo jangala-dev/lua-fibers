@@ -70,7 +70,7 @@ after all of the following have settled:
 - the host handle or external operation has reached its terminal state;
 - the facility's private driver body has returned;
 - the driver's private Scope has retired its children;
-- reactor registrations and host holds have retired;
+- reactor registrations and outstanding host acquisitions have retired;
 - any retained closure failure is represented to the caller.
 
 Built-in facilities use the shared internal `closed_after_driver_op` rule where

@@ -31,9 +31,9 @@ package.path = table.concat({
 }, ';')
 
 local fibers = require('fibers')
-local HostHold = require('fibers.io.internal.host_hold')
+local Acquired = require('fibers.io.internal.acquired')
 local File = require('fibers.file')
-local MemoryFileProvider = require('fibers.file.memory_provider')
+local MemoryFileProvider = require('tests.support.memory_file_provider')
 local SimulatedHost = require('tests.support.simulated_host')
 local Runtime = require('fibers.runtime')
 local Socket = require('fibers.socket')
@@ -66,16 +66,14 @@ local function add(name, units, fn)
   cases[#cases + 1] = { name = name, units = units, fn = fn }
 end
 
-add('host-hold', 'resources', function()
+add('acquired-guard', 'resources', function()
   local count = math.max(1, math.floor(1000 * scale))
   for i = 1, count do
-    local slot = HostHold.new('bench-host-hold-' .. tostring(i))
+    local guard = Acquired.new()
     local value = { id = i }
-    assert(slot:hold('value', value, function()
-      return true
-    end))
-    assert(slot:release('value', value) == value)
-    assert(slot:close('benchmark'))
+    assert(guard:hold('value', value, function() return true end))
+    assert(guard:release('value', value) == value)
+    assert(guard:close('benchmark'))
   end
   return count
 end)

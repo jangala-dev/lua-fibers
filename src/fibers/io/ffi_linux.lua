@@ -739,21 +739,6 @@ function M.new(opts)
 
   binding.process = function(Fd)
     local Direct = require('fibers.io.process_direct')
-    local signals = {
-      hup = 1,
-      int = 2,
-      quit = 3,
-      kill = 9,
-      usr1 = 10,
-      usr2 = 12,
-      pipe = 13,
-      alrm = 14,
-      term = 15,
-      chld = 17,
-      cont = 18,
-      stop = 19,
-    }
-
     local function supported()
       local ok = pcall(function()
         return C.fork, C.execvp, C.dup2, C.waitpid, C.kill, C._exit
@@ -761,80 +746,33 @@ function M.new(opts)
       return ok and binding.fd.supported(), 'required POSIX process functions unavailable'
     end
 
-    local function environment(spec)
-      if spec.env_mode == 'replace' and number(C.clearenv()) ~= 0 then
-        return nil, native.errno()
-      end
-      for _, key in ipairs(spec.unset_env or {}) do
-        if number(C.unsetenv(tostring(key))) ~= 0 then
-          return nil, native.errno()
-        end
-      end
-      for key, value in pairs(spec.env or {}) do
-        if number(C.setenv(tostring(key), tostring(value), 1)) ~= 0 then
-          return nil, native.errno()
-        end
-      end
+    local function clear_environment()
+      if number(C.clearenv()) ~= 0 then return nil, native.errno() end
       return true
     end
-
-    local function close_inherited(spec, error_write)
-      local keep, ordered = { [error_write] = true }, { error_write }
-      for _, value in ipairs(spec.pass_fds or {}) do
-        local fd = tonumber(value)
-        if not fd or fd < 0 or fd ~= math.floor(fd) then
-          return nil, EINVAL
-        end
-        if fd >= 3 and not keep[fd] then
-          keep[fd], ordered[#ordered + 1] = true, fd
-        end
-        if fd >= 3 then
-          local ok, errno = binding.fd.set_cloexec(fd, false)
-          if not ok then
-            return nil, errno
-          end
-        end
-      end
-      if spec.close_fds == false then
-        return true
-      end
-      table.sort(ordered)
-      local maximum = number(C.sysconf(SC_OPEN_MAX))
-      if not maximum or maximum < 4 then
-        maximum = 1024
-      end
-      local function close_interval(first, last)
-        if first > last then
-          return true
-        end
-        local ok, result = pcall(
-          C.syscall,
-          ffi.cast('long', SYS_close_range),
-          ffi.cast('unsigned int', first),
-          ffi.cast('unsigned int', last),
-          ffi.cast('unsigned int', 0)
-        )
-        if ok and number(result) == 0 then
-          return true
-        end
-        for fd = first, last do
-          if not keep[fd] then
-            C.close(fd)
-          end
-        end
-        return true
-      end
-      local first = 3
-      for i = 1, #ordered do
-        local fd = ordered[i]
-        if fd >= first then
-          close_interval(first, fd - 1)
-          first = fd + 1
-        end
-      end
-      return close_interval(first, maximum - 1)
+    local function unset_environment(key)
+      if number(C.unsetenv(key)) ~= 0 then return nil, native.errno() end
+      return true
+    end
+    local function set_environment(key, value)
+      if number(C.setenv(key, value, 1)) ~= 0 then return nil, native.errno() end
+      return true
+    end
+    local function close_range(first, last)
+      local ok, result = pcall(
+        C.syscall,
+        ffi.cast('long', SYS_close_range),
+        ffi.cast('unsigned int', first),
+        ffi.cast('unsigned int', last),
+        ffi.cast('unsigned int', 0)
+      )
+      return ok and number(result) == 0
     end
 
+    local function open_max()
+      local maximum = number(C.sysconf(SC_OPEN_MAX))
+      return maximum and maximum >= 4 and maximum or 1024
+    end
     local function exec(argv)
       local buffers, vector = {}, ffi.new('char *[?]', #argv + 1)
       for i = 1, #argv do
@@ -874,7 +812,6 @@ function M.new(opts)
 
     return Direct.new({
       Fd = Fd,
-      signals = signals,
       supported = supported,
       message = message,
       name_of = function(errno)
@@ -903,30 +840,17 @@ function M.new(opts)
       chdir = function(path)
         return result_zero(C.chdir(path))
       end,
-      setsid = function()
-        return failure(C.setsid())
+      setpgid = function(pid, group) return result_zero(C.setpgid(pid, group)) end,
+      invalid_argument = EINVAL,
+      clear_environment = clear_environment,
+      unset_environment = unset_environment,
+      set_environment = set_environment,
+      duplicate = function(source, target) return failure(C.dup2(source, target)) end,
+      open_null = function(which)
+        return failure(C.open('/dev/null', which == 'stdin' and O_RDONLY or O_WRONLY, native.vararg_int(0)))
       end,
-      setpgid = function(pid, group)
-        return result_zero(C.setpgid(pid, group))
-      end,
-      environment = environment,
-      stdio = {
-        targets = { stdin = 0, stdout = 1, stderr = 2 },
-        stdout = 1,
-        same = function(a, b)
-          return a == b
-        end,
-        duplicate = function(source, target)
-          return failure(C.dup2(source, target))
-        end,
-        open_null = function(which)
-          return failure(C.open('/dev/null', which == 'stdin' and O_RDONLY or O_WRONLY, native.vararg_int(0)))
-        end,
-        keep = function(value, error_write)
-          return value == 0 or value == 1 or value == 2 or value == error_write
-        end,
-      },
-      close_inherited = close_inherited,
+      open_max = open_max,
+      close_range = close_range,
       exec = exec,
       wait = wait,
       kill = function(pid, signal)

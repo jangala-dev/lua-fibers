@@ -189,7 +189,6 @@ local function make_fd(binding)
       close = operations.close,
       set_nonblocking = has_nonblocking and operations.set_nonblocking or nil,
     })
-    handle._family, handle._generation = binding.family, generation
     if number ~= nil then
       handle._fd = number
     end

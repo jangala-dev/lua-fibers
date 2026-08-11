@@ -8,12 +8,10 @@ local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local Address = require('fibers.net.address')
 local IOError = require('fibers.io.error')
-local HostHold = require('fibers.io.internal.host_hold')
 local IO = require('fibers.io.facility')
 local Activation = require('fibers.socket.activation')
 local Lifecycle = require('fibers.socket.lifecycle')
 local HostOffer = require('fibers.io.offer')
-local Closure = require('fibers.closure')
 local FIFO = require('fibers.resource.fifo')
 local StateMachine = require('fibers.resource.machine')
 local Protected = require('fibers.protected')
@@ -161,20 +159,8 @@ local function close_socket_handle(socket, rt, state, reason)
   if not ok then IO.masked_perform(rt, socket._lifecycle:record_close_error_op(close_err)) end
 end
 
-local function datagram_closure(socket)
-  return Closure.request_then_wait(function(_ctx, _record, reason)
-    return socket:close_op(reason or 'scope closure')
-  end, function()
-    return socket:closed_op()
-  end, {
-    name = 'datagram_socket',
-    finish_result = Closure.require_ok('datagram closure failed'),
-  })
-end
-
-
 local function local_address_now(socket)
-  local state = socket._lifecycle.state._location.value
+  local state = socket._lifecycle._location.value
   return state.address or socket._address
 end
 
@@ -184,7 +170,7 @@ end
 
 
 local function host_handle(socket)
-  local state = socket._lifecycle.state._location.value
+  local state = socket._lifecycle._location.value
   return state.handle
 end
 
@@ -274,7 +260,7 @@ local function close_result(state)
 end
 
 function Datagram:closed_op()
-  return IO.closed_after_driver_op(self._driver, self._lifecycle:terminal_op():map(close_result))
+  return IO.closed_after_driver_op(self._driver)
 end
 
 local function close_from_driver(socket, rt, reason, err, fatal)
@@ -286,7 +272,8 @@ local function close_from_driver(socket, rt, reason, err, fatal)
     })
   IO.masked_perform(rt, socket._sends:close_op(pending_error))
   if first then close_socket_handle(socket, rt, state, reason) end
-  IO.masked_perform(rt, socket._lifecycle:stopped_op(reason, err, fatal))
+  local _, terminal = IO.masked_perform(rt, socket._lifecycle:stopped_op(reason, err, fatal))
+  return close_result(terminal)
 end
 
 local function normalise_packet(socket, packet)
@@ -395,12 +382,10 @@ local function driver(socket, driver_scope)
   end)
 
   if ok then
-    close_from_driver(socket, rt, 'datagram packet source stopped')
-    return
+    return close_from_driver(socket, rt, 'datagram packet source stopped')
   end
   if Runtime.is_cancelled(driver_err) then
-    close_from_driver(socket, rt, driver_err.reason or 'datagram cancelled')
-    return
+    return close_from_driver(socket, rt, driver_err.reason or 'datagram cancelled')
   end
 
   local failure
@@ -413,7 +398,7 @@ local function driver(socket, driver_scope)
     })
     fatal = true
   end
-  close_from_driver(socket, rt, 'datagram driver failed', failure, fatal)
+  return close_from_driver(socket, rt, 'datagram driver failed', failure, fatal)
 end
 
 local UDP_OPTIONS = {
@@ -443,21 +428,19 @@ function Module.udp_op(address, opts)
     _fibers_id = id,
     _address = address,
     _lifecycle = DatagramLifecycle.new(address),
-    _host_hold = HostHold.new(),
     _sends = SendState.new(send_capacity),
     _max_datagram_size = max_datagram_size,
   }, Datagram), opts.label)
   Label.child(socket._lifecycle, socket, 'lifecycle')
-  Label.child(socket._host_hold, socket, 'host-hold')
   Label.child(socket._sends, socket, 'sends')
   socket._packets = packet_source(socket, receive_capacity)
 
-  return IO.admit_driven_lifetime_op(scope, socket, {
-    operation = 'socket.udp_op',
+  return scope:_drive_op( socket, {
     label = Label.get(socket),
     role = 'datagram_socket',
-    closure = datagram_closure(socket),
-    children = { socket._host_hold },
+    closure = IO._closeable_closure(socket, {
+      name = 'datagram_socket', reason = 'scope closure', finish_result = 'datagram closure failed',
+    }),
     run = function(driver_scope) return driver(socket, driver_scope) end,
   }):wrap(function()
     return Activation.create(socket, {
@@ -465,8 +448,6 @@ function Module.udp_op(address, opts)
       host_method = 'create_datagram',
       options = { label = opts.label, reuse_address = opts.reuse_address },
       lifecycle = socket._lifecycle,
-      hold = socket._host_hold,
-      hold_key = 'socket',
       close = close_handle,
       domain = 'datagram',
       action = 'open',

@@ -1,6 +1,7 @@
 local Facility = require('fibers.resource.authoring')
 local Keyspace = require('fibers.resource.keyspace')
 local Direct = require('fibers.internal.direct')
+local Contract = require('fibers.internal.contract')
 
 local Lease = {}
 Lease.__index = Lease
@@ -16,11 +17,7 @@ local function copy_compat(source)
   return out
 end
 
-local function copy_map(values)
-  local out = {}
-  for key, value in pairs(values or {}) do out[key] = value end
-  return out
-end
+local copy_map = Contract.copy_table
 
 function Lease.new(compat)
   local lease = Facility.identity(setmetatable({ _compat = copy_compat(compat) }, Lease), Kind)

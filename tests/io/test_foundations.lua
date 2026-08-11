@@ -15,7 +15,6 @@ local Handle = require('fibers.io.handle')
 local HostError = require('fibers.io.error')
 local Address = require('fibers.net.address')
 local Completion = require('fibers.resource.completion')
-local HostHold = require('fibers.io.internal.host_hold')
 local Connection = require('fibers.socket.connection')
 local State = require('tests.support.resource_state')
 
@@ -92,81 +91,6 @@ do
   assert_eq(observed[1], 'done')
   assert_eq(second, 'completion_already_terminal')
   assert_eq(State.completion(completion).kind, 'succeeded')
-end
-
--- An admitted internal host hold closes an unreleased host value during Lifetime Closure.
-do
-  local closed = 0
-  fibers.run(function(scope)
-    local host_hold = HostHold.new():label('settled-host-hold')
-    fibers.perform(scope:admit_op(host_hold))
-    local value = { label = 'external' }
-    assert_eq(
-      host_hold:hold('value', value, function(v, reason)
-        assert_eq(v, value)
-        assert_truthy(reason ~= nil)
-        closed = closed + 1
-        return true
-      end),
-      value
-    )
-  end)
-  assert_eq(closed, 1)
-end
-
--- Releasing a held value after permanent custody transfer prevents backup closure.
-do
-  local closed = 0
-  fibers.run(function(scope)
-    local host_hold = HostHold.new():label('released-host-hold')
-    fibers.perform(scope:admit_op(host_hold))
-    local value = {}
-    host_hold:hold('value', value, function()
-      closed = closed + 1
-      return true
-    end)
-    assert_eq(host_hold:release('value', value), value)
-  end)
-  assert_eq(closed, 0)
-end
-
--- Failure while converting one held accepted handle closes only that key;
--- sibling offers in the shared source hold remain valid.
-do
-  local first_closed, second_closed = 0, 0
-  fibers.run(function(scope)
-    local hold = HostHold.new():label('keyed-discard-host-hold')
-    fibers.perform(scope:admit_op(hold))
-
-    local first = Handle.new({
-      label = 'invalid-accepted-handle',
-      write = function(_, bytes) return #bytes end,
-      close = function() first_closed = first_closed + 1; return true end,
-    })
-    local second = Handle.new({
-      label = 'queued-sibling-handle',
-      close = function() second_closed = second_closed + 1; return true end,
-    })
-
-    assert_eq(hold:hold('first', first, function(value, reason) return value:close(reason) end), first)
-    assert_eq(hold:hold('second', second, function(value, reason) return value:close(reason) end), second)
-
-    local connection, err = Connection.from_host_hold(fibers.current_runtime(), scope, hold, 'first', first, {
-      label = 'invalid-accepted-connection',
-      action = 'open_accepted_stream',
-    })
-    assert_eq(connection, nil)
-    assert_truthy(HostError.is(err), 'conversion failure should be normalised as a HostError')
-    assert_truthy(tostring(err):match('read capability'), 'conversion failure should retain its cause')
-    assert_eq(first_closed, 1, 'failed selected handle should close exactly once')
-    assert_eq(second_closed, 0, 'sibling held handle must remain open')
-    assert_eq(hold.values.second.value, second)
-    assert_eq(hold.closed, false)
-
-    assert_eq(hold:release('second', second), second)
-    assert_eq(second:close('test complete'), true)
-  end)
-  assert_eq(second_closed, 1)
 end
 
 -- Completion can expose pending as an option for single-winner protocols.

@@ -3,9 +3,10 @@
 -- Anonymous pipes use readiness-backed Streams. Regular files use the
 -- runtime-only evented job service exported by fibers.file.regular.
 
+local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local IOError = require('fibers.io.error')
-local HostHold = require('fibers.io.internal.host_hold')
+local Acquired = require('fibers.io.internal.acquired')
 local IO = require('fibers.io.facility')
 local Protected = require('fibers.protected')
 local Direct = require('fibers.internal.direct')
@@ -62,15 +63,8 @@ end
 local function open_endpoint(rt, scope, handle, mode, opts)
   return IO.open_handle_stream(rt, scope, handle, {
     label = opts.label and (opts.label .. ':' .. mode) or nil,
-    read = mode == 'read',
-    write = mode == 'write',
-    capacity = opts.capacity,
-    read_capacity = opts.read_capacity,
-    write_capacity = opts.write_capacity,
-    chunk_size = opts.chunk_size,
-    read_chunk_size = opts.read_chunk_size,
-    write_chunk_size = opts.write_chunk_size,
-  })
+    read = mode == 'read', write = mode == 'write',
+  }, opts)
 end
 
 local function fail_start(rt, start, err)
@@ -85,7 +79,7 @@ local function fail_start(rt, start, err)
       return IO.masked_perform(rt, start.write_stream:abort_op(err))
     end)
   end
-  IOError.capture_cleanup(cleanup_errors, 'pipe', 'close_host_hold', nil, start.host_hold.close, start.host_hold, err)
+  IOError.capture_cleanup(cleanup_errors, 'pipe', 'close_acquired', nil, start.acquired.close, start.acquired, err)
   return nil, nil, IOError.with_cleanup(
     err, 'pipe', 'start',
     'pipe start failed and cleanup was incomplete',
@@ -106,14 +100,7 @@ local function finish_endpoint(rt, start, which, handle, opts)
   end
   start[which .. '_stream'] = stream
 
-  local transferred, transfer_err = start.host_hold:release(which, handle)
-  if not transferred then
-    return nil,
-      IOError.normalise(transfer_err, {
-        domain = 'pipe',
-        action = 'transfer_' .. which .. '_host_hold',
-      })
-  end
+  start.acquired:release(which, handle)
   return stream
 end
 
@@ -123,13 +110,8 @@ local function start_pipe(rt, start, opts)
     return fail_start(rt, start, err)
   end
 
-  local held, hold_err = start.host_hold:hold_many({
-    { key = 'read', value = read_handle, close = close_pipe_handle },
-    { key = 'write', value = write_handle, close = close_pipe_handle },
-  })
-  if not held then
-    return fail_start(rt, start, hold_err)
-  end
+  start.acquired:hold('read', read_handle, close_pipe_handle)
+  start.acquired:hold('write', write_handle, close_pipe_handle)
 
   local read_stream, read_err = finish_endpoint(rt, start, 'read', read_handle, opts)
   if not read_stream then
@@ -148,24 +130,15 @@ function File.pipe_op(opts)
   for _, key in ipairs({ 'chunk_size', 'read_chunk_size', 'write_chunk_size' }) do
     if opts[key] ~= nil then Contract.positive_integer(opts[key], 'file.pipe_op opts.' .. key, 2) end
   end
-  local label = opts.label
   local scope = IO.current_scope(opts, 'file.pipe_op')
-  local start = {
-    scope = scope,
-    host_hold = HostHold.new(),
-    read_stream = nil,
-    write_stream = nil,
-  }
-  if label ~= nil then start.host_hold:label(label .. ':host-hold') end
-
-  return scope:admit_op(start.host_hold)
-    :wrap(function()
-      local rt = Runtime.current()
-      if not rt then
-        error('file.pipe_op committed without a current runtime', 2)
-      end
-      return start_pipe(rt, start, opts)
-    end)
+  return Op.always(true):wrap(function()
+    local rt = Runtime.current()
+    if not rt then error('file.pipe_op committed without a current runtime', 2) end
+    return start_pipe(rt, {
+      scope = scope, acquired = Acquired.new(),
+      read_stream = nil, write_stream = nil,
+    }, opts)
+  end)
 end
 
 File.Error = IOError

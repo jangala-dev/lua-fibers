@@ -10,11 +10,8 @@ local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local IOError = require('fibers.io.error')
 local Reactor = require('fibers.io.reactor')
-local Closure = require('fibers.closure')
-local Counter = require('fibers.resource.counter')
+local IO = require('fibers.io.facility')
 local EventQueue = require('fibers.resource.event_queue')
-local Signal = require('fibers.resource.signal')
-local UnsafeExternalMutation = require('fibers.embed.unsafe_external_mutation')
 local Lifetime = require('fibers.lifetime')
 local Protected = require('fibers.protected')
 local Label = require('fibers.internal.label')
@@ -52,17 +49,6 @@ local function aggregate_error(source, message, ...)
   return IOError.protocol(source._domain, source._action, message, { errors = compact })
 end
 
-local function source_closure(source)
-  return Closure.request_then_wait(function(_ctx, _record, reason)
-    return source:close_op(reason or 'offer source closed')
-  end, function()
-    return source:closed_op()
-  end, {
-    name = 'host_offer_source',
-    finish_result = Closure.require_ok('host offer source closure failed'),
-  })
-end
-
 function Offer.new(spec)
   spec = Contract.record(spec, OFFER_SPEC, 'HostOfferSource spec', 2)
   if spec.pull == nil then error('HostOfferSource requires pull', 2) end
@@ -96,18 +82,17 @@ function Offer.new(spec)
     _closed_error = spec.closed_error,
     _dispose = spec.dispose,
     _retired = spec.retired,
-    _slots = Counter.bounded(capacity),
     _queue = EventQueue.new(),
-    _terminal = Signal.new(),
   }, Offer), label)
-  Label.child(source._slots, source, 'slots')
   Label.child(source._queue, source, 'offers')
-  Label.child(source._terminal, source, 'terminal')
 
   Lifetime.define(source, {
     label = label,
     role = source._role,
-    closure = source_closure(source),
+    closure = IO._closeable_closure(source, {
+      name = 'host_offer_source', reason = 'offer source closed',
+      finish_result = 'host offer source closure failed',
+    }),
     children = spec.children,
   })
 
@@ -137,24 +122,22 @@ function Offer:open_op(scope)
 end
 
 function Offer:next_op()
-  local offer = self._queue:next_op()
-  local release = self._slots:give_op()
-  local demand = self._entry:demand_op()
-  local resume = Op.each({ release, demand })
-  return offer:and_then(Op.guard(function(value)
-    return resume:map(function() return value end)
+  return self._queue:next_op():and_then(Op.guard(function(value)
+    return self._entry:demand_op():map(function() return value end)
   end))
 end
 
 function Offer:result_op()
-  return self:next_op():or_else(self._terminal:wait_op():map(function(state)
-    return nil, source_error(self, state)
+  return self:next_op():or_else(self._entry:retired_op():map(function()
+    return nil, source_error(self, self.state or self._entry.retire_state)
   end))
 end
 
 function Offer:terminal_op()
-  return self._terminal:wait_op():map(function(state)
-    if state.kind == 'failed' or state.kind == 'cancelled' then
+  return self._entry:retired_op():map(function(retired, retire_err)
+    if not retired then return nil, retire_err end
+    local state = self.state or self._entry.retire_state
+    if state and (state.kind == 'failed' or state.kind == 'cancelled') then
       return nil, source_error(self, state)
     end
     return true, self._error
@@ -169,19 +152,10 @@ function Offer:closed_op()
   return self._entry:retired_op()
 end
 
-function Offer:_publish_terminal(state)
-  if self.state then return false end
-  self.state = state
-  self.reason = state.reason or self.reason
-  if state.error then self._error = state.error end
-  UnsafeExternalMutation.deliver(self._terminal, state)
-  return true
-end
-
 function Offer:_drain_unclaimed(rt, reason)
   local errors = {}
   local packed = {}
-  local count = self._queue._location.value.count
+  local count = self._queue:_count()
 
   if count > 0 then
     local drained, values = Protected.pcall(rt._perform_current, rt, self._queue:_drain_op(), nil, true)
@@ -203,11 +177,6 @@ function Offer:_drain_unclaimed(rt, reason)
         })
       end
     end
-  end
-
-  if #packed > 0 then
-    local restored, restore_err = Protected.pcall(rt._perform_current, rt, self._slots:give_op(#packed), nil, true)
-    if not restored then errors[#errors + 1] = restore_err end
   end
 
   local err = aggregate_error(self, 'one or more unclaimed offers failed to retire cleanly', unpack_(errors))
@@ -254,7 +223,9 @@ function Offer:_reactor_retired(rt, state, preserve_offers)
 
   -- Terminal publication is unconditional with respect to disposal or owner
   -- retirement outcome: observers must always learn that the source has stopped.
-  self:_publish_terminal(terminal_state)
+  self.state = terminal_state
+  self.reason = terminal_state.reason or self.reason
+  if terminal_state.error then self._error = terminal_state.error end
   if cleanup_error or retired_error then return nil, terminal_state.error end
   return true
 end

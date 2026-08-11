@@ -36,33 +36,16 @@ if not available then
   return Posix.unavailable('fibers.io.luaposix', 'requires luaposix poll, time, errno, unistd, fcntl and socket modules')
 end
 
-local names = {}
-for name, value in pairs(errno) do
-  if type(name) == 'string' and name:match('^E[A-Z0-9_]+$') and type(value) == 'number' then
-    names[value] = names[value] or name
-  end
-end
+local names = NativeError.names(errno)
 local native_error = NativeError.new({ names = names })
 local AF = { inet4 = socket.AF_INET, inet6 = socket.AF_INET6, unix = socket.AF_UNIX }
 local support_cache = {}
 
 local set_of, fd_number = NativeError.set, NativeError.number
 
-local function split(a, b)
-  return native_error.split(a, b)
-end
-
-local function native_result(value, a, b)
-  if value ~= nil then return value end
-  local message, number = split(a, b)
-  return nil, number, message
-end
-
-local function native_status(value, a, b)
-  if value ~= nil then return true end
-  local message, number = split(a, b)
-  return nil, number, message
-end
+local split = native_error.split
+local native_result = native_error.result
+local native_status = native_error.status
 
 local function truthy_result(value, a, b)
   if value then return value end
@@ -424,34 +407,6 @@ binding.process = function(Fd)
     return true
   end
 
-  local function environment(spec)
-    if spec.env_mode == 'replace' then
-      local current = stdlib.getenv()
-      if type(current) ~= 'table' then
-        return nil, errno.EINVAL
-      end
-      for name in pairs(current) do
-        local ok, _, eno = stdlib.setenv(tostring(name), nil)
-        if ok == nil then
-          return nil, eno
-        end
-      end
-    end
-    for _, name in ipairs(spec.unset_env or {}) do
-      local ok, _, eno = stdlib.setenv(tostring(name), nil)
-      if ok == nil then
-        return nil, eno
-      end
-    end
-    for name, value in pairs(spec.env or {}) do
-      local ok, _, eno = stdlib.setenv(tostring(name), tostring(value))
-      if ok == nil then
-        return nil, eno
-      end
-    end
-    return true
-  end
-
   local signals = {
     hup = signal.SIGHUP,
     int = signal.SIGINT,
@@ -489,54 +444,33 @@ binding.process = function(Fd)
     fork = function() return native_result(unistd.fork()) end,
     exit = unistd._exit,
     chdir = function(path) return native_status(unistd.chdir(path)) end,
-    setsid = function() return native_status(unistd.setpid('s', 0)) end,
     setpgid = function(pid, group) return native_status(unistd.setpid('p', pid, group)) end,
-    environment = environment,
-    stdio = {
-      targets = { stdin = 0, stdout = 1, stderr = 2 },
-      stdout = 1,
-      same = function(a, b)
-        return a == b
-      end,
-      duplicate = function(source, target) return native_status(unistd.dup2(source, target)) end,
-      open_null = function(which)
-        local value, a, b = fcntl.open('/dev/null', which == 'stdin' and fcntl.O_RDONLY or fcntl.O_WRONLY, 0)
-        if value ~= nil then
-          return value
-        end
-        local _, eno = split(a, b)
-        return nil, eno
-      end,
-      keep = function(value, error_write)
-        return value == 0 or value == 1 or value == 2 or value == error_write
-      end,
-    },
-    close_inherited = function(spec, error_write)
-      local keep = { [error_write] = true }
-      for _, value in ipairs(spec.pass_fds or {}) do
-        local fd = tonumber(value)
-        if not fd or fd < 0 or fd ~= math.floor(fd) then
-          return nil, errno.EINVAL
-        end
-        keep[fd] = true
-        if fd >= 3 then
-          local ok, eno = binding.fd.set_cloexec(fd, false)
-          if not ok then
-            return nil, eno
-          end
-        end
-      end
-      if spec.close_fds == false then
-        return true
-      end
-      local maximum = tonumber(unistd.sysconf(unistd._SC_OPEN_MAX or 4)) or 1024
-      for fd = 3, maximum - 1 do
-        if not keep[fd] then
-          unistd.close(fd)
-        end
+    invalid_argument = errno.EINVAL,
+    clear_environment = function()
+      local current = stdlib.getenv()
+      if type(current) ~= 'table' then return nil, errno.EINVAL end
+      for name in pairs(current) do
+        local ok, _, eno = stdlib.setenv(tostring(name), nil)
+        if ok == nil then return nil, eno end
       end
       return true
     end,
+    unset_environment = function(name)
+      local ok, _, eno = stdlib.setenv(name, nil)
+      return ok ~= nil and true or nil, eno
+    end,
+    set_environment = function(name, value)
+      local ok, _, eno = stdlib.setenv(name, value)
+      return ok ~= nil and true or nil, eno
+    end,
+    duplicate = function(source, target) return native_status(unistd.dup2(source, target)) end,
+    open_null = function(which)
+      local value, a, b = fcntl.open('/dev/null', which == 'stdin' and fcntl.O_RDONLY or fcntl.O_WRONLY, 0)
+      if value ~= nil then return value end
+      local _, eno = split(a, b)
+      return nil, eno
+    end,
+    open_max = function() return unistd.sysconf(unistd._SC_OPEN_MAX or 4) end,
     exec = function(argv)
       local args = { [0] = argv[1] }
       for i = 2, #argv do

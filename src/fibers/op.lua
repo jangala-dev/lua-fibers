@@ -56,7 +56,7 @@ end
 
 local function append_op_arg(out, value, label, flatten_choice, level)
   if is_op(value) then
-    if flatten_choice and value.kind == 'choice' then
+    if flatten_choice and value.kind == 'choice' and not (value.post or value.defeats or value.labels) then
       for i = 1, #(value.choices or {}) do
         out[#out + 1] = value.choices[i]
       end
@@ -129,40 +129,28 @@ local function copy_list(xs)
 end
 
 local function annotated(inner, post, defeat, label)
-  local base, existing_post, defeats, labels
-  if inner.kind == 'annotated' then
-    base = inner.p
-    existing_post = inner.post
-    defeats = copy_list(inner.defeats)
-    labels = copy_list(inner.labels)
-  else
-    base = inner
-    defeats = {}
-    labels = {}
-  end
+  local fields = {}
+  for key, value in pairs(inner) do fields[key] = value end
 
+  local existing_post = fields.post
   if post and existing_post then
     local first, second = existing_post, post
-    post = function(...)
-      return second(first(...))
-    end
-  else
-    post = post or existing_post
+    fields.post = function(...) return second(first(...)) end
+  elseif post then
+    fields.post = post
   end
 
   if defeat then
+    local defeats = copy_list(fields.defeats)
     table.insert(defeats, 1, defeat)
+    fields.defeats = defeats
   end
   if label then
+    local labels = copy_list(fields.labels)
     table.insert(labels, 1, label)
+    fields.labels = labels
   end
-  local node = op('annotated', {
-    p = base,
-    post = post,
-    defeats = #defeats > 0 and defeats or nil,
-    labels = #labels > 0 and labels or nil,
-  })
-  return node
+  return op(inner.kind, fields)
 end
 
 function Op.always(...)

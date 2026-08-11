@@ -66,6 +66,21 @@ do
   assert_eq(table.concat(fired, ','), 'loser')
 end
 
+-- An annotation on a composite choice belongs to that composite occurrence;
+-- embedding it in another choice must not flatten away the obligation.
+do
+  fired = {}
+  local rt = Runtime.new({ choice_seed = 2 })
+  rt:spawn_raw(function()
+    rt:perform(Op.choice(
+      Op.always('winner'),
+      Op.choice(Op.always('a'), Op.always('b')):on_defeat(defeat('composite'))
+    ))
+  end):label('defeat-composite-choice')
+  assert_status(rt:run(), 'found')
+  assert_eq(table.concat(fired, ','), 'composite')
+end
+
 -- Selection discards the annotation rather than dispatching it.
 do
   fired = {}

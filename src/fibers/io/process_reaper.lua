@@ -530,13 +530,6 @@ function Reaper.new(spec)
     return process, endpoints
   end
 
-  Provider._test = {
-    preflight = preflight,
-    environment = environment,
-    parse_startup = parse_startup,
-    read_chunk = read_chunk,
-    close_inherited = close_inherited,
-  }
   return Provider
 end
 

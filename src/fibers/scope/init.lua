@@ -4,7 +4,7 @@
 -- facts belong to its Runtime-local Lifetime node.
 
 local Op = require('fibers.op')
-local Rendezvous = require('fibers.resource.rendezvous')
+local Facility = require('fibers.resource.authoring')
 local Task = require('fibers.task')
 local Grant = require('fibers.grant')
 local Runtime = require('fibers.runtime')
@@ -48,8 +48,9 @@ local function item_kind(item)
   return life._has_body and 'task' or 'resource'
 end
 
-local function new_offers()
-  return Rendezvous.new()
+local function offer_op(lifetime, role, value)
+  local spec = Facility.rule.exchange({ resource = lifetime, role = role })
+  return role == 'put' and Facility.bind(spec, value) or Facility.op(spec)
 end
 
 local SCOPE_OPTIONS = { parent = true, closure = true, runtime = true, lifetime = true, label = true }
@@ -75,8 +76,6 @@ function Scope.new(opts)
   end
   if opts.runtime then lifetime:_bind_runtime(opts.runtime) end
   lifetime._closure = Closure.combine(lifetime._closure, Closure.propagation(opts.closure))
-  lifetime._offers = lifetime._offers or new_offers()
-  Label.child(lifetime._offers, lifetime, 'offers')
   return setmetatable({
     _mask_depth = 0,
     _lifetime = lifetime,
@@ -200,6 +199,22 @@ function Scope:_run_child_body(fn, task, opts)
   end):raise()
 end
 
+function Scope:_drive_op(value, spec)
+  spec = Contract.table(spec, 'driven Lifetime spec', 2)
+  if type(spec.run) ~= 'function' then error('driven Lifetime requires spec.run', 2) end
+  Lifetime.define(value, {
+    label = spec.label, role = assert(spec.role, 'driven Lifetime requires spec.role'),
+    closure = assert(spec.closure, 'driven Lifetime requires spec.closure'), children = spec.children,
+  })
+  for _, state in ipairs(spec.causal_states or {}) do Lifetime._mark_causal_state(value, state) end
+  local private_scope = Scope.for_lifetime(value._lifetime)
+  local driver = Task._new(function() return private_scope:run(spec.run) end, self, {
+    lifetime = value._lifetime, closure = self._lifetime._closure, label = spec.label,
+  })
+  value._driver = driver
+  return self:admit_op(value):and_then(driver:spawn_effect_op()):map(function() return value end)
+end
+
 function Scope:spawn_op(fn, opts)
   if type(fn) ~= 'function' then
     error('Scope:spawn_op expects a function', 2)
@@ -251,7 +266,7 @@ function Scope:offer_op(item, target, terms)
     item_kind = item_kind(item),
     terms = terms,
   }
-  local put_offer = target_sc._lifetime._offers:put_op(offer)
+  local put_offer = offer_op(target_sc._lifetime, 'put', offer)
   return self:move_op(item, target_sc):and_then(put_offer:map(function()
       return offer
     end))
@@ -259,12 +274,12 @@ end
 
 function Scope:accept_op(filter)
   if filter == nil then
-    return self._lifetime._offers:get_op()
+    return offer_op(self._lifetime, 'get')
   end
   if type(filter) ~= 'function' then
     error('Scope:accept_op filter must be a function', 2)
   end
-  return self._lifetime._offers:get_op():and_then(Op.guard(function(offer)
+  return offer_op(self._lifetime, 'get'):and_then(Op.guard(function(offer)
     if filter(offer) then
       return Op.always(offer)
     end

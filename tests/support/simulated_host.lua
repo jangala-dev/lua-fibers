@@ -593,7 +593,7 @@ function Simulated.new(opts)
   if resolver then features.resolver = true end
   if processes then features.process = true end
 
-  host.file_storage = require('fibers.file.memory_provider').new({
+  host.file_storage = require('tests.support.memory_file_provider').new({
     files = opts.files,
     directories = opts.directories,
   })
