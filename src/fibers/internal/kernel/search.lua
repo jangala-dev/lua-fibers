@@ -731,7 +731,7 @@ local function match_intents(state, a, b)
   return true
 end
 
-local function transition_context(state)
+local function transition_context(state, occurrence_serial)
   local context = state.transition_context
   if not context then
     context = {}
@@ -739,15 +739,16 @@ local function transition_context(state)
     context.now = function() return state.engine.runtime:now() end
     state.transition_context = context
   end
+  context.serial = occurrence_serial or 1
   return context
 end
 
-local function transition_ready(state, leaf, value, payload)
-  return Operation.transition_ready(leaf, value, transition_context(state), payload)
+local function transition_ready(state, leaf, value, payload, occurrence_serial)
+  return Operation.transition_ready(leaf, value, transition_context(state, occurrence_serial), payload)
 end
 
-local function transition_outcome(state, leaf, value, phase, payload)
-  return Operation.transition_cursor(leaf, value, transition_context(state), phase, payload):next()
+local function transition_outcome(state, leaf, value, phase, payload, occurrence_serial)
+  return Operation.transition_cursor(leaf, value, transition_context(state, occurrence_serial), phase, payload):next()
 end
 
 local function stage_outcome(state, task, leaf, outcome)
@@ -807,9 +808,9 @@ local function resolve_serial_transitions(state, selected)
     local intent, leaf = selected[i], selected[i].spec
     local task, rule = intent.task, intent.rule
     local value = Journal.project_machine(task, leaf.location, function(candidate)
-      return transition_ready(state, leaf, candidate, intent.payload)
+      return transition_ready(state, leaf, candidate, intent.payload, intent.serial)
     end, rule.accepts_supply)
-    local outcome = transition_outcome(state, leaf, value, nil, intent.payload)
+    local outcome = transition_outcome(state, leaf, value, nil, intent.payload, intent.serial)
     if not outcome then
       return false
     end
@@ -835,7 +836,7 @@ local function resolve_transitions(state, intents)
       local task = intent.task
       local value, projected = Journal.project(task, leaf.location, leaf.orientation)
       if projected then
-        local outcome = transition_outcome(state, leaf, value, nil, intent.payload)
+        local outcome = transition_outcome(state, leaf, value, nil, intent.payload, intent.serial)
         if outcome then
           chosen_index, chosen_outcome, chosen_task = i, outcome, task
           break
@@ -856,9 +857,9 @@ end
 local function witness_cursor(state, intent)
   local leaf, task, rule = intent.spec, intent.task, intent.rule
   local value = Journal.project_machine(task, leaf.location, function(candidate)
-    return transition_ready(state, leaf, candidate, intent.payload)
+    return transition_ready(state, leaf, candidate, intent.payload, intent.serial)
   end, rule.accepts_supply)
-  return Operation.transition_cursor(leaf, value, transition_context(state), nil, intent.payload)
+  return Operation.transition_cursor(leaf, value, transition_context(state, intent.serial), nil, intent.payload)
 end
 
 local function resolve_witness(state, intent, outcome, alternative_index)

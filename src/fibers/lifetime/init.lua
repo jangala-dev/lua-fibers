@@ -280,15 +280,9 @@ function Node:_construction_children_snapshot()
   return out
 end
 
-local function lifetime_state(node)
-  if not node._runtime then return 'dormant', 0, nil, nil end
-  local phase, reason, fault = node._runtime:_lifetime_store():_lifecycle(node)
-  return phase, (node._lifetime_location and node._lifetime_location.version) or 0, reason, fault
-end
-
-function Node:closed_op()
+function Node:retired_op()
   if not self._runtime then return Op.never() end
-  return self._runtime:_lifetime_store():closed_op(self):map(function() return self end)
+  return self._runtime:_lifetime_store():retired_op(self):map(function() return self end)
 end
 
 function Node:_close_requested()

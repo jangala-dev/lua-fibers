@@ -131,7 +131,7 @@ fibers.run(function(source)
   local authorised = fibers.perform(worker:can_op(resource, 'read'))
   assert(authorised == resource)
 
-  worker:close(grant, 'example complete')
+  worker:retire(grant, 'example complete')
   local after_close = fibers.perform(
     worker:can_op(resource, 'read'):map(function()
       return true
@@ -141,7 +141,7 @@ fibers.run(function(source)
 
   fibers.perform(source:move_op(resource, worker))
   assert(fibers.perform(worker:has_custody_op(resource)) == true)
-  worker:close(resource, 'example complete')
+  worker:retire(resource, 'example complete')
 end)
 
 print('examples/test_documented_examples.lua: ok')

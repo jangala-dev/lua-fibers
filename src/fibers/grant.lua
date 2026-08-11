@@ -26,65 +26,31 @@ local function state(grant, level)
   return value
 end
 
-local copy_table = Contract.copy_table
-
-local function copy_list(value)
-  local out = {}
-  for i = 1, #(value or {}) do out[i] = value[i] end
-  return out
-end
-
-local function list_rights(rights)
-  if rights == nil then return { 'use' } end
-  if type(rights) == 'string' then return { rights } end
-  if type(rights) ~= 'table' then
+local function normalise_rights(rights)
+  if rights == nil then rights = { 'use' }
+  elseif type(rights) == 'string' then rights = { rights }
+  elseif type(rights) ~= 'table' then
     error('Grant rights must be a string, dense array, or string-keyed set', 3)
   end
 
-  local numeric, named, max_index = 0, 0, 0
-  for key, value in pairs(rights) do
-    if type(key) == 'number' then
-      if key < 1 or key % 1 ~= 0 then
-        error('Grant rights array indices must be positive integers', 3)
-      end
-      numeric = numeric + 1
-      if key > max_index then max_index = key end
-      if type(value) ~= 'string' then
-        error('Grant rights array must contain strings', 3)
-      end
-    else
-      named = named + 1
-      if type(key) ~= 'string' or type(value) ~= 'boolean' then
-        error('Grant rights set must map string rights to booleans', 3)
-      end
-    end
-  end
-
   local out = {}
-  if numeric > 0 then
-    if named > 0 or numeric ~= max_index then
-      error('Grant rights array must be dense and contain no named entries', 3)
+  if #rights > 0 then
+    Contract.dense(rights, 'Grant rights', 3)
+    for i = 1, #rights do
+      local right = rights[i]
+      if type(right) ~= 'string' then error('Grant rights array must contain strings', 3) end
+      if out[right] then error('Grant rights must not contain duplicates', 3) end
+      out[right] = true
     end
-    for i = 1, max_index do out[i] = rights[i] end
   else
     for right, enabled in pairs(rights) do
-      if enabled then out[#out + 1] = right end
+      if type(right) ~= 'string' or type(enabled) ~= 'boolean' then
+        error('Grant rights set must map string rights to booleans', 3)
+      end
+      if enabled then out[right] = true end
     end
-    table.sort(out)
   end
-  if #out == 0 then error('Grant rights must not be empty', 3) end
-
-  local seen = {}
-  for i = 1, #out do
-    if seen[out[i]] then error('Grant rights must not contain duplicates', 3) end
-    seen[out[i]] = true
-  end
-  return out
-end
-
-local function rights_set(list)
-  local out = {}
-  for i = 1, #list do out[list[i]] = true end
+  if next(out) == nil then error('Grant rights must not be empty', 3) end
   return out
 end
 
@@ -104,10 +70,10 @@ function Grant._new(grantor, holder, subject, rights, opts)
   end
   runtime._next_grant_id = (runtime._next_grant_id or 0) + 1
   local id = 'grant-' .. tostring(runtime._next_grant_id)
-  local right_list = list_rights(rights)
+  local rights_map = normalise_rights(rights)
   if opts.label ~= nil then Contract.non_empty_string(opts.label, 'Grant option label', 2) end
   if opts.meta ~= nil then Contract.table(opts.meta, 'Grant meta', 2) end
-  local terms = copy_table(opts.terms, 'Grant terms', 2)
+  local terms = Contract.copy_table(opts.terms, 'Grant terms', 2)
   for key in pairs(terms) do
     if key ~= 'transferable' then
       error('unsupported Grant term ' .. tostring(key), 2)
@@ -117,7 +83,6 @@ function Grant._new(grantor, holder, subject, rights, opts)
   if type(terms.transferable) ~= 'boolean' then
     error('Grant term transferable must be a boolean', 2)
   end
-  local rights_map = rights_set(right_list)
   local grantor_lifetime = grantor:lifetime()
   local holder_lifetime = holder:lifetime()
   local grant = Label.attach(setmetatable({
@@ -125,14 +90,7 @@ function Grant._new(grantor, holder, subject, rights, opts)
   }, Grant), opts.label)
 
   local private_state = {
-    subject = subject,
-    subject_lifetime = subject_lifetime,
-    grantor = grantor_lifetime,
-    initial_holder = holder_lifetime,
-    right_list = right_list,
-    rights = rights_map,
-    terms = terms,
-    meta = opts.meta,
+    subject_lifetime = subject_lifetime, rights = rights_map, transferable = terms.transferable,
   }
   rawset(grant, PRIVATE_STATE, private_state)
 
@@ -145,8 +103,8 @@ function Grant._new(grantor, holder, subject, rights, opts)
       subject_lifetime = subject_lifetime,
       grantor = grantor_lifetime,
       holder = holder_lifetime,
-      rights = copy_table(rights_map),
-      terms = copy_table(terms),
+      rights = Contract.copy_table(rights_map),
+      terms = Contract.copy_table(terms),
     },
     closure = Closure.none(),
   })
@@ -162,11 +120,14 @@ function Grant._subject_lifetime(grant)
 end
 
 function Grant._right_list(grant)
-  return copy_list(state(grant, 2).right_list)
+  local out = {}
+  for right in pairs(state(grant, 2).rights) do out[#out + 1] = right end
+  table.sort(out)
+  return out
 end
 
 function Grant._is_transferable(grant)
-  return state(grant, 2).terms.transferable == true
+  return state(grant, 2).transferable == true
 end
 
 function Grant:has_right(right)
@@ -179,14 +140,14 @@ function Grant:has_right(right)
   return false
 end
 
-function Grant:closed_op()
-  return Lifetime.require(self):closed_op():map(function()
+function Grant:retired_op()
+  return Lifetime.require(self):retired_op():map(function()
     return self
   end)
 end
 
 
 
-Direct.install(Grant, { 'closed' })
+Direct.install(Grant, { 'retired' })
 
 return Grant

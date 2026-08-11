@@ -129,9 +129,10 @@ The public Op graph is executed directly. Trusted primitive leaves and the trans
 ## Ordered finite-map selection
 
 Ordered `Index` entries use `(rank, sequence)` as their complete semantic order.
-Every insertion option receives a monotonic sequence when it is constructed, and
-imported entries must provide unique `(rank, sequence)` pairs. Resource keys and
-their textual presentation do not participate in ordering.
+Insertion sequences are allocated transactionally, so constructing an Option has
+no ordering consequence. They increase with committed Index evolution; imported
+entries must provide unique `(rank, sequence)` pairs. Resource keys and their
+textual presentation do not participate in ordering.
 
 
 ## Committed effects

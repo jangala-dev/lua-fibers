@@ -29,9 +29,8 @@ local SimulatedHost = require('tests.support.simulated_host')
 local Counter = require('fibers.resource.counter')
 local Index = require('fibers.resource.index')
 local Keyed = require('fibers.resource.keyed')
-local Lease = require('fibers.resource.lease')
+local ClaimSet = require('fibers.resource.claim_set')
 local Flow = require('fibers.resource.flow')
-local RefCount = require('fibers.resource.ref_count')
 local Signal = require('fibers.resource.signal')
 local EventQueue = require('fibers.resource.event_queue')
 
@@ -116,10 +115,7 @@ do
   }, 'index')
   local keyed = Keyed.new()
   assert_twins(keyed, { 'get', 'take', 'put', 'insert', 'contains', 'remove' }, 'keyed')
-  assert_twins(Lease.new(), { 'acquire', 'release' }, 'lease')
-  local ref_count, handle = RefCount.new()
-  assert_twins(ref_count, { 'count', 'zero' }, 'ref count')
-  assert_twins(handle, { 'active', 'inactive', 'clone', 'close' }, 'ref-count handle')
+  assert_twins(ClaimSet.new(), { 'acquire', 'release' }, 'claim set')
   local flow = Flow.new()
   assert_twins(flow, { 'abort', 'closed' }, 'flow')
   assert_twins(flow:inlet(), {
@@ -129,7 +125,7 @@ do
     'read_some', 'read_exactly', 'peek_exactly', 'read_until', 'read_line',
     'read_all', 'drop', 'splice_to', 'lease_some', 'close', 'closed', 'fail',
   }, 'flow outlet')
-  assert_twins(Grant, { 'closed' }, 'grant')
+  assert_twins(Grant, { 'retired' }, 'grant')
   assert_twins(Closure.Failure, { 'retry', 'force' }, 'closure failure')
   assert_twins(Signal.new(), { 'wait' }, 'external signal')
   assert_twins(EventQueue.new(), { 'next' }, 'external event queue')
@@ -191,14 +187,6 @@ do
     assert_eq(direct_tx:why(), nil)
     assert_truthy(direct_tx:close('done'))
     assert_eq(direct_rx:why(), 'done')
-
-    local ref_count, ref_handle = RefCount.new()
-    ref_count:label('direct-ref-count')
-    assert_eq(ref_count:count(), 1)
-    assert_truthy(ref_handle:active())
-    assert_truthy(ref_handle:close())
-    assert_truthy(ref_handle:inactive())
-    assert_truthy(ref_count:zero())
 
     local flow = Flow.new(8):label('direct-flow')
     local inlet, outlet = flow:inlet(), flow:outlet()

@@ -208,7 +208,7 @@ do
     local handoff = Channel.new(1)
     root:spawn(function()
       local inner = handoff:get()
-      root:close(inner, 'external lexical close')
+      root:retire(inner, 'external lexical close')
       close_finished = true
     end)
 

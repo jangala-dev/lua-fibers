@@ -160,7 +160,7 @@ do
   eq(Lifetimes.state(task:lifetime()).phase, 'closing')
 
   fibers.run(function()
-    result.scope:close(task, 'nested-recovered')
+    result.scope:retire(task, 'nested-recovered')
   end)
   task_state = Lifetimes.state(task:lifetime())
   eq(task_state.phase, 'retired')

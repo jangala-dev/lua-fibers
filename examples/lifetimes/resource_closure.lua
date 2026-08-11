@@ -31,9 +31,9 @@ Lifetime.define(handle, {
 local finished, lifetime_closed
 local result = fibers.try_run(function(scope)
   fibers.perform(scope:admit_op(handle))
-  scope:close(handle, 'done')
+  scope:retire(handle, 'done')
   finished = fibers.perform(closed:read_op())
-  lifetime_closed = fibers.perform(Lifetime.of(handle):closed_op()) == Lifetime.of(handle)
+  lifetime_closed = fibers.perform(Lifetime.of(handle):retired_op()) == Lifetime.of(handle)
 end)
 
 assert(result.runtime_status.tag == 'found')

@@ -8,10 +8,10 @@ package.path = table.concat({
   package.path,
 }, ';')
 local Op = require('fibers.op')
-local Lease = require('fibers.resource.lease')
+local ClaimSet = require('fibers.resource.claim_set')
 local Runtime = require('fibers.runtime')
 local State = require('tests.support.resource_state')
-local holders = State.lease_holders
+local holders = State.claim_holders
 local function fail(msg)
   error(msg, 2)
 end
@@ -34,17 +34,17 @@ local function new_runtime(opts)
   return Runtime.new(opts or {})
 end
 
-local function seed_lease(lease, subject, holders)
+local function seed_claim_set(lease, subject, holders)
   local rt = new_runtime()
   local ops = {}
   for holder, mode in pairs(holders) do ops[#ops + 1] = lease:acquire_op(subject, mode, holder) end
   rt:spawn_raw(function() rt:perform(#ops == 1 and ops[1] or Op.each(ops)) end)
-  assert_status(rt:run(), 'found', 'lease seed')
+  assert_status(rt:run(), 'found', 'claim set seed')
 end
 
 local function test_readers_merge_and_writer_conflicts()
   local rt = new_runtime()
-  local c = Lease.new({ read = { read = true }, write = {} }):label('lease-rw')
+  local c = ClaimSet.new({ read = { read = true }, write = {} }):label('claim-set-rw')
   local rows
   rt:spawn_raw(function()
     rows = rt:perform(Op.each({ c:acquire_op('s', 'read', 'a'), c:acquire_op('s', 'read', 'b') }))
@@ -65,8 +65,8 @@ local function test_readers_merge_and_writer_conflicts()
 end
 
 local function test_release_supply_law()
-  local c = Lease.new({ read = { read = true }, write = {} }):label('lease-release')
-  seed_lease(c, 's', { writer = 'write' })
+  local c = ClaimSet.new({ read = { read = true }, write = {} }):label('claim-set-release')
+  seed_claim_set(c, 's', { writer = 'write' })
   local rt, rows = new_runtime()
   rt:spawn_raw(function()
     rows = rt:perform(Op.each({
@@ -78,7 +78,7 @@ local function test_release_supply_law()
   assert_eq(rows[2][1], 'blocked')
   assert_nil((holders(c, 's') or {}).writer)
 
-  seed_lease(c, 's', { writer = 'write' })
+  seed_claim_set(c, 's', { writer = 'write' })
   local rt2, rows2 = new_runtime()
   rt2:spawn_raw(function()
     rows2 = rt2:perform(Op.together({ c:release_op('s', 'writer'), c:acquire_op('s', 'read', 'reader') }))
@@ -90,7 +90,7 @@ local function test_release_supply_law()
 end
 
 local function test_incompatible_acquires_do_not_jointly_commit()
-  local c = Lease.new({ read = { read = true }, write = {} }):label('lease-incompat')
+  local c = ClaimSet.new({ read = { read = true }, write = {} }):label('claim-set-incompat')
   local rt = new_runtime({ quiet_deadlock = true })
   rt:spawn_raw(function()
     rt:perform(Op.together({ c:acquire_op('s', 'read', 'r'), c:acquire_op('s', 'write', 'w') }))
@@ -103,8 +103,8 @@ local function test_incompatible_acquires_do_not_jointly_commit()
 end
 
 local function test_release_one_blocker_not_enough()
-  local c = Lease.new({ read = { read = true }, write = {} }):label('lease-two-blockers')
-  seed_lease(c, 's', { w1 = 'write', w2 = 'write' })
+  local c = ClaimSet.new({ read = { read = true }, write = {} }):label('claim-set-two-blockers')
+  seed_claim_set(c, 's', { w1 = 'write', w2 = 'write' })
   local rt, rows = new_runtime()
   rt:spawn_raw(function()
     rows = rt:perform(Op.together({
@@ -126,4 +126,4 @@ for _, t in ipairs({
 }) do
   t()
 end
-print('tests/test_lease_laws.lua: ok')
+print('tests/test_claim_set_laws.lua: ok')

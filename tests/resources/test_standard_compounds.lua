@@ -13,7 +13,6 @@ local Runtime = require('fibers.runtime')
 local Counter = require('fibers.resource.counter')
 local Latch = require('fibers.latch')
 local Pulse = require('fibers.pulse')
-local RefCount = require('fibers.resource.ref_count')
 local Semaphore = require('fibers.semaphore')
 
 local function fail(message)
@@ -95,33 +94,6 @@ local function test_pulse_is_counter_plus_close_state()
   eq(version, 1)
 end
 
-local function test_ref_count_clones_and_closes_once()
-  local refs, first = RefCount.new()
-  refs:label('refs')
-  local clone, skipped, first_close, repeat_close, count, zero
-
-  run(function(runtime)
-    skipped = runtime:perform(Op.always('skip'):or_else(first:clone_op()))
-    eq(runtime:perform(refs:count_op()), 1)
-
-    clone = runtime:perform(first:clone_op())
-    eq(runtime:perform(refs:count_op()), 2)
-
-    first_close = runtime:perform(first:close_op())
-    repeat_close = runtime:perform(first:close_op())
-    count = runtime:perform(refs:count_op())
-
-    runtime:perform(clone:close_op())
-    zero = runtime:perform(refs:zero_op())
-  end)
-
-  eq(skipped, 'skip')
-  eq(first_close, true)
-  eq(repeat_close, false)
-  eq(count, 1)
-  eq(zero, 0)
-end
-
 local function test_semaphore_is_bounded_counter_vocabulary()
   local semaphore = Semaphore.new(2):label('semaphore')
   local available
@@ -142,7 +114,6 @@ local tests = {
   test_counter_directional_waits,
   test_latch_is_set_once,
   test_pulse_is_counter_plus_close_state,
-  test_ref_count_clones_and_closes_once,
   test_semaphore_is_bounded_counter_vocabulary,
 }
 

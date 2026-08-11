@@ -1,17 +1,17 @@
 -- Transactional resource pool with retirement.
 --
--- Pool is ordinary Lua composition over Index + Keyed + Lease + Machine + Effect.
+-- Pool is ordinary Lua composition over Index + Keyed + ClaimSet + Machine + Effect.
 -- The v1 pool is deliberately small: fixed resources, exclusive leases,
 -- deferred retirement for leased items, and close preventing future add/acquire.
 -- Item metadata lives in Keyed; idle membership lives in Index; active leases
--- live in Lease.  Pool state does not duplicate idle/leased status.
+-- live in ClaimSet.  Pool state does not duplicate idle/leased status.
 
 local Op = require('fibers.op')
 local StateMachine = require('fibers.resource.machine')
 local Ready = StateMachine.Ready
 local Index = require('fibers.resource.index')
 local Keyed = require('fibers.resource.keyed')
-local Lease = require('fibers.resource.lease')
+local ClaimSet = require('fibers.resource.claim_set')
 local Effect = require('fibers.effect')
 
 local Pool = {}
@@ -94,7 +94,7 @@ function Pool.new(opts)
     open = opts.open or StateMachine.new(true),
     idle = opts.idle or Index.new(),
     items = opts.items or Keyed.new(),
-    leases = opts.leases or Lease.new({ lease = {} }),
+    leases = opts.leases or ClaimSet.new({ lease = {} }),
     retire = opts.retire,
   }, Pool)
 end

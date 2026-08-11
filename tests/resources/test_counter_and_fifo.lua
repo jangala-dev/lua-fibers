@@ -235,6 +235,49 @@ local function test_fifo_put_op_construction_does_not_mutate_state()
   assert_eq(only, 'won')
 end
 
+local function test_fifo_order_follows_commit_not_option_construction()
+  local q = FIFO.new(math.huge):label('q-commit-order')
+  local described_first = q:put_op('described-first')
+  local committed_first = q:put_op('committed-first')
+
+  local rt = new_runtime()
+  rt:spawn_raw(function()
+    rt:perform(committed_first)
+    rt:perform(described_first)
+  end):label('producer')
+  assert_status(rt:run(), 'found')
+
+  local first, second
+  local rt2 = new_runtime()
+  rt2:spawn_raw(function()
+    first = rt2:perform(q:get_op())
+    second = rt2:perform(q:get_op())
+  end):label('consumer')
+  assert_status(rt2:run(), 'found')
+  assert_eq(first, 'committed-first', 'FIFO order must follow committed insertion')
+  assert_eq(second, 'described-first')
+end
+
+local function test_fifo_each_puts_receive_distinct_transactional_order()
+  local q = FIFO.new(math.huge):label('q-each-put-order')
+  local rt = new_runtime()
+  rt:spawn_raw(function()
+    rt:perform(Op.each({ q:put_op('a'), q:put_op('b') }))
+  end):label('producer')
+  assert_status(rt:run(), 'found')
+
+  local a, b
+  local rt2 = new_runtime()
+  rt2:spawn_raw(function()
+    a = rt2:perform(q:get_op())
+    b = rt2:perform(q:get_op())
+  end):label('consumer')
+  assert_status(rt2:run(), 'found')
+  if a == b or (a ~= 'a' and a ~= 'b') or (b ~= 'a' and b ~= 'b') then
+    fail('independent same-world puts must retain two distinctly ordered entries')
+  end
+end
+
 local function test_fifo_capacity_surface()
   local unbounded = FIFO.new(math.huge):label('unbounded')
   assert_eq(unbounded.capacity, math.huge)
@@ -259,6 +302,8 @@ local tests = {
   test_fifo_each_gets_allocate_existing_stock,
   test_bounded_fifo_capacity_and_release,
   test_fifo_put_op_construction_does_not_mutate_state,
+  test_fifo_order_follows_commit_not_option_construction,
+  test_fifo_each_puts_receive_distinct_transactional_order,
   test_fifo_capacity_surface,
 }
 

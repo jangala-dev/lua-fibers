@@ -388,6 +388,24 @@ local function test_equal_rank_entries_use_insertion_sequence_without_tostring()
   assert_eq(rows[2][1].value, 'B')
 end
 
+local function test_sequence_stays_monotonic_after_entries_are_removed()
+  local rt = new_runtime()
+  local ix = Index.new():label('idx-sequence-monotonic')
+  local first, second
+
+  rt:spawn_raw(function()
+    rt:perform(ix:insert_op('a', 1, 'A'))
+    first = rt:perform(ix:pop_first_op())
+    rt:perform(ix:insert_op('b', 1, 'B'))
+    second = rt:perform(ix:pop_first_op())
+  end):label('root')
+
+  assert_status(rt:run(), 'found')
+  if not (second.seq > first.seq) then
+    fail('Index insertion sequence must increase across committed removals')
+  end
+end
+
 local function test_import_rejects_ambiguous_rank_sequence()
   local ok, err = pcall(function()
     Index.from({
@@ -418,6 +436,7 @@ local tests = {
   test_each_parallel_pops_allocate_shared_committed_stock,
   test_each_remove_constrains_sibling_pop_without_supplying,
   test_equal_rank_entries_use_insertion_sequence_without_tostring,
+  test_sequence_stays_monotonic_after_entries_are_removed,
   test_import_rejects_ambiguous_rank_sequence,
 }
 

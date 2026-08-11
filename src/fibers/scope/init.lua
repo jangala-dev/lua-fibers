@@ -211,7 +211,9 @@ function Scope:_run_child_body(fn, task)
   return ScopeClosure.run(child, function(s)
     return fn(s, task)
   end, child._role.policy, function(results, runtime)
-    task:_publish_protected_body_result(results, runtime)
+    local exit = ScopeOutcome.protected_exit(Task.Exit, results)
+    local first, conflict = runtime:perform(child._role.body_result:publish_success_op(exit), { masked = true })
+    if first ~= true then error('Task body result already published: ' .. tostring(conflict), 0) end
   end):raise()
 end
 
@@ -251,7 +253,6 @@ function Scope:spawn_op(fn, opts)
   end, self, {
     label = opts.label,
     closure = opts.closure,
-    execution_kind = 'task',
   })
   return self
     :admit_op(task)
@@ -316,38 +317,6 @@ function Scope:accept_op(filter)
   end))
 end
 
-local function phase_live(snapshot)
-  return snapshot ~= nil and snapshot.phase == 'live'
-end
-
-local function grant_can_op(scope, item, right)
-  local subject_lifetime = Lifetime.require(item, 3)
-  return scope:_store():children_op(scope):and_then(Op.guard(function(items)
-    local function scan(i)
-      if i > #items then
-        return Op.never()
-      end
-      local b = items[i]
-      if Grant.is(b) and Grant._subject_lifetime(b) == subject_lifetime and b:has_right(right) then
-        return Op.each({
-          scope:_store():custody_snapshot_op(scope, b),
-          scope:_store():active_op(subject_lifetime),
-        }):and_then(Op.guard(function(rows)
-          local snapshot = rows[1][1]
-          local subject_active = rows[2][1]
-          if phase_live(snapshot) and subject_active then
-            return Op.always(item, { kind = 'grant', grant = b, right = right })
-          end
-          return scan(i + 1)
-        end))
-      end
-      return scan(i + 1)
-    end
-    return scan(1)
-  end))
-end
-
-
 function Scope:can_op(item, right)
   right = right or 'use'
   return self:_store()
@@ -357,7 +326,7 @@ function Scope:can_op(item, right)
         local kind = phase == 'closing' and 'closure' or 'custody'
         return Op.always(item, { kind = kind, scope = self, right = right })
       end
-      local granted = grant_can_op(self, item, right)
+      local granted = self:_store():grant_can_op(self, item, right)
       local parent = self:parent_scope()
       if parent then
         -- Child scopes inherit authority to use live obligations held by their
@@ -402,16 +371,16 @@ function Scope:grant_op(item, holder, rights, opts)
     end)
 end
 
-function Scope:start_close_op(item, reason)
-  return Closure.start_close_op(self, item, reason or 'closed')
+function Scope:start_retire_op(item, reason)
+  return Closure.start_retire_op(self, item, reason or 'retired')
 end
 
 -- Direct structural closure is intentionally two transactions: start commits
 -- the CloseClaim and its emitted driver; result observes the later retirement or
 -- retained failure. The `_op` surface exposes those phases separately.
-function Scope:close(item, reason)
+function Scope:retire(item, reason)
   local perform = require('fibers.perform')
-  local process = perform(self:start_close_op(item, reason))
+  local process = perform(self:start_retire_op(item, reason))
   local ok, result = perform(process:result_op())
   if not ok then error(result, 0) end
   return result
@@ -505,10 +474,6 @@ end
 
 function Scope:_result_completion()
   return ensure_scope_result(self._lifetime)
-end
-
-function Scope:_result_op()
-  return self:_result_completion():success_op()
 end
 
 

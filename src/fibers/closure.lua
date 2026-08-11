@@ -71,14 +71,14 @@ function Closure._merge_policy(base, override)
 end
 
 -- Local protocol constructors and structural closure processes are implemented
--- by the private driver. `start_close_op` remains transactional; completion is
+-- by the private driver. `start_retire_op` remains transactional; completion is
 -- observed later through the returned CloseProcess.
 for _, name in ipairs({
   'protocol',
   'none',
   'request_then_wait',
   'require_ok',
-  'start_close_op',
+  'start_retire_op',
   'Process',
   'is_process',
   'Failure',

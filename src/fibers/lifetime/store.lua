@@ -8,6 +8,7 @@ local Op = require('fibers.op')
 local Effect = require('fibers.effect')
 local Facility = require('fibers.resource.authoring')
 local StateMachine = require('fibers.resource.machine')
+local Grant = require('fibers.grant')
 
 local Store = {}
 Store.__index = Store
@@ -187,8 +188,6 @@ local NodeQuery = StateMachine.isolated_query('lifetime.node.query', function(st
   local kind = p.kind
   if kind == 'has_custody' then
     return Ready.same(is_owned(state) and state.custodian == p.custodian)
-  elseif kind == 'custody_snapshot' then
-    return Ready.same(is_owned(state) and state.custodian == p.custodian and custody_snapshot(p.item, state) or nil)
   elseif kind == 'active' then
     return Ready.same(state.phase == 'live')
   elseif kind == 'authorise' then
@@ -213,7 +212,7 @@ local NodeQuery = StateMachine.isolated_query('lifetime.node.query', function(st
     local request = state.close_request
     if type(request) ~= 'table' or request.interrupt ~= true then return Wait end
     return Ready.same(true, request.interrupt_reason or request.reason)
-  elseif kind == 'closed' then
+  elseif kind == 'retired' then
     if state.phase ~= 'retired' then return Wait end
     return Ready.same(true, close_reason(state))
   elseif kind == 'close_claim' then
@@ -774,8 +773,8 @@ function Store:close_requested_op(value)
   return machine_op(self, node_of(value), NodeQuery, { kind = 'close_requested' })
 end
 
-function Store:closed_op(value)
-  return machine_op(self, node_of(value), NodeQuery, { kind = 'closed' })
+function Store:retired_op(value)
+  return machine_op(self, node_of(value), NodeQuery, { kind = 'retired' })
 end
 
 function Store:_close_requested(value)
@@ -805,11 +804,6 @@ function Store:has_custody_op(view, item)
   return machine_op(self, node, NodeQuery, { kind = 'has_custody', custodian = custodian_of(view), item = node })
 end
 
-function Store:custody_snapshot_op(view, item)
-  local node = node_of(item)
-  return machine_op(self, node, NodeQuery, { kind = 'custody_snapshot', custodian = custodian_of(view), item = node })
-end
-
 function Store:children_op(view)
   return machine_op(self, custodian_of(view), NodeQuery, { kind = 'children' })
 end
@@ -831,13 +825,25 @@ function Store:custody_can_op(view, item, right, opts)
   })
 end
 
-
-function Store:_close_claim(value)
-  local node = node_of(value)
-  if not node then return nil end
-  self:attach_node(node)
-  return node._lifetime_location.value.close_claim
+function Store:grant_can_op(view, item, right)
+  local subject = assert(node_of(item), 'Grant subject must carry a Lifetime')
+  return Op.each({ self:active_op(subject), self:children_op(view) }):and_then(Op.guard(function(rows)
+    if not rows[1][1] then return Op.never() end
+    local children = rows[2][1]
+    local function scan(i)
+      local grant = children[i]
+      if not grant then return Op.never() end
+      if not (Grant.is(grant) and Grant._subject_lifetime(grant) == subject and grant:has_right(right)) then
+        return scan(i + 1)
+      end
+      return self:custody_can_op(view, grant):and_then(Op.guard(function(ok)
+        return ok and Op.always(item, { kind = 'grant', grant = grant, right = right }) or scan(i + 1)
+      end))
+    end
+    return scan(1)
+  end))
 end
+
 
 function Store:_custodian(value)
   local node = node_of(value)

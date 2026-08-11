@@ -9,7 +9,6 @@
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
-local Cell = require('fibers.resource.cell')
 local CommandModule = require('fibers.process.command')
 local IOError = require('fibers.io.error')
 local FlowErrors = require('fibers.resource.flow.errors')

@@ -69,7 +69,7 @@ do
     eq(late_child._lifetime._runtime, second_runtime,
       'admission reads the current dormant graph at performance')
     eq(second_scope:_store():_phase(late_child._lifetime), 'live', 'late dormant child is admitted atomically')
-    second_scope:close(value, 'phase-admission-done')
+    second_scope:retire(value, 'phase-admission-done')
   end):label('phase-admission-second-driver')
   local second_status = run_to_rest(second_runtime)
   truthy(second_status.tag == 'quiescent' or second_status.tag == 'idle')
@@ -97,7 +97,7 @@ do
     task = runtime:perform(spawn)
     returned = runtime:perform(task:await_op())
     eq(starts, 1, 'committed spawn starts exactly once')
-    scope:close(task, 'phase-spawn-done')
+    scope:retire(task, 'phase-spawn-done')
   end):label('phase-spawn-driver')
 
   local status = run_to_rest(runtime)
@@ -159,7 +159,7 @@ do
     runtime:perform(task:outcome_op())
     local entry = LifetimeState.closure_state(parent).processed[task:lifetime()]
     child_exit = entry and entry.exit or nil
-    parent:close(task, 'phase-cancel-child-retired')
+    parent:retire(task, 'phase-cancel-child-retired')
   end):label('phase-cancel-parent-driver')
 
   local status = run_to_rest(runtime)

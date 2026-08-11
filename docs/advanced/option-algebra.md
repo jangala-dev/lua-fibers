@@ -571,7 +571,7 @@ successful Closure progress is retained across later failure and retry
 failed Closure remains represented in the Lifetime store
 ```
 
-Structural Closure initiation is an ordinary transaction. `start_close_op`
+Structural Closure initiation is an ordinary transaction. `start_retire_op`
 acquires a private CloseClaim and carries an emitted consequence which schedules
 the closure driver only if the complete world commits. The returned
 `Closure.Process` remains transactionally sequenceable; its attempt result is

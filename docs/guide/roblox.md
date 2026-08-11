@@ -485,7 +485,7 @@ local frames = Roblox.pulse(RunService.Heartbeat, {
 - `pulse` coalesces a burst and returns the newest logical generation.
 
 Each subscription owns its `RBXScriptConnection`. It is disconnected when the
-custodial Scope closes, or explicitly through `subscription:close()`.
+custodial Scope closes, or explicitly through `subscription:retire()`.
 
 ```luau
 local pressed = Roblox.events(skipButton.Activated, {
@@ -523,7 +523,7 @@ Signal subscription is an immediate committed host action. Construct it in the
 body of a running fiber or another post-commit path, not inside `guard`, `map`,
 effect preparation or another callback which Fibers may replay. The
 returned subscription is then an ordinary resource held in custody: `next_op()` is inert,
-`start_close_op()` transactionally starts structural Closure, `close()` waits for
+`start_retire_op()` transactionally starts structural Closure, `close()` waits for
 that process, and Scope Closure disconnects it automatically.
 
 The signal-mode example deliberately fires several observations before one

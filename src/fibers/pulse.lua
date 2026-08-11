@@ -5,21 +5,16 @@ local Op = require('fibers.op')
 local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
 local Completion = require('fibers.resource.completion')
+local Contract = require('fibers.internal.contract')
 
 local Pulse = {}
 Pulse.__index = Pulse
 
 local next_id = 0
 
-local function non_negative_integer(value, label, level)
-  if type(value) ~= 'number' or value < 0 or value % 1 ~= 0 then
-    error(label .. ' must be a non-negative integer', level or 3)
-  end
-  return value
-end
-
 function Pulse.new(initial)
-  initial = non_negative_integer(initial or 0, 'pulse initial version', 2)
+  initial = initial or 0
+  Contract.non_negative_integer(initial, 'pulse initial version', 2)
   next_id = next_id + 1
   local id = 'pulse-' .. tostring(next_id)
   local pulse = Label.attach(setmetatable({
@@ -65,7 +60,7 @@ function Pulse:close_op(reason)
 end
 
 function Pulse:changed_op(last_seen)
-  non_negative_integer(last_seen, 'pulse changed last_seen', 2)
+  Contract.non_negative_integer(last_seen, 'pulse changed last_seen', 2)
 
   local changed = self._version:at_least_op(last_seen + 1):map(function(version)
     return version, nil

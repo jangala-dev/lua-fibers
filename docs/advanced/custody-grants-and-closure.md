@@ -129,8 +129,8 @@ scope:admit_op(resource)
 scope:move_op(resource, target_scope)
 scope:offer_op(resource, target_scope, terms)
 scope:accept_op(filter)
-scope:start_close_op(resource, reason)
-scope:close(resource, reason)
+scope:start_retire_op(resource, reason)
+scope:retire(resource, reason)
 
 scope:has_custody_op(resource)
 ```
@@ -194,7 +194,7 @@ local stream, authority = fibers.perform(worker:can_op(stream, 'read'))
 Closing the Grant revokes the authority:
 
 ```lua
-worker:close(grant, 'revoked')
+worker:retire(grant, 'revoked')
 ```
 
 A Grant closes automatically when its holding Scope closes.
@@ -410,12 +410,12 @@ inside the ordinary Option algebra:
 
 ```lua
 local process = fibers.perform(
-  scope:start_close_op(resource, 'shutdown')
+  scope:start_retire_op(resource, 'shutdown')
     :and_then(registry:write_op('closing'))
 )
 ```
 
-`start_close_op` transactionally acquires the CloseClaim and emits the committed
+`start_retire_op` transactionally acquires the CloseClaim and emits the committed
 start of an internal closure driver. If the complete candidate loses a
 `choice`, `or_else`, `each` or later `and_then`, neither the claim nor the start
 consequence commits. The returned `Closure.Process` is therefore an ordinary
@@ -441,7 +441,7 @@ fibers.perform(
 )
 ```
 
-For ordinary procedural use, `scope:close(resource, reason)` performs the start
+For ordinary procedural use, `scope:retire(resource, reason)` performs the start
 and result observations and raises a retained `Closure.Failure` if closure does
 not complete.
 

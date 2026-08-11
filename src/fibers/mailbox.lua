@@ -1,26 +1,33 @@
--- Closeable mailbox from Channel + RefCount + Cell + Counter.
+-- Closeable mailbox from Channel + private reference counting + Cell + Counter.
 
 local Channel = require('fibers.channel')
-local RefCount = require('fibers.resource.ref_count')
+local Cell = require('fibers.resource.cell')
 local Counter = require('fibers.resource.counter')
 local Op = require('fibers.op')
 local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
 local Completion = require('fibers.resource.completion')
+local Contract = require('fibers.internal.contract')
 
 local Mailbox = {}
 local Tx = {}
 local Rx = {}
 
-Mailbox.__index = Mailbox
 Tx.__index = Tx
 Rx.__index = Rx
 
 local next_id = 0
 
-local function tx(mailbox, handle)
-  return setmetatable({ _mailbox = mailbox, _handle = handle }, Tx)
+local function tx(mailbox, active)
+  return setmetatable({ _mailbox = mailbox, _active = Cell.new(active ~= false) }, Tx)
 end
+
+local function active_op(sender, active)
+  return sender._active:expect_op(active)
+end
+
+local function true_() return true end
+local function false_() return false end
 
 local function reason_op(mailbox)
   return mailbox._reason:read_op():map(function(state)
@@ -30,7 +37,7 @@ end
 
 local function remember_reason_op(mailbox, reason)
   if reason == nil then return Op.always(true) end
-  return mailbox._reason:publish_success_op(reason):map(function() return true end)
+  return mailbox._reason:publish_success_op(reason):map(true_)
 end
 
 local function drop_op(mailbox)
@@ -53,37 +60,32 @@ local function drop_oldest(mailbox, value)
     mailbox._messages:get_op(),
     mailbox._messages:put_op(value),
     drop_op(mailbox),
-  }):map(function()
-    return true
-  end)
+  }):map(true_)
   return put:or_else(replace)
 end
 
 local function new_mailbox(capacity, accept, full)
   capacity = capacity or 0
-  if type(capacity) ~= 'number' or capacity < 0 or capacity % 1 ~= 0 then
-    error('mailbox capacity must be a non-negative integer', 3)
-  end
+  Contract.non_negative_integer(capacity, 'mailbox capacity', 3)
 
   next_id = next_id + 1
-  local refs, first = RefCount.new()
   local id = 'mailbox-' .. tostring(next_id)
-  local mailbox = Label.attach(setmetatable({
+  local mailbox = Label.attach({
     _fibers_id = id,
     capacity = capacity,
     full = full,
     _accept = accept,
     _messages = Channel.new(capacity),
-    _senders = refs,
+    _senders = Counter.new(1),
     _reason = Completion.new(),
     _dropped = Counter.new(0),
-  }, Mailbox))
+  })
   Label.child(mailbox._messages, mailbox, 'messages')
   Label.child(mailbox._senders, mailbox, 'senders')
   Label.child(mailbox._reason, mailbox, 'reason')
   Label.child(mailbox._dropped, mailbox, 'dropped')
 
-  return tx(mailbox, first), setmetatable({ _mailbox = mailbox }, Rx)
+  return tx(mailbox, true), setmetatable({ _mailbox = mailbox }, Rx)
 end
 
 function Mailbox.new(capacity)
@@ -109,9 +111,9 @@ function Tx:send_op(value)
 
   local mailbox = self._mailbox
   local put = mailbox._accept(mailbox, value)
-  local send = self._handle:active_op():and_then(put)
+  local send = active_op(self, true):and_then(put)
 
-  local inactive = self._handle:inactive_op():and_then(reason_op(mailbox):map(function(reason)
+  local inactive = active_op(self, false):and_then(reason_op(mailbox):map(function(reason)
       return nil, reason
     end))
 
@@ -120,30 +122,21 @@ end
 
 function Tx:clone_op()
   local mailbox = self._mailbox
-  return self._handle:clone_op():wrap(function(handle)
-    return tx(mailbox, handle)
+  local clone = active_op(self, true):and_then(mailbox._senders:give_op(1)):wrap(function()
+    return tx(mailbox, true)
   end)
+  return clone:or_else(active_op(self, false):wrap(function() return tx(mailbox, false) end))
 end
 
 function Tx:close_op(reason)
   local mailbox = self._mailbox
-  return self._handle:close_op():and_then(Op.guard(function(closed)
-    if not closed then return Op.always(true) end
-    return remember_reason_op(mailbox, reason):map(function()
-      return true
-    end)
+  local close = active_op(self, true):and_then(Op.each(
+    self._active:write_op(false), mailbox._senders:take_op(1)
+  ):map(true_)):or_else(active_op(self, false):map(false_))
+  return close:and_then(Op.guard(function(closed)
+    return closed and remember_reason_op(mailbox, reason):map(true_) or Op.always(true)
   end))
 end
-
-function Tx:why_op()
-  return reason_op(self._mailbox)
-end
-
-
-function Tx:dropped_op()
-  return self._mailbox._dropped:read_op()
-end
-
 
 function Rx:recv_op()
   local mailbox = self._mailbox
@@ -153,22 +146,8 @@ function Rx:recv_op()
   return mailbox._messages:get_op():or_else(closed)
 end
 
-function Rx:why_op()
-  return reason_op(self._mailbox)
-end
-
-
-function Rx:dropped_op()
-  return self._mailbox._dropped:read_op()
-end
-
-
-
-
-
-
-
-
+local function why_op(self) return reason_op(self._mailbox) end
+local function dropped_op(self) return self._mailbox._dropped:read_op() end
 
 local function endpoint_label(self, ...)
   local mailbox = self._mailbox
@@ -177,8 +156,9 @@ local function endpoint_label(self, ...)
   return self
 end
 
-Tx.label = endpoint_label
-Rx.label = endpoint_label
+Tx.label, Rx.label = endpoint_label, endpoint_label
+Tx.why_op, Rx.why_op = why_op, why_op
+Tx.dropped_op, Rx.dropped_op = dropped_op, dropped_op
 
 Mailbox.Tx = Tx
 Mailbox.Rx = Rx

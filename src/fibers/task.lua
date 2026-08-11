@@ -5,7 +5,6 @@
 -- Scope:spawn_op; driven domain resources may create a Task view over their own
 -- running Lifetime internally.
 
-local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local perform = require('fibers.perform')
 local Completion = require('fibers.resource.completion')
@@ -16,7 +15,6 @@ local ScopeOutcome = require('fibers.scope.outcome')
 local ScopeResult = ScopeOutcome.Result
 local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
-local Contract = require('fibers.internal.contract')
 
 local unpack_ = table.unpack or unpack
 
@@ -75,29 +73,15 @@ function Exit:tostring()
 end
 Exit.__tostring = Exit.tostring
 
-local function pack(...)
-  return { n = select('#', ...), ... }
-end
-
 local Task = {}
 Task.__index = Task
 
+local function execution(task) return task._lifetime:_scope_role(false) end
+
 function Task._new(fn, parent_scope, opts)
   if type(fn) ~= 'function' then error('Task creation expects a function', 2) end
-  opts = Contract.options(opts, {
-    lifetime = true,
-    label = true,
-    closure = true,
-    execution_kind = true,
-  }, 'Task._new options', 2)
-  local execution_kind = opts.execution_kind or 'task'
-  if execution_kind ~= 'task' and execution_kind ~= 'resource_driver' then
-    error("Task._new execution_kind must be 'task' or 'resource_driver'", 2)
-  end
   local life = opts.lifetime
-  if life ~= nil and not Lifetime.is(life) then
-    error('Task lifetime must be a Lifetime', 2)
-  end
+  local execution_kind = opts.execution_kind or 'task'
   if not life then
     life = Lifetime.new({
       label = opts.label,
@@ -113,15 +97,11 @@ function Task._new(fn, parent_scope, opts)
   local scope_role = life:_scope_role(true)
   scope_role.policy = Closure._merge_policy(scope_role.policy,
     Closure._merge_policy(inherited, Closure.policy(opts.closure)))
-  local task = setmetatable({
-    _lifetime = life,
-    _fibers_task = true,
-    _body = fn,
-    _execution_kind = execution_kind,
-    _body_result = Completion.new():label((opts.label or 'task') .. '-body-result'),
-  }, Task)
+  scope_role.execution_kind = execution_kind
+  scope_role.body_result = Completion.new():label((opts.label or 'task') .. '-body-result')
+  local task = setmetatable({ _lifetime = life, _fibers_task = true, _body = fn }, Task)
   life:_attach_task(task)
-  Label.child(task._body_result, life, 'body-result')
+  Label.child(scope_role.body_result, life, 'body-result')
   return task
 end
 
@@ -147,68 +127,32 @@ end
 
 
 
--- Publish the execution result at the point where the user's Task body exits,
--- not after the Scope sharing this Lifetime has retired its descendants.
--- Publication is strict and exactly once; a second publication is an invariant
--- violation rather than an idempotent compatibility path.
-function Task:_publish_protected_body_result(results, runtime)
-  local rt = runtime or Runtime.current()
-  if not rt then error('task body result published without a current runtime', 2) end
-  local exit = ScopeOutcome.protected_exit(Exit, results)
-  local first, conflict = rt:perform(self._body_result:publish_success_op(exit), { masked = true })
-  if first ~= true then
-    error('Task body result already published: ' .. tostring(conflict), 0)
-  end
-  return exit
-end
-
-function Task:_spawn_body(fn)
-  local task = self
-  return function()
-    local rt = Runtime.current()
-    if not rt then error('task started without a current runtime', 2) end
-    local results = pack(Protected.pcall(fn, task))
-    fn = nil
-    local state = rt:perform(task._body_result:read_op(), { masked = true })
-    if type(state) ~= 'table' or state.kind == 'pending' then
-      error('Scope-backed Task returned without publishing its body result', 0)
-    end
-  end
-end
-
 -- Admission is the semantic birth of a running Task.  The LifetimeStore
 -- activates body-bearing Lifetimes only after the complete admission commit has
 -- installed custody and bound every admitted node to the Runtime.
-function Task:_take_spawn_body(runtime)
+function Task:_activate_committed(runtime)
   local life = self._lifetime
   if runtime ~= nil and life._runtime ~= runtime then
     error('committed Task activation belongs to another Runtime', 2)
   end
   local fn = self._body
-  if type(fn) ~= 'function' then
-    error('committed Task activation has no dormant body', 2)
-  end
-  local runnable = self:_spawn_body(fn)
+  if type(fn) ~= 'function' then error('committed Task activation has no dormant body', 2) end
+  local task = self
   self._body = nil
-  return runnable
-end
-
-function Task:_activate_committed(runtime)
-  return runtime:_spawn_committed(self:_take_spawn_body(runtime), nil, self)
-end
-
--- Execution kind is the one policy distinction needed by structural retirement.
--- Ordinary Tasks retire their own quiescent Lifetime after any body result. A
--- domain-resource driver may do so only after normal execution; on failure the
--- resource remains the custodian's cleanup responsibility.
-function Task:_should_self_retire(body_ok)
-  if self._execution_kind == 'task' then return true end
-  if self._execution_kind == 'resource_driver' then return body_ok == true end
-  error('unknown Task execution kind ' .. tostring(self._execution_kind), 0)
+  return runtime:_spawn_committed(function()
+    local rt = Runtime.current()
+    if not rt then error('task started without a current runtime', 2) end
+    Protected.pcall(fn, task)
+    fn = nil
+    local state = rt:perform(execution(task).body_result:read_op(), { masked = true })
+    if type(state) ~= 'table' or state.kind == 'pending' then
+      error('Scope-backed Task returned without publishing its body result', 0)
+    end
+  end, nil, self)
 end
 
 function Task:body_result_op()
-  return self._body_result:success_op()
+  return execution(self).body_result:success_op()
 end
 
 -- `body_result_op` observes immediate execution. `await_op` waits for complete

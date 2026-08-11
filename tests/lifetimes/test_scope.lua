@@ -26,7 +26,7 @@ local function accept_matching(life, pred)
 end
 
 local function retire(rt, scope, item, reason)
-  return scope:close(item, reason or 'done')
+  return scope:retire(item, reason or 'done')
 end
 
 local life = FibersScope.new():label('life')

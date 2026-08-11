@@ -145,18 +145,9 @@ function Closure.running()
     if reason == Lifetime.CloseReason.NORMAL then return Op.always(true) end
     return entry.node:request_cancel_op(reason)
   end, function(_ctx, entry)
-    local node = entry.node
-    local task = node and node:_task()
-    if task and task.body_result_op then
-      return task:body_result_op():map(function() return true end)
-    end
-    if node then
-      local role = node:_scope_role(false)
-      if role and role.result then
-        return role.result:success_op():map(function() return true end)
-      end
-    end
-    return Op.always(true)
+    local role = entry.node and entry.node:_scope_role(false)
+    local done = role and (role.body_result or role.result)
+    return done and done:success_op():map(function() return true end) or Op.always(true)
   end, { name = 'running_lifetime' })
 end
 
@@ -613,7 +604,7 @@ local function start_claim_op(ctx, claim)
   return Op.emit(start_effect(process, false)):map(function() return process end)
 end
 
-function Closure.start_close_op(ctx, item, reason)
+function Closure.start_retire_op(ctx, item, reason)
   require_context(ctx)
   local purpose = { type = 'retire', reason = reason }
   return ctx:_store():_acquire_close_claim_op(ctx, item, purpose)

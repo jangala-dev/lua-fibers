@@ -9,9 +9,15 @@ local function copy_entry(entry)
   return entry and { key = entry.key, rank = entry.rank, value = entry.value, seq = entry.seq } or nil
 end
 
-local function insert(entries, entry)
-  if entries[entry.key] ~= nil then return nil end
-  return Facility.outcome(Facility.patch.map_put(entry.key, entry, 'insert'), true)
+local function insert(entries, request, context)
+  local key = request.key
+  if key ~= nil and entries[key] ~= nil then return nil end
+  local serial = (context and context.serial) or 1
+  local seq = request.base + request.location.version + serial / (serial + 1)
+  if request.prefix then key = request.prefix .. tostring(seq) end
+  if entries[key] ~= nil then return nil end
+  local entry = { key = key, rank = request.rank, value = request.value, seq = seq }
+  return Facility.outcome(Facility.patch.map_put(key, entry, 'insert'), true)
 end
 
 local function remove(entries, key)
@@ -41,36 +47,32 @@ local function pop(entries, maximum)
 end
 
 local function create(entries)
-  local index = Facility.identity(setmetatable({ _next_seq = 0 }, Index), Kind)
-  local initial, order = {}, {}
+  local index = Facility.identity(setmetatable({}, Index), Kind)
+  local initial, order, maximum = {}, {}, 0
   for i = 1, #entries do
     local entry, key = entries[i], entries[i].key or i
     local rank = entry.rank or i
     local seq = entry.seq
-    if seq == nil then seq = index._next_seq + 1 end
+    if seq == nil then seq = maximum + 1 end
     if rank == nil or rank ~= rank then error('index entry rank is required', 3) end
     if type(seq) ~= 'number' or seq ~= seq then error('index entry sequence must be a number', 3) end
     local by_seq = order[rank]
     if not by_seq then by_seq = {}; order[rank] = by_seq end
     if by_seq[seq] then error('index entries require unique (rank, sequence) pairs', 3) end
     by_seq[seq] = true
-    if seq > index._next_seq then index._next_seq = seq end
+    maximum = math.max(maximum, seq)
     initial[key] = { key = key, rank = rank, value = entry.value, seq = seq }
   end
   index._location = Facility.location(index, {
     algebra = 'finite_map', domain = 'finite_map', value = initial,
     clone_value = copy_entry, put_equal = false, remove_idempotent = true,
   })
+  index._sequence_base = maximum
   return index
 end
 
 function Index.new() return create({}) end
 function Index.from(entries) return create(entries) end
-
-local function next_sequence(index)
-  index._next_seq = index._next_seq + 1
-  return index._next_seq
-end
 
 local function change_spec(index, field, demand, supply, step)
   local spec = index[field]
@@ -103,22 +105,20 @@ function Index:insert_op(key, rank, value)
   if key == nil then error('index insert requires a key', 2) end
   if rank == nil or rank ~= rank then error('index insert requires a rank', 2) end
   return Facility.bind(change_spec(self, '_insert_spec', 'down', 'up', insert), {
-    key = key, rank = rank, value = value, seq = next_sequence(self),
+    key = key, rank = rank, value = value, base = self._sequence_base, location = self._location,
   })
 end
 
 function Index:insert_auto_op(rank, value)
   if rank == nil or rank ~= rank then error('index insert_auto requires a rank', 2) end
-  local seq = next_sequence(self)
   return Facility.bind(change_spec(self, '_insert_spec', 'down', 'up', insert), {
-    key = self._fibers_id .. ':auto:' .. tostring(seq), rank = rank, value = value, seq = seq,
+    prefix = self._fibers_id .. ':auto:', rank = rank, value = value, base = self._sequence_base, location = self._location,
   })
 end
 
 function Index:append_op(value)
-  local seq = next_sequence(self)
   return Facility.bind(change_spec(self, '_insert_spec', 'down', 'up', insert), {
-    key = self._fibers_id .. ':append:' .. tostring(seq), rank = math.huge, value = value, seq = seq,
+    prefix = self._fibers_id .. ':append:', rank = math.huge, value = value, base = self._sequence_base, location = self._location,
   })
 end
 

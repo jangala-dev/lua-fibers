@@ -19,7 +19,7 @@ local Counter = require('fibers.resource.counter')
 local Lifetime = require('fibers.lifetime')
 local Machine = require('fibers.resource.machine')
 local Index = require('fibers.resource.index')
-local Lease = require('fibers.resource.lease')
+local ClaimSet = require('fibers.resource.claim_set')
 local Signal = require('fibers.resource.signal')
 local EventQueue = require('fibers.resource.event_queue')
 local Readiness = require('fibers.io.readiness')
@@ -93,9 +93,9 @@ do
     error('v1 Index must expose state only through algebraic operations', 2)
   end
 
-  local lease = Lease.new()
-  if lease.holders ~= nil or lease.versions ~= nil or lease.version ~= nil or lease.compat ~= nil then
-    error('v1 Lease must expose state only through algebraic operations', 2)
+  local claim_set = ClaimSet.new()
+  if claim_set.holders ~= nil or claim_set.versions ~= nil or claim_set.version ~= nil or claim_set.compat ~= nil then
+    error('v1 ClaimSet must expose state only through algebraic operations', 2)
   end
 
   local signal = Signal.new()

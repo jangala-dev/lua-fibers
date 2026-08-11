@@ -25,7 +25,7 @@ local FibersMachine = require('fibers.resource.machine')
 local FibersCounter = require('fibers.resource.counter')
 local FibersFIFO = require('fibers.resource.fifo')
 local FibersRendezvous = require('fibers.resource.rendezvous')
-local FibersLease = require('fibers.resource.lease')
+local FibersClaimSet = require('fibers.resource.claim_set')
 local FibersSignal = require('fibers.resource.signal')
 local FibersEventQueue = require('fibers.resource.event_queue')
 local FibersClock = require('fibers.resource.clock')
@@ -44,7 +44,6 @@ local FibersMailbox = require('fibers.mailbox')
 local FibersPulse = require('fibers.pulse')
 local FibersSemaphore = require('fibers.semaphore')
 local FibersLatch = require('fibers.latch')
-local FibersRefCount = require('fibers.resource.ref_count')
 local FibersProtected = require('fibers.protected')
 
 local function fail(msg)
@@ -179,23 +178,22 @@ do
     } },
     { 'Closure', FibersClosure, {
       'none', 'running', 'nursery', 'supervisor', 'protocol', 'policy',
-      'request_then_wait', 'require_ok', 'start_close_op',
+      'request_then_wait', 'require_ok', 'start_retire_op',
     } },
-    { 'Grant', FibersGrant, { 'is', 'closed', 'closed_op', 'has_right' } },
+    { 'Grant', FibersGrant, { 'is', 'retired', 'retired_op', 'has_right' } },
     { 'Channel', FibersChannel, { 'new' } },
     { 'Mailbox', FibersMailbox, { 'new', 'reject_newest', 'drop_oldest' } },
     { 'Pulse', FibersPulse, { 'new' } },
     { 'Counter', FibersCounter, { 'new', 'bounded', 'range' } },
     { 'FIFO', FibersFIFO, { 'new' } },
     { 'Rendezvous', FibersRendezvous, { 'new' } },
-    { 'Lease', FibersLease, { 'new' } },
+    { 'ClaimSet', FibersClaimSet, { 'new' } },
     { 'Signal', FibersSignal, { 'new' } },
     { 'EventQueue', FibersEventQueue, { 'new' } },
     { 'Clock', FibersClock, { 'new', 'default' } },
     { 'Readiness', FibersReadiness, { 'new' } },
     { 'Semaphore', FibersSemaphore, { 'new' } },
     { 'Latch', FibersLatch, { 'new' } },
-    { 'RefCount', FibersRefCount, { 'new' } },
   }
 
   for i = 1, #surfaces do
@@ -214,7 +212,7 @@ do
   local scope = FibersScope.new():label('public-scope-surface')
   assert_functions('Scope', scope, {
     'spawn_op', 'move_op', 'offer_op', 'accept_op', 'grant_op', 'can_op',
-    'start_close_op', 'close', 'has_custody_op',
+    'start_retire_op', 'retire', 'has_custody_op',
   })
 end
 

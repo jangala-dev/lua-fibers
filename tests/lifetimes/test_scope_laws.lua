@@ -68,7 +68,7 @@ do
       end)
       :or_else(Op.always('blocked')))
     still_to = fibers.perform(to:has_custody_op(h))
-    to:close(h)
+    to:retire(h)
   end)
   assert_eq(moved, true, 'move_op should update concrete owner')
   assert_eq(from_after, false, 'source should not retain custody after move')
@@ -86,7 +86,7 @@ do
   fibers.run(function()
     fibers.perform(life:admit_op(h))
     live_phase = Lifetimes.state(h).phase
-    life:close(h, 'law closure')
+    life:retire(h, 'law closure')
     local state = Lifetimes.state(h)
     owner_after = state.custodian
     closure_phase = state.phase
@@ -121,7 +121,7 @@ do
   })
   fibers.run(function()
     fibers.perform(life:admit_op(h))
-    life:close(h)
+    life:retire(h)
   end)
   assert_eq(discharged, true, 'protocol table finish_op should run during Closure')
 end

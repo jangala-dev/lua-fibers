@@ -176,19 +176,15 @@ local function await_owned_execution_results(scope)
   for i = 1, #children do
     local node = Lifetime.of(children[i])
     if node then
-      local task = node:_task()
-      if task and task.body_result_op then
-        -- A Task may not have entered its Scope driver when the snapshot is
-        -- taken. Body completion proves the driver has started and therefore
-        -- installed its Scope-result Completion before we inspect it.
-        waits[#waits + 1] = task:body_result_op():and_then(Op.guard(function()
-          local role = node:_scope_role(false)
-          local result = role and role.result
-          return result and result:success_op() or Op.always(true)
+      local role = node:_scope_role(false)
+      local body, result = role and role.body_result, role and role.result
+      if body then
+        -- Body completion proves the Task driver has installed its Scope result.
+        waits[#waits + 1] = body:success_op():and_then(Op.guard(function()
+          return role.result and role.result:success_op() or Op.always(true)
         end))
-      else
-        local role = node:_scope_role(false)
-        if role and role.result then waits[#waits + 1] = role.result:success_op() end
+      elseif result then
+        waits[#waits + 1] = result:success_op()
       end
     end
   end
@@ -327,11 +323,11 @@ local function completed_exit(node)
     local values = terminal.values or {}
     return result_exit(values[1])
   end
-  local task = node:_task()
-  local body = task and task._body_result and task._body_result._location.value
+  local role = node:_scope_role(false)
+  local body = role and role.body_result and role.body_result._location.value
   if type(body) == 'table' and body.kind == 'succeeded' then
-    local values = body.values or {}
-    return Exit.is(values[1]) and values[1] or nil
+    local value = (body.values or {})[1]
+    return Exit.is(value) and value or nil
   end
   return nil
 end
@@ -461,8 +457,8 @@ function Driver.run(scope, fn, closure, on_body_exit)
     -- structural cleanup to its custodian so cleanup failure is reported by the
     -- owner rather than stranding a self-held recovery claim inside the failed
     -- execution.
-    local task = scope._lifetime:_task()
-    local self_retires = task == nil or task:_should_self_retire(body_ok)
+    local kind = scope._role.execution_kind
+    local self_retires = kind == nil or kind == 'task' or body_ok == true
     if self_retires
       and not (ScopeResult.is(result) and result.closure_failures and #result.closure_failures > 0) then
       local parent = scope:parent_scope()

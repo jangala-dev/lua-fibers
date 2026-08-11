@@ -9,11 +9,11 @@ package.path = table.concat({
 }, ';')
 local Op = require('fibers.op')
 local Index = require('fibers.resource.index')
-local Lease = require('fibers.resource.lease')
+local ClaimSet = require('fibers.resource.claim_set')
 local Runtime = require('fibers.runtime')
 local State = require('tests.support.resource_state')
 local entries = State.index_entries
-local holders = State.lease_holders
+local holders = State.claim_holders
 local function fail(m)
   error(m, 2)
 end
@@ -45,12 +45,12 @@ local function seed()
   }
 end
 
-local function seed_lease(lease, subject, holders)
+local function seed_claim_set(lease, subject, holders)
   local r = rt()
   local ops = {}
   for holder, mode in pairs(holders) do ops[#ops + 1] = lease:acquire_op(subject, mode, holder) end
   r:spawn_raw(function() r:perform(#ops == 1 and ops[1] or Op.each(ops)) end)
-  found(r:run(), 'lease seed')
+  found(r:run(), 'claim set seed')
 end
 
 local function index_each_hides_better_insert()
@@ -100,7 +100,7 @@ local function index_duplicate_insert_conflicts()
   eq(next(entries(x)), nil)
 end
 local function lease_three_readers_form_clique()
-  local l = Lease.new({ read = { read = true }, write = {} })
+  local l = ClaimSet.new({ read = { read = true }, write = {} })
   local r = rt()
   local rows
   r:spawn_raw(function()
@@ -116,7 +116,7 @@ local function lease_three_readers_form_clique()
   eq(holders(l, 's').c, 'read')
 end
 local function lease_requires_symmetric_compatibility()
-  local l = Lease.new({ a = { b = true }, b = {} })
+  local l = ClaimSet.new({ a = { b = true }, b = {} })
   local r = rt({ quiet_deadlock = true })
   r:spawn_raw(function()
     r:perform(Op.together({ l:acquire_op('s', 'a', 'x'), l:acquire_op('s', 'b', 'y') }))
@@ -124,7 +124,7 @@ local function lease_requires_symmetric_compatibility()
   not_found(r:run(), 'asymmetric compatibility was accepted')
 end
 local function lease_together_same_owner_is_ordered_upgrade()
-  local l = Lease.new({ read = { read = true }, write = {} })
+  local l = ClaimSet.new({ read = { read = true }, write = {} })
   local r = rt()
   local rows
   r:spawn_raw(function()
@@ -136,7 +136,7 @@ local function lease_together_same_owner_is_ordered_upgrade()
   eq(holders(l, 's').x, 'write')
 end
 local function lease_each_same_owner_conflicts()
-  local l = Lease.new({ read = { read = true }, write = {} })
+  local l = ClaimSet.new({ read = { read = true }, write = {} })
   local r = rt({ quiet_deadlock = true })
   r:spawn_raw(function()
     r:perform(Op.each({ l:acquire_op('s', 'read', 'x'), l:acquire_op('s', 'write', 'x') }))
@@ -144,8 +144,8 @@ local function lease_each_same_owner_conflicts()
   not_found(r:run(), 'independent overwrite committed')
 end
 local function lease_one_release_does_not_remove_other_blocker()
-  local l = Lease.new({ read = { read = true }, write = {} })
-  seed_lease(l, 's', { w1 = 'write', w2 = 'write' })
+  local l = ClaimSet.new({ read = { read = true }, write = {} })
+  seed_claim_set(l, 's', { w1 = 'write', w2 = 'write' })
   local r = rt()
   local rows
   r:spawn_raw(function()
@@ -172,4 +172,4 @@ for _, t in ipairs({
 }) do
   t()
 end
-print('tests/test_index_lease_extended.lua: ok')
+print('tests/test_index_claim_set_extended.lua: ok')

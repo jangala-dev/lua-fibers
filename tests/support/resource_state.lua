@@ -13,8 +13,8 @@ function M.index_entries(index)
   return index and index._location and index._location.value or {}
 end
 
-function M.lease_holders(lease, subject)
-  local location = lease and lease._space and lease._space.locations and lease._space.locations[subject]
+function M.claim_holders(claim_set, subject)
+  local location = claim_set and claim_set._space and claim_set._space.locations and claim_set._space.locations[subject]
   local value = location and location.value
   return value and next(value) ~= nil and value or nil
 end

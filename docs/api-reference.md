@@ -304,8 +304,8 @@ Creates a scope capability. Application code normally receives scopes from `run`
 ### `Scope:accept_op([filter]) -> Op`
 ### `Scope:grant_op(item, holder, rights [, opts]) -> Op`
 ### `Scope:can_op(item, right) -> Op`
-### `Scope:start_close_op(item [, reason]) -> Op`
-### `Scope:close(item [, reason]) -> item`
+### `Scope:start_retire_op(item [, reason]) -> Op`
+### `Scope:retire(item [, reason]) -> item`
 ### `Scope:request_cancel_op([reason]) -> Op`
 ### `Scope:cancel_requested_op() -> Op`
 ### `Scope:try_run(fn) -> ScopeResult`
@@ -360,7 +360,7 @@ Scope policy is separate from local shutdown. It reacts to body, cancellation
 and child outcomes, and is supplied to Scope/task construction rather than
 being packaged into a Lifetime protocol.
 
-### `Closure.start_close_op(scope, item [, reason]) -> Op`
+### `Closure.start_retire_op(scope, item [, reason]) -> Op`
 
 Transactionally acquires structural closure responsibility and emits the
 committed start of a closure process. The returned `Closure.Process` is a
@@ -410,7 +410,7 @@ Lifetime nodes support:
 
 ```lua
 life:label([value])
-life:closed_op()
+life:retired_op()
 life:request_close_op([reason])
 life:request_cancel_op([reason])
 life:cancel_requested_op()
@@ -426,8 +426,8 @@ Live managed state has no generic snapshot API or raw epoch. Observe the domain 
 
 ### `Grant.is(value) -> boolean`
 ### `grant:has_right(right) -> boolean`
-### `grant:closed_op() -> Op`
-### `grant:closed() -> Grant`
+### `grant:retired_op() -> Op`
+### `grant:retired() -> Grant`
 
 Grants are normally created through `Scope:grant_op`.
 
@@ -870,12 +870,12 @@ Subscriptions support:
 
 ```lua
 subscription:next_op()
-subscription:closed_op()
-subscription:start_close_op([reason])
-subscription:close([reason])
+subscription:retired_op()
+subscription:start_retire_op([reason])
+subscription:retire([reason])
 ```
 
-`start_close_op` has the same two-stage structural Closure semantics as the
+`start_retire_op` has the same two-stage structural Closure semantics as the
 Scope operation and returns a `Closure.Process` when performed.
 
 See [Fibers for Roblox](guide/roblox.md).
@@ -888,8 +888,7 @@ The following modules are public but intended mainly for facility authors, embed
 - `fibers.resource.machine`
 - `fibers.resource.keyed`
 - `fibers.resource.index`
-- `fibers.resource.lease`
-- `fibers.resource.ref_count`
+- `fibers.resource.claim_set`
 - `fibers.embed.external`
 - `fibers.embed.manual`
 - `fibers.embed.queue`

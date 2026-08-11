@@ -3,13 +3,13 @@ local Keyspace = require('fibers.resource.keyspace')
 local Direct = require('fibers.internal.direct')
 local Contract = require('fibers.internal.contract')
 
-local Lease = {}
-Lease.__index = Lease
-local Kind = Facility.kind('lease')
+local ClaimSet = {}
+ClaimSet.__index = ClaimSet
+local Kind = Facility.kind('claim_set')
 
 local function copy_compat(source)
   local out = {}
-  for mode, peers in pairs(source or { lease = {} }) do
+  for mode, peers in pairs(source or {}) do
     local row = {}
     for peer, allowed in pairs(peers) do row[peer] = allowed end
     out[mode] = row
@@ -19,18 +19,18 @@ end
 
 local copy_map = Contract.copy_table
 
-function Lease.new(compat)
-  local lease = Facility.identity(setmetatable({ _compat = copy_compat(compat) }, Lease), Kind)
-  lease._space = Keyspace.new(lease, {
+function ClaimSet.new(compat)
+  local claim_set = Facility.identity(setmetatable({ _compat = copy_compat(compat) }, ClaimSet), Kind)
+  claim_set._space = Keyspace.new(claim_set, {
     algebra = 'finite_map', domain = 'finite_map', clone_initial = copy_map,
     put_equal = true, remove_idempotent = true,
   })
-  return lease
+  return claim_set
 end
 
 local function operations(self, subject)
   local location = self._space:location(subject)
-  local ops = location._lease_operations
+  local ops = location._claim_set_operations
   if ops then return ops end
   ops = {
     acquire = Facility.rule.change({
@@ -57,24 +57,24 @@ local function operations(self, subject)
       end,
     }),
   }
-  location._lease_operations = ops
+  location._claim_set_operations = ops
   return ops
 end
 
-function Lease:acquire_op(subject, mode, holder)
-  if subject == nil then error('lease acquire requires subject', 2) end
-  if mode == nil then error('lease acquire requires mode', 2) end
-  if holder == nil then error('lease acquire requires holder', 2) end
+function ClaimSet:acquire_op(subject, mode, holder)
+  if subject == nil then error('claim set acquire requires subject', 2) end
+  if mode == nil then error('claim set acquire requires mode', 2) end
+  if holder == nil then error('claim set acquire requires holder', 2) end
   return Facility.bind(operations(self, subject).acquire, { mode = mode, holder = holder })
 end
 
-function Lease:release_op(subject, holder)
-  if subject == nil then error('lease release requires subject', 2) end
-  if holder == nil then error('lease release requires holder', 2) end
+function ClaimSet:release_op(subject, holder)
+  if subject == nil then error('claim set release requires subject', 2) end
+  if holder == nil then error('claim set release requires holder', 2) end
   return Facility.bind(operations(self, subject).release, holder)
 end
 
-Lease.Kind = Kind
-Direct.install(Lease, { 'acquire', 'release' })
+ClaimSet.Kind = Kind
+Direct.install(ClaimSet, { 'acquire', 'release' })
 
-return Lease
+return ClaimSet

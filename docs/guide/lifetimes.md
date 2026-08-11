@@ -533,8 +533,8 @@ scope:admit_op(value)
 scope:move_op(value, target)
 scope:offer_op(value, target, terms)
 scope:accept_op(filter)
-scope:start_close_op(value, reason)
-scope:close(value, reason)
+scope:start_retire_op(value, reason)
+scope:retire(value, reason)
 ```
 
 A focused transactional custody predicate is available when a protocol genuinely needs it:
@@ -543,7 +543,7 @@ A focused transactional custody predicate is available when a protocol genuinely
 scope:has_custody_op(value)
 ```
 
-Fibers deliberately does not expose generic children, subtree or custody snapshots. Responsibility changes should normally be expressed by `admit_op`, `move_op`, `offer_op`, `accept_op`, `grant_op`, `can_op` and `start_close_op`, rather than observed through a parallel topology API.
+Fibers deliberately does not expose generic children, subtree or custody snapshots. Responsibility changes should normally be expressed by `admit_op`, `move_op`, `offer_op`, `accept_op`, `grant_op`, `can_op` and `start_retire_op`, rather than observed through a parallel topology API.
 
 ### Dormant resources
 
@@ -922,16 +922,16 @@ claims responsibility and arranges the committed start of the closure driver:
 
 ```lua
 local process = fibers.perform(
-  scope:start_close_op(resource, 'no longer needed')
+  scope:start_retire_op(resource, 'no longer needed')
 )
 ```
 
-`start_close_op` is a normal transactional Option. It may be extended with
+`start_retire_op` is a normal transactional Option. It may be extended with
 `map`, `and_then`, `each`, `together` or `or_else`:
 
 ```lua
 local process = fibers.perform(
-  scope:start_close_op(resource, 'shutdown')
+  scope:start_retire_op(resource, 'shutdown')
     :and_then(registry:write_op('closing'))
     :and_then(events:put_op('resource-closing'))
 )
@@ -972,7 +972,7 @@ This is the important causal boundary: **starting closure is transactional;
 completion is a later transactional fact**. Completion cannot participate in
 the transaction whose commit caused closure to begin.
 
-For ordinary sequential code, `scope:close(resource, reason)` performs both
+For ordinary sequential code, `scope:retire(resource, reason)` performs both
 stages and raises a retained `Closure.Failure` if the process fails.
 
 ### Close selection
@@ -981,8 +981,8 @@ Because initiation remains transactional, competing starts compose naturally:
 
 ```lua
 local process = fibers.perform(Op.choice(
-  scope:start_close_op(primary, 'shutdown'),
-  scope:start_close_op(secondary, 'shutdown')
+  scope:start_retire_op(primary, 'shutdown'),
+  scope:start_retire_op(secondary, 'shutdown')
 ))
 ```
 
@@ -1158,7 +1158,7 @@ Continue a particular participant after commitment. `wrap` is intentionally a
 post-commit result boundary, so its result cannot feed back into transactional
 `map` or `and_then`.
 
-Structural Closure does **not** use `wrap`. `start_close_op`, `retry_op` and
+Structural Closure does **not** use `wrap`. `start_retire_op`, `retry_op` and
 `force_op` carry their committed driver start with `emit`, so their returned
 `Closure.Process` remains a transactional value. Each process attempt publishes its result through an ordinary Completion and is observed
 later through `success_op`, `failure_op` or `result_op`.
@@ -1273,7 +1273,7 @@ result of that progress is therefore observed in a later transaction.
 7. Use negotiated offer and acceptance when the receiver must participate.
 8. Use Grants for authority without responsibility transfer.
 9. Compose authority checks with the protected action.
-10. Compose `start_close_op` or recovery initiation transactionally with the state changes that justify them.
+10. Compose `start_retire_op` or recovery initiation transactionally with the state changes that justify them.
 11. Observe Closure completion through the returned `Closure.Process` in a later transaction.
 12. Retain and resolve Closure failures rather than suppressing them.
 13. Keep cancellation masks and suspension-free regions small and explicit.

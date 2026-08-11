@@ -197,27 +197,27 @@ end
 
 ---Wait directly for the next queued or retained observation.
 
-function Subscription:closed_op()
-  return Lifetime.require(self):closed_op():map(function() return self end)
+function Subscription:retired_op()
+  return Lifetime.require(self):retired_op():map(function() return self end)
 end
 
 ---Transactionally start retirement of this subscription from its owning Scope.
-function Subscription:start_close_op(reason)
+function Subscription:start_retire_op(reason)
   if self._closed then
     return require('fibers.op').always(nil)
   end
-  return Closure.start_close_op(self._scope, self, reason or 'subscription closed')
+  return Closure.start_retire_op(self._scope, self, reason or 'subscription retired')
 end
 
 ---Retire and disconnect the subscription through its owning Scope.
-function Subscription:close(reason)
+function Subscription:retire(reason)
   if self._closed then return true end
-  local process = self._scope:perform(self:start_close_op(reason))
+  local process = self._scope:perform(self:start_retire_op(reason))
   local ok, result = self._scope:perform(process:result_op())
   if not ok then error(result, 0) end
   return result
 end
 
-Direct.install(Subscription, { 'next', 'closed' })
+Direct.install(Subscription, { 'next', 'retired' })
 
 return Subscription
