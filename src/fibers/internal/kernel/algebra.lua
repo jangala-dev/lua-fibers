@@ -76,29 +76,18 @@ M.ABSENT = setmetatable({}, {
   end,
 })
 
-local function copy_operation(op)
-  return { op = op.op, key = op.key, value = op.value, policy = op.policy }
-end
-
-local function copy_operations(ops)
+local function copy_array(values)
   local out = {}
-  for i = 1, #ops do
-    out[i] = copy_operation(ops[i])
-  end
+  for i = 1, #values do out[i] = values[i] end
   return out
 end
 
 local function clone_machine(patch)
-  local steps = {}
-  for i = 1, #patch.steps do
-    local step = patch.steps[i]
-    steps[i] = { serial = step.serial, value = step.value }
-  end
-  return { kind = 'machine', steps = steps }
+  return { kind = 'machine', steps = copy_array(patch.steps) }
 end
 
 local function clone_log(patch)
-  return { kind = patch.kind, ops = copy_operations(patch.ops) }
+  return { kind = patch.kind, ops = copy_array(patch.ops) }
 end
 
 local function clone_map_value(location, value)
@@ -116,7 +105,7 @@ local function merge_steps(left, right)
   while i <= #left and j <= #right do
     local take_left = left[i].serial <= right[j].serial
     local step = take_left and left[i] or right[j]
-    out[#out + 1] = { serial = step.serial, value = step.value }
+    out[#out + 1] = step
     if take_left then
       i = i + 1
     else
@@ -124,11 +113,11 @@ local function merge_steps(left, right)
     end
   end
   while i <= #left do
-    out[#out + 1] = { serial = left[i].serial, value = left[i].value }
+    out[#out + 1] = left[i]
     i = i + 1
   end
   while j <= #right do
-    out[#out + 1] = { serial = right[j].serial, value = right[j].value }
+    out[#out + 1] = right[j]
     j = j + 1
   end
   return out
@@ -141,7 +130,7 @@ local function filter_operations(patch, direction)
     local up = op.op == 'put'
     local down = op.op == 'remove' or op.op == 'take'
     if (direction == 'up' and up) or (direction == 'down' and down) then
-      ops[#ops + 1] = copy_operation(op)
+      ops[#ops + 1] = op
     end
   end
   return #ops > 0 and { kind = patch.kind, ops = ops } or nil
@@ -183,7 +172,7 @@ local function stage_log(summary, patch, trail)
     return clone_log(patch)
   end
   for i = 1, #patch.ops do
-    push(trail, summary.ops, copy_operation(patch.ops[i]))
+    push(trail, summary.ops, patch.ops[i])
   end
   return summary
 end
@@ -257,6 +246,10 @@ function Add.supplies(patch)
   end
   return {}
 end
+function Add.valid(location, patch)
+  local final, owner = location.value + patch.delta, location.owner
+  return (owner._min == nil or final >= owner._min) and (owner._max == nil or final <= owner._max)
+end
 
 local Machine = { name = 'machine' }
 Machine.clone = clone_machine
@@ -277,7 +270,7 @@ function Machine.stage(summary, patch, trail)
   end
   for i = 1, #patch.steps do
     local step = patch.steps[i]
-    push(trail, summary.steps, { serial = step.serial, value = step.value })
+    push(trail, summary.steps, step)
   end
   return summary
 end
@@ -300,6 +293,31 @@ function Machine.change(serial, value)
   return { kind = Machine.name, steps = { { serial = serial, value = value } } }
 end
 
+local function merge_map_operation(location, left, right, composition)
+  if left.op == 'put' and right.op == 'put' then
+    if location.put_equal and left.value == right.value then
+      return { left }
+    end
+    if
+      (composition == 'interacting' or composition == 'external')
+      and left.policy == 'overwrite'
+      and right.policy == 'overwrite'
+    then
+      return { right }
+    end
+    return nil
+  end
+  if (left.op == 'put' and right.op == 'take') or (left.op == 'take' and right.op == 'put') then
+    local put = left.op == 'put' and left or right
+    return { put, left.op == 'take' and left or right }
+  end
+  if left.op == 'remove' and right.op == 'remove' and location.remove_idempotent then
+    return { left }
+  end
+  return nil
+end
+
+local PRESENCE_MERGE = { put_equal = true, remove_idempotent = true }
 local Presence = { name = 'presence' }
 Presence.clone = clone_log
 function Presence.apply(_, value, patch)
@@ -317,53 +335,12 @@ function Presence.apply(_, value, patch)
 end
 Presence.stage = stage_log
 function Presence.join(_, left, right)
-  if #left.ops ~= 1 or #right.ops ~= 1 then
-    return nil
-  end
-  local a, b = left.ops[1], right.ops[1]
-  if a.op == 'put' and b.op == 'put' then
-    if a.value ~= b.value then
-      return nil
-    end
-    return { kind = 'presence', ops = { { op = 'put', value = a.value } } }
-  end
-  if a.op == 'put' and b.op == 'take' then
-    return { kind = 'presence', ops = { copy_operation(a), { op = 'take' } } }
-  end
-  if a.op == 'take' and b.op == 'put' then
-    return { kind = 'presence', ops = { copy_operation(b), { op = 'take' } } }
-  end
-  if a.op == 'remove' and b.op == 'remove' then
-    return { kind = 'presence', ops = { { op = 'remove' } } }
-  end
-  return nil
+  if #left.ops ~= 1 or #right.ops ~= 1 then return nil end
+  local ops = merge_map_operation(PRESENCE_MERGE, left.ops[1], right.ops[1])
+  return ops and { kind = 'presence', ops = ops } or nil
 end
 Presence.constraint = constrain_log
 Presence.supplies = log_supplies
-
-local function merge_map_operation(location, left, right, composition, key)
-  if left.op == 'put' and right.op == 'put' then
-    if location.put_equal and left.value == right.value then
-      return { copy_operation(left) }
-    end
-    if
-      (composition == 'interacting' or composition == 'external')
-      and left.policy == 'overwrite'
-      and right.policy == 'overwrite'
-    then
-      return { copy_operation(right) }
-    end
-    return nil
-  end
-  if (left.op == 'put' and right.op == 'take') or (left.op == 'take' and right.op == 'put') then
-    local put = left.op == 'put' and left or right
-    return { copy_operation(put), { op = 'take', key = key } }
-  end
-  if left.op == 'remove' and right.op == 'remove' and location.remove_idempotent then
-    return { copy_operation(left) }
-  end
-  return nil
-end
 
 local FiniteMap = { name = 'finite_map' }
 FiniteMap.clone = clone_log
@@ -388,9 +365,9 @@ function FiniteMap.join(location, left, right, composition)
   local a, b = left.ops, right.ops
   if #a == 1 and #b == 1 then
     if a[1].key ~= b[1].key then
-      return { kind = 'finite_map', ops = { copy_operation(a[1]), copy_operation(b[1]) } }
+      return { kind = 'finite_map', ops = { a[1], b[1] } }
     end
-    local ops = merge_map_operation(location, a[1], b[1], composition, a[1].key)
+    local ops = merge_map_operation(location, a[1], b[1], composition)
     return ops and { kind = 'finite_map', ops = ops } or nil
   end
   local by_left, by_right, keys = {}, {}, {}
@@ -411,7 +388,7 @@ function FiniteMap.join(location, left, right, composition)
   local out = {}
   local function append(values)
     for i = 1, #values do
-      out[#out + 1] = copy_operation(values[i])
+      out[#out + 1] = values[i]
     end
   end
   for key in pairs(keys) do
@@ -421,7 +398,7 @@ function FiniteMap.join(location, left, right, composition)
     elseif not y then
       append(x)
     elseif #x == 1 and #y == 1 then
-      local merged = merge_map_operation(location, x[1], y[1], composition, key)
+      local merged = merge_map_operation(location, x[1], y[1], composition)
       if not merged then return nil end
       append(merged)
     else
@@ -444,9 +421,6 @@ local BY_NAME = {
 local REQUIRED_ALGEBRA_METHODS = { 'clone', 'apply', 'stage', 'join', 'constraint', 'supplies' }
 
 function M.get(value)
-  if type(value) == 'table' and value.algebra then
-    return value.algebra
-  end
   if type(value) == 'table' then
     for i = 1, #REQUIRED_ALGEBRA_METHODS do
       local method = REQUIRED_ALGEBRA_METHODS[i]

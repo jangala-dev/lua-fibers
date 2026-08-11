@@ -33,14 +33,12 @@ local RULE_OPTIONS = {
 
 local LOCATION_OPTIONS = {
   algebra = true,
-  domain = true,
   value = true,
-  version = true,
-  key = true,
-  clone_value = true,
-  value_equal = true,
-  put_equal = true,
-  remove_idempotent = true,
+  version = Contract.non_negative_integer,
+  clone_value = Contract.func,
+  value_equal = Contract.func,
+  put_equal = Contract.boolean,
+  remove_idempotent = Contract.boolean,
 }
 
 local ids = {}
@@ -73,12 +71,37 @@ function M.location(owner, opts)
   end
   opts = Contract.options(opts, LOCATION_OPTIONS, 'Facility.location options', 2)
   if opts.algebra == nil then error('Facility.location requires algebra', 2) end
-  if opts.version ~= nil then Contract.non_negative_integer(opts.version, 'Facility.location version', 2) end
-  Contract.optional_function(opts.clone_value, 'Facility.location clone_value', 2)
-  Contract.optional_function(opts.value_equal, 'Facility.location value_equal', 2)
-  Contract.optional_boolean(opts.put_equal, 'Facility.location put_equal', 2)
-  Contract.optional_boolean(opts.remove_idempotent, 'Facility.location remove_idempotent', 2)
   return Journal.new_location(opts, owner)
+end
+
+-- Private common constructor for state-backed facilities.
+function M._state(resource, value, algebra, semantics, label)
+  resource._value_semantics = semantics
+  value = semantics.capture(value, label, 4)
+  resource._location = M.location(resource, {
+    algebra = algebra, value = value, value_equal = semantics.equal,
+  })
+  return resource
+end
+
+-- Private lazy per-key location factory for compound resources.
+function M._keyspace(owner, spec)
+  local initial, locations = spec.values or {}, {}
+  return function(key)
+    local location = locations[key]
+    if location then return location end
+    local value = initial[key]
+    initial[key] = nil
+    if value == nil and spec.absent then value = spec.absent end
+    if spec.clone_initial then value = spec.clone_initial(value) end
+    location = M.location(owner, {
+      algebra = spec.algebra, value = value,
+      clone_value = spec.clone_value, put_equal = spec.put_equal,
+      remove_idempotent = spec.remove_idempotent,
+    })
+    locations[key] = location
+    return location
+  end
 end
 
 M.ABSENT = Algebra.ABSENT
@@ -113,30 +136,20 @@ function M.read(location, result, resource)
   return Operation.read(location, result or M.result.value, resource)
 end
 
+local function patch_spec(location, result, resource, patch, supply)
+  return Operation.patch(location, nil, result or M.result.boolean, resource, patch, supply)
+end
+
 function M.replace(location, result, resource)
-  return Operation.patch(
-    location,
-    nil,
-    result or M.result.boolean,
-    resource,
-    M.patch.replace,
-    { any = true }
-  )
+  return patch_spec(location, result, resource, M.patch.replace, { any = true })
 end
 
 function M.add(location, result, resource)
-  return Operation.patch(location, nil, result or M.result.boolean, resource, M.patch.add)
+  return patch_spec(location, result, resource, M.patch.add)
 end
 
 function M.presence_put(location, result, resource)
-  return Operation.patch(
-    location,
-    nil,
-    result or M.result.boolean,
-    resource,
-    M.patch.put,
-    { up = true }
-  )
+  return patch_spec(location, result, resource, M.patch.put, { up = true })
 end
 
 function M.version_wait(location, resource)
@@ -221,14 +234,8 @@ end
 M.rule.exchange = Operation.exchange
 
 -- Private compiler entry used by closed façades such as Machine and Clock.
--- The public rule vocabulary does not expose totality, eagerness, probes or
--- ambient absence validation.
-function M._state_rule(mode, opts, internal)
-  if mode ~= 'inspect' and mode ~= 'change' then
-    error('state rule mode must be inspect or change', 2)
-  end
-  return make_rule(mode, opts, internal)
-end
+-- The public rule vocabulary does not expose totality, eagerness or probes.
+M._state_rule = make_rule
 
 
 return M

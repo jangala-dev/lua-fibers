@@ -13,7 +13,6 @@ local Protected = require('fibers.protected')
 local DialModule = require('fibers.socket.dial')
 local Connection = require('fibers.socket.connection')
 local IOError = require('fibers.io.error')
-local TrustedState = require('fibers.internal.trusted_state')
 
 local State = {}
 State.__index = State
@@ -522,7 +521,7 @@ function State.new(endpoint, opts, started_at)
     opts = opts,
     started_at = started_at,
     attempt_slots = Counter.bounded(opts.maximum_active_attempts):label(label .. ':attempt-slots'),
-    state = TrustedState.machine(state):label(label .. ':state'),
+    state = StateMachine._trusted(state):label(label .. ':state'),
   }, State)
 end
 

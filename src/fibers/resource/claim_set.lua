@@ -1,5 +1,4 @@
 local Facility = require('fibers.resource.authoring')
-local Keyspace = require('fibers.resource.keyspace')
 local Direct = require('fibers.internal.direct')
 local Contract = require('fibers.internal.contract')
 
@@ -21,15 +20,15 @@ local copy_map = Contract.copy_table
 
 function ClaimSet.new(compat)
   local claim_set = Facility.identity(setmetatable({ _compat = copy_compat(compat) }, ClaimSet), Kind)
-  claim_set._space = Keyspace.new(claim_set, {
-    algebra = 'finite_map', domain = 'finite_map', clone_initial = copy_map,
+  claim_set._locate = Facility._keyspace(claim_set, {
+    algebra = 'finite_map', clone_initial = copy_map,
     put_equal = true, remove_idempotent = true,
   })
   return claim_set
 end
 
 local function operations(self, subject)
-  local location = self._space:location(subject)
+  local location = self._locate(subject)
   local ops = location._claim_set_operations
   if ops then return ops end
   ops = {

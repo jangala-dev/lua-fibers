@@ -34,13 +34,6 @@ local function prefix_table(pattern)
 end
 
 
-local function copy_array(values)
-  if not values then return nil end
-  local out = {}
-  for i = 1, #values do out[i] = values[i] end
-  return out
-end
-
 local function copy_searches(searches)
   if not searches then return nil end
   local out = {}
@@ -98,27 +91,17 @@ local function each(self, visit)
 end
 
 local function clear_searches(self)
-  self.searches, self.search_order = nil, nil
-end
-
-local function touch(self, pattern)
-  for i = 1, #self.search_order do
-    if self.search_order[i] == pattern then
-      table.remove(self.search_order, i)
-      break
-    end
-  end
-  self.search_order[#self.search_order + 1] = pattern
+  self.searches, self.search_count = nil, nil
 end
 
 local function cache(self, pattern, search)
-  local searches, order = self.searches, self.search_order
-  if not searches then searches, order = {}, {}; self.searches, self.search_order = searches, order end
-  if #order >= MAX_SEARCHES then
-    searches[table.remove(order, 1)] = nil
+  local searches = self.searches
+  if not searches or self.search_count >= MAX_SEARCHES then
+    searches = {}
+    self.searches, self.search_count = searches, 0
   end
   searches[pattern] = search
-  order[#order + 1] = pattern
+  self.search_count = self.search_count + 1
 end
 
 local function ensure_front(self)
@@ -128,10 +111,7 @@ end
 
 local function search_for(self, pattern)
   local search = self.searches and self.searches[pattern]
-  if search then
-    touch(self, pattern)
-    return search
-  end
+  if search then return search end
 
   search = { pattern = pattern, prefix = prefix_table(pattern), matched = 0, scanned = 0 }
   local base = 0
@@ -156,7 +136,7 @@ function Rope:clone()
     offset = self.offset,
     len = self.len,
     searches = copy_searches(self.searches),
-    search_order = copy_array(self.search_order),
+    search_count = self.search_count,
   }, Rope)
 end
 

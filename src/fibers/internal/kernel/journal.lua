@@ -150,15 +150,12 @@ end
 
 
 function Journal.new_location(opts, owner)
-  opts = opts or {}
   local algebra = Algebra.get(assert(opts.algebra, 'location algebra is required'))
   local location = {
     algebra = algebra,
-    domain = opts.domain or 'plain',
     value = opts.value,
     version = opts.version or 0,
-    owner = owner or opts.owner,
-    key = opts.key,
+    owner = owner,
     clone_value = opts.clone_value,
     value_equal = opts.value_equal,
     put_equal = opts.put_equal == true,

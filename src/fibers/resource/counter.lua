@@ -1,17 +1,13 @@
 local Facility = require('fibers.resource.authoring')
 local Op = require('fibers.op')
 local Direct = require('fibers.internal.direct')
+local Contract = require('fibers.internal.contract')
 
 local Counter = {}
 Counter.__index = Counter
 local Kind = Facility.kind('counter')
 
-local function integer(value, label, level)
-  if type(value) ~= 'number' or value % 1 ~= 0 then
-    error(label .. ' must be an integer', level or 3)
-  end
-  return value
-end
+local integer = Contract.integer
 
 local function at_least(current, threshold)
   if current < threshold then return nil end
@@ -38,7 +34,7 @@ local function create(initial, minimum, maximum)
   if maximum and minimum > maximum then error('counter minimum must not exceed maximum', 3) end
 
   local counter = Facility.identity(setmetatable({ _min = minimum, _max = maximum }, Counter), Kind)
-  counter._location = Facility.location(counter, { algebra = 'add', domain = 'counter', value = initial })
+  counter._location = Facility.location(counter, { algebra = 'add', value = initial })
   counter._read_op = Facility.op(Facility.read(counter._location, Facility.result.value, counter))
   return counter
 end

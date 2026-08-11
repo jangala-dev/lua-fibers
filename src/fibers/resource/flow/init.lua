@@ -14,7 +14,6 @@ local Rope = require('fibers.resource.flow.rope')
 local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
 local Contract = require('fibers.internal.contract')
-local TrustedState = require('fibers.internal.trusted_state')
 local ByteProtocol = require('fibers.internal.byte_protocol')
 local perform = require('fibers.perform')
 
@@ -52,55 +51,22 @@ local function options(opts, allowed, label)
   return Contract.options(opts, allowed, label, 3)
 end
 
-local function separator(value, label)
-  if type(value) ~= 'string' or value == '' then
-    error((label or 'flow separator') .. ' must be a non-empty string', 3)
-  end
-  return value
-end
+local separator = Contract.non_empty_string
 
 -- Leases --------------------------------------------------------------------
 
-local function lease(flow, record)
-  return setmetatable({
-    _flow = flow,
-    id = record.id,
-    holder = record.holder,
-    meta = record.meta,
-    _bytes = record.bytes,
-  }, Lease)
+local function make_lease(flow, record, kind, field)
+  local value = { _flow = flow, id = record.id, holder = record.holder, meta = record.meta }
+  value['_' .. field] = record[field]
+  return setmetatable(value, kind)
 end
+
+local function lease(flow, record) return make_lease(flow, record, Lease, 'bytes') end
+local function space_lease(flow, record) return make_lease(flow, record, SpaceLease, 'capacity') end
 
 function Lease:bytes() return self._bytes end
 function Lease:length() return #self._bytes end
-function Lease:ack_op(n) return self._flow:_ack_lease_op(self, n) end
-
-
-function Lease:release_op() return self._flow:_return_lease_op(self) end
-
-
-function Lease:fail_op(err) return self._flow:_fail_lease_op(self, err) end
-
-
-local function space_lease(flow, record)
-  return setmetatable({
-    _flow = flow,
-    id = record.id,
-    holder = record.holder,
-    meta = record.meta,
-    _capacity = record.capacity,
-  }, SpaceLease)
-end
-
 function SpaceLease:capacity() return self._capacity end
-function SpaceLease:commit_op(value) return self._flow:_commit_space_op(self, value) end
-
-
-function SpaceLease:release_op() return self._flow:_release_space_op(self) end
-
-
-function SpaceLease:fail_op(err) return self._flow:_fail_space_op(self, err) end
-
 
 -- State ---------------------------------------------------------------------
 
@@ -264,22 +230,25 @@ end, function(state, payload)
   return Wait
 end, 50)
 
-T.read_exactly = select_when('read_exactly', function(state, payload)
-  return state.input_error ~= nil
-    or state.rope:length() >= payload.n
-    or committed_closed(payload.flow, 'input')
-end, function(state, payload)
-  if state.input_error then return Ready.same(nil, state.input_error) end
-  local available = state.rope:length()
-  if available >= payload.n then
+local function exact_consume(name, return_bytes)
+  return select_when(name, function(state, payload)
+    return state.input_error ~= nil
+      or state.rope:length() >= payload.n
+      or committed_closed(payload.flow, 'input')
+  end, function(state, payload)
+    if state.input_error then return Ready.same(nil, state.input_error) end
+    local available = state.rope:length()
+    if available < payload.n and not committed_closed(payload.flow, 'input') then return Wait end
+    if available == 0 then return Ready.same(nil, Errors.EOF, return_bytes and '' or 0) end
+    local amount = math.min(payload.n, available)
     local next = copy_state(state, true)
-    return Ready.write(next, next.rope:take(payload.n))
-  end
-  if not committed_closed(payload.flow, 'input') then return Wait end
-  if available == 0 then return Ready.same(nil, Errors.EOF, '') end
-  local next = copy_state(state, true)
-  return Ready.write(next, nil, Errors.EOF, next.rope:take(available))
-end, 50)
+    local value = next.rope:take(amount)
+    if available < payload.n then return Ready.write(next, nil, Errors.EOF, return_bytes and value or amount) end
+    return Ready.write(next, return_bytes and value or amount)
+  end, 50)
+end
+
+T.read_exactly = exact_consume('read_exactly', true)
 
 T.read_until = select_when('read_until', function(state, payload)
   if state.input_error then return true end
@@ -362,24 +331,7 @@ T.discard_available = update('discard_available', function(state)
   return Ready.write(next, available)
 end)
 
-T.drop = select_when('drop', function(state, payload)
-  return state.input_error ~= nil
-    or state.rope:length() >= payload.n
-    or committed_closed(payload.flow, 'input')
-end, function(state, payload)
-  if state.input_error then return Ready.same(nil, state.input_error) end
-  local available = state.rope:length()
-  if available >= payload.n then
-    local next = copy_state(state, true)
-    next.rope:take(payload.n)
-    return Ready.write(next, payload.n)
-  end
-  if not committed_closed(payload.flow, 'input') then return Wait end
-  if available == 0 then return Ready.same(nil, Errors.EOF, 0) end
-  local next = copy_state(state, true)
-  next.rope:take(available)
-  return Ready.write(next, nil, Errors.EOF, available)
-end, 50)
+T.drop = exact_consume('drop', false)
 
 T.lease = select_when('lease', function(state, payload)
   return state.lease ~= nil or not state.rope:is_empty() or committed_closed(payload.flow, 'input')
@@ -502,10 +454,14 @@ T.close_input = update('close_input', function(state)
   return Ready.write(next, true)
 end)
 
-T.input_closed = query('input_closed', function(_, payload)
-  if committed_closed(payload.flow, 'input') then return Ready.same(true) end
-  return Wait
-end, 100)
+local function closed_rule(endpoint)
+  return query(endpoint .. '_closed', function(_, payload)
+    if committed_closed(payload.flow, endpoint) then return Ready.same(true) end
+    return Wait
+  end, 100)
+end
+
+T.input_closed = closed_rule('input')
 
 T.fail_input = update('fail_input', function(state, payload)
   local next = copy_state(state)
@@ -522,10 +478,7 @@ T.shutdown_output = update('shutdown_output', function(state, payload)
   return Ready.write(next, true)
 end)
 
-T.output_closed = query('output_closed', function(_, payload)
-  if committed_closed(payload.flow, 'output') then return Ready.same(true) end
-  return Wait
-end, 100)
+T.output_closed = closed_rule('output')
 
 T.fail_write = update('fail_write', function(state, payload)
   local next = copy_state(state)
@@ -617,6 +570,17 @@ function Inlet:fail_op(err)
 end
 
 
+local function bounded_op(handle, n, default, label, empty, rule)
+  n = count(n, default, label)
+  if n == 0 then return Op.always(empty) end
+  return live(handle, function()
+    if handle._flow._capacity ~= INF and n > handle._flow._capacity then
+      return Op.always(nil, Errors.CAPACITY)
+    end
+    return transition(handle._flow, rule, { n = n })
+  end)
+end
+
 -- Outlet --------------------------------------------------------------------
 
 function Outlet:read_some_op(n)
@@ -627,26 +591,11 @@ end
 
 
 function Outlet:read_exactly_op(n)
-  n = count(n, 0, 'flow exact read size')
-  if n == 0 then return Op.always('') end
-  return live(self, function()
-    if self._flow._capacity ~= INF and n > self._flow._capacity then
-      return Op.always(nil, Errors.CAPACITY)
-    end
-    return transition(self._flow, T.read_exactly, { n = n })
-  end)
+  return bounded_op(self, n, 0, 'flow exact read size', '', T.read_exactly)
 end
 
-
 function Outlet:peek_exactly_op(n)
-  n = count(n, 1, 'flow peek size')
-  if n == 0 then return Op.always('') end
-  return live(self, function()
-    if self._flow._capacity ~= INF and n > self._flow._capacity then
-      return Op.always(nil, Errors.CAPACITY)
-    end
-    return transition(self._flow, T.peek, { n = n })
-  end)
+  return bounded_op(self, n, 1, 'flow peek size', '', T.peek)
 end
 
 
@@ -691,14 +640,7 @@ end
 
 
 function Outlet:drop_op(n)
-  n = count(n, 0, 'flow drop size')
-  if n == 0 then return Op.always(0) end
-  return live(self, function()
-    if self._flow._capacity ~= INF and n > self._flow._capacity then
-      return Op.always(nil, Errors.CAPACITY)
-    end
-    return transition(self._flow, T.drop, { n = n })
-  end)
+  return bounded_op(self, n, 0, 'flow drop size', 0, T.drop)
 end
 
 
@@ -760,44 +702,33 @@ local function require_lease(flow, value, kind, label)
   end
 end
 
-function Flow:_ack_lease_op(value, n)
-  require_lease(self, value, Lease, 'ack_lease_op')
-  return transition(self, T.ack_lease, {
-    lease = value,
-    n = count(n, value:length(), 'flow lease ack count'),
-  })
+local function lease_op(value, kind, label, rule, payload)
+  local flow = value._flow
+  require_lease(flow, value, kind, label)
+  payload = payload or {}
+  payload.lease = value
+  return transition(flow, rule, payload)
 end
 
-function Flow:_return_lease_op(value)
-  require_lease(self, value, Lease, 'return_lease_op')
-  return transition(self, T.return_lease, { lease = value })
+function Lease:ack_op(n)
+  return lease_op(self, Lease, 'ack_lease_op', T.ack_lease,
+    { n = count(n, self:length(), 'flow lease ack count') })
 end
-
-function Flow:_fail_lease_op(value, err)
-  require_lease(self, value, Lease, 'fail_lease_op')
-  return transition(self, T.fail_lease, { lease = value, err = err })
+function Lease:release_op() return lease_op(self, Lease, 'return_lease_op', T.return_lease) end
+function Lease:fail_op(err) return lease_op(self, Lease, 'fail_lease_op', T.fail_lease, { err = err }) end
+function SpaceLease:commit_op(value)
+  return lease_op(self, SpaceLease, 'commit_space_op', T.commit_space, { bytes = bytes(value, 2) })
 end
-
-function Flow:_commit_space_op(value, data)
-  require_lease(self, value, SpaceLease, 'commit_space_op')
-  return transition(self, T.commit_space, { lease = value, bytes = bytes(data, 2) })
-end
-
-function Flow:_release_space_op(value)
-  require_lease(self, value, SpaceLease, 'release_space_op')
-  return transition(self, T.release_space, { lease = value })
-end
-
-function Flow:_fail_space_op(value, err)
-  require_lease(self, value, SpaceLease, 'fail_space_op')
-  return transition(self, T.fail_space, { lease = value, err = err })
+function SpaceLease:release_op() return lease_op(self, SpaceLease, 'release_space_op', T.release_space) end
+function SpaceLease:fail_op(err)
+  return lease_op(self, SpaceLease, 'fail_space_op', T.fail_space, { err = err })
 end
 
 -- Flow ----------------------------------------------------------------------
 
 function Flow.new(limit)
   local flow = Facility.identity(setmetatable({ _capacity = capacity(limit) }, Flow), Kind)
-  flow._state = TrustedState.machine(new_state())
+  flow._state = Machine._trusted(new_state())
   Label.child(flow._state, flow, 'state')
   flow._inlet = Label.attach(setmetatable({
     _fibers_id = flow._fibers_id .. ':inlet',

@@ -1,7 +1,6 @@
 local Facility = require('fibers.resource.authoring')
 local Op = require('fibers.op')
 local Direct = require('fibers.internal.direct')
-local StateResource = require('fibers.internal.state_resource')
 local ValueSemantics = require('fibers.internal.value_semantics')
 
 local Cell = {}
@@ -13,12 +12,9 @@ local VERSIONED_RESULT = Facility.result.project(function(value, leaf)
   return { value = value, version = leaf.location.version }
 end)
 
-local function read_result(resource)
-  local semantics = resource._value_semantics
-  return Facility.result.project(function(value)
-    return semantics.expose(value)
-  end)
-end
+local READ_RESULT = Facility.result.project(function(value, leaf)
+  return leaf.resource._value_semantics.expose(value)
+end)
 
 local function select_op(resource, select)
   local state = resource._state_op
@@ -46,15 +42,18 @@ local function select_op(resource, select)
   return loop()
 end
 
-function Cell.new(value)
+local function create(value, semantics, label)
   local cell = Facility.identity(setmetatable({}, Cell), Kind)
-  return StateResource.init(cell, value, 'replace', ValueSemantics.managed, 'Cell.new() value')
+  return Facility._state(cell, value, 'replace', semantics, label)
 end
+
+function Cell.new(value) return create(value, ValueSemantics.managed, 'Cell.new() value') end
+function Cell._trusted(value) return create(value, ValueSemantics.trusted, 'trusted Cell state') end
 
 function Cell:read_op()
   local op = self._read_op
   if not op then
-    op = Facility.op(Facility.read(self._location, read_result(self), self))
+    op = Facility.op(Facility.read(self._location, READ_RESULT, self))
     self._read_op = op
   end
   return op

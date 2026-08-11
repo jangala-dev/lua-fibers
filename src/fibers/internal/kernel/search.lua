@@ -9,7 +9,6 @@ local Journal = require('fibers.internal.kernel.journal')
 local Candidate = require('fibers.internal.kernel.candidate')
 local Proof = require('fibers.internal.proof')
 local Operation = require('fibers.internal.operation')
-local Algebra = require('fibers.internal.kernel.algebra')
 
 local M = {}
 local Search = {}
@@ -926,11 +925,8 @@ local function final_candidate(state)
   observations = observations and next(observations) and observations or nil
   writes = writes and next(writes) and writes or nil
   for loc, patch in pairs(writes or EMPTY) do
-    if loc.domain == 'counter' then
-      local final, owner = Algebra.apply(loc, loc.value, patch), loc.owner
-      if owner._min ~= nil and final < owner._min then return nil end
-      if owner._max ~= nil and final > owner._max then return nil end
-    end
+    local valid = loc.algebra.valid
+    if valid and not valid(loc, patch) then return nil end
   end
 
   local outcomes = {}

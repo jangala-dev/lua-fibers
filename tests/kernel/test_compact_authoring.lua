@@ -71,13 +71,11 @@ assert(change_rule.supplies.any == true)
 -- Closed façades may retain a private proof-preserving readiness probe.
 do
   local machine_resource = Machine.new(0):label('compact-probe')
-  local probed = Machine.isolated_query_when(
-    'compact.probe',
-    function(value) return value > 0 end,
-    function(value)
+  local probed = Machine.rule(
+    'compact.probe', 'query', function(value)
       if value <= 0 then return Machine.Wait end
       return Machine.Ready.same(value)
-    end
+    end, 'own', 'none', nil, function(value) return value > 0 end
   )
   machine_resource:transition_op(probed)
   local compiled = assert(machine_resource._transition_specs[probed])

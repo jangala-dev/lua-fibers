@@ -26,7 +26,7 @@ end
 function External._machine(resource, value, clone, deliver, clear)
   local Facility = require('fibers.resource.authoring')
   resource._location = Facility.location(resource, {
-    algebra = 'machine', domain = 'external', value = value, clone_value = clone,
+    algebra = 'machine', value = value, clone_value = clone,
   })
   return External.attach(resource, resource._location, deliver, clear)
 end

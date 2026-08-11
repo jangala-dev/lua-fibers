@@ -1,7 +1,6 @@
 ---Small transactional vocabulary shared by host-backed resource lifecycles.
 
 local StateMachine = require('fibers.resource.machine')
-local TrustedState = require('fibers.internal.trusted_state')
 
 local HostLifecycle = {}
 
@@ -32,7 +31,7 @@ function HostLifecycle.define(spec)
   local Select = spec.select and StateMachine.isolated_select(prefix .. '.select', spec.select)
   local Query = spec.query and StateMachine.isolated_query(prefix .. '.query', spec.query)
 
-  function Type.new(...) return setmetatable(TrustedState.machine(spec.initial(...)), Type) end
+  function Type.new(...) return setmetatable(StateMachine._trusted(spec.initial(...)), Type) end
 
   if Update then function Type:_update_op(payload) return self:transition_op(Update, payload) end end
   if Select then function Type:_select_op(payload) return self:transition_op(Select, payload) end end

@@ -277,4 +277,4 @@ local tests = {
 for i = 1, #tests do
   tests[i]()
 end
-print('tests/test_state_resource_laws.lua: ok')
+print('tests/test_resource_composition_laws.lua: ok')

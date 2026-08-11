@@ -14,7 +14,7 @@ function M.index_entries(index)
 end
 
 function M.claim_holders(claim_set, subject)
-  local location = claim_set and claim_set._space and claim_set._space.locations and claim_set._space.locations[subject]
+  local location = claim_set and claim_set._locate and claim_set._locate(subject)
   local value = location and location.value
   return value and next(value) ~= nil and value or nil
 end

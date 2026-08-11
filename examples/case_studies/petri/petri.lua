@@ -144,7 +144,6 @@ function Petri.new(marking, name)
   }, Petri)
   net._location = Facility.location(net, {
     algebra = 'machine',
-    domain = 'plain',
     value = state,
   })
   return net

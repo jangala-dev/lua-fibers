@@ -246,7 +246,6 @@ function Calendar.new(initial, name)
   }, Calendar)
   calendar._location = Facility.location(calendar, {
     algebra = 'machine',
-    domain = 'plain',
     value = state,
   })
   return calendar

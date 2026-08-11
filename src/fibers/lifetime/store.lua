@@ -400,7 +400,7 @@ function Store:attach_node(node)
   end
   if not node._lifetime_location then
     node._lifetime_location = Facility.location(node, {
-      algebra = 'machine', domain = 'plain', value = new_node_state(), key = 'lifetime-node',
+      algebra = 'machine', value = new_node_state(),
     })
   end
   return node

@@ -2,18 +2,14 @@ local Op = require('fibers.op')
 local Facility = require('fibers.resource.authoring')
 local Interest = require('fibers.embed.external').Interest
 local Direct = require('fibers.internal.direct')
+local Contract = require('fibers.internal.contract')
 
 local Clock = {}
 Clock.__index = Clock
 local Kind = Facility.kind('clock')
 local default_clock
 
-local function finite_number(value, name)
-  if type(value) ~= 'number' or value ~= value or value == math.huge or value == -math.huge then
-    error(name .. ' must be a finite number', 3)
-  end
-  return value
-end
+local finite_number = Contract.finite_number
 
 local function wake(runtime, leaf, deadline)
   return Interest.timer(deadline, leaf.resource)
@@ -32,7 +28,6 @@ function Clock.new()
   local c = Facility.identity(setmetatable({}, Clock), Kind)
   c._location = Facility.location(c, {
     algebra = 'machine',
-    domain = 'external-clock',
     value = false,
   })
   c._now_spec = Facility.clock_now(c)

@@ -4,7 +4,6 @@ local Op = require('fibers.op')
 local Facility = require('fibers.resource.authoring')
 local StateMachine = require('fibers.resource.machine')
 local Cell = require('fibers.resource.cell')
-local StateResource = require('fibers.internal.state_resource')
 local ValueSemantics = require('fibers.internal.value_semantics')
 
 local Completion = {}
@@ -29,7 +28,7 @@ local Publish = StateMachine.isolated_update('completion.publish', function(curr
 end)
 
 function Completion.new()
-  return StateResource.init(Facility.identity(setmetatable({}, Completion), Kind),
+  return Facility._state(Facility.identity(setmetatable({}, Completion), Kind),
     { kind = 'pending' }, 'machine', ValueSemantics.trusted, 'Completion state')
 end
 

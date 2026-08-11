@@ -349,7 +349,6 @@ Create authoritative committed state through `Facility.location`:
 ```lua
 local location = Facility.location(box, {
   algebra = 'replace',
-  domain = 'plain',
   value = initial,
 })
 ```

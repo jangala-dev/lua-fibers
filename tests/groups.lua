@@ -29,7 +29,7 @@ return {
     'tests/resources/test_event.lua',
     'tests/resources/test_cell.lua',
     'tests/resources/test_machine_managed_values.lua',
-    'tests/resources/test_state_resource_laws.lua',
+    'tests/resources/test_resource_composition_laws.lua',
     'tests/resources/test_standard_compounds.lua',
   },
   lifetimes = {

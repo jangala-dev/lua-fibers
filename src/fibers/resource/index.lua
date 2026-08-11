@@ -64,7 +64,7 @@ local function create(entries)
     initial[key] = { key = key, rank = rank, value = entry.value, seq = seq }
   end
   index._location = Facility.location(index, {
-    algebra = 'finite_map', domain = 'finite_map', value = initial,
+    algebra = 'finite_map', value = initial,
     clone_value = copy_entry, put_equal = false, remove_idempotent = true,
   })
   index._sequence_base = maximum
@@ -89,14 +89,7 @@ end
 local function pop_op(index, field, maximum)
   local op = index[field]
   if op then return op end
-  local spec = index._pop_spec
-  if not spec then
-    spec = Facility.rule.change({
-      location = index._location, demand = 'up', visibility = 'together', supply = 'down', step = pop,
-    })
-    index._pop_spec = spec
-  end
-  op = Facility.bind(spec, maximum)
+  op = Facility.bind(change_spec(index, '_pop_spec', 'up', 'down', pop), maximum)
   index[field] = op
   return op
 end

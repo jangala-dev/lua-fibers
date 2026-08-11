@@ -3,7 +3,6 @@
 -- Each key is its own transactional location. Values are non-nil: nil means
 -- absence, as it does in ordinary Lua tables.
 local Facility = require('fibers.resource.authoring')
-local Keyspace = require('fibers.resource.keyspace')
 local Op = require('fibers.op')
 local Direct = require('fibers.internal.direct')
 
@@ -11,7 +10,7 @@ local Keyed = {}
 Keyed.__index = Keyed
 
 local Kind = Facility.kind('keyed')
-local ABSENT = Keyspace.ABSENT
+local ABSENT = Facility.ABSENT
 local FALSE = Op.always(false)
 local function yes() return true end
 
@@ -46,8 +45,8 @@ local function create(entries)
     values[key] = value
   end
   local keyed = Facility.identity(setmetatable({}, Keyed), Kind)
-  keyed._space = Keyspace.new(keyed, {
-    values = values, algebra = 'presence', domain = 'presence', absent = ABSENT,
+  keyed._locate = Facility._keyspace(keyed, {
+    values = values, algebra = 'presence', absent = ABSENT,
   })
   return keyed
 end
@@ -56,7 +55,7 @@ function Keyed.new() return create({}) end
 function Keyed.from(entries) return create(entries) end
 
 local function operations(self, key)
-  local location = self._space:location(key)
+  local location = self._locate(key)
   local cached = location._keyed_operations
   if cached then return cached end
   cached = {

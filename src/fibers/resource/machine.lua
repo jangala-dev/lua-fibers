@@ -1,9 +1,6 @@
 local Facility = require('fibers.resource.authoring')
 local Cell = require('fibers.resource.cell')
-local StateResource = require('fibers.internal.state_resource')
 local ValueSemantics = require('fibers.internal.value_semantics')
-
-local unpack_ = table.unpack or unpack
 
 local Machine = {}
 Machine.__index = function(_, key)
@@ -54,32 +51,14 @@ local function rule(name, mode, step, visibility, supply, order, probe, validate
   }
 end
 
-local function define_rule_constructor(method, mode, visibility, supply, with_probe)
-  if with_probe then
-    Machine[method] = function(name, probe, step, order, validate)
-      return rule(name, mode, step, visibility, supply, order, probe, validate)
-    end
-  else
-    Machine[method] = function(name, step, order, validate)
-      return rule(name, mode, step, visibility, supply, order, nil, validate)
-    end
-  end
-end
-
-for _, spec in ipairs({
-  { 'update', 'update', 'together', 'any' },
-  { 'isolated_update', 'update', 'own', 'none' },
-  { 'select', 'select', 'together', 'any' },
-  { 'select_when', 'select', 'together', 'any', true },
-  { 'isolated_select', 'select', 'own', 'none' },
-  { 'isolated_select_when', 'select', 'own', 'none', true },
-  { 'query', 'query', 'together', 'none' },
-  { 'query_when', 'query', 'together', 'none', true },
-  { 'isolated_query', 'query', 'own', 'none' },
-  { 'isolated_query_when', 'query', 'own', 'none', true },
-}) do
-  define_rule_constructor(unpack_(spec))
-end
+function Machine.update(name, step, order, validate) return rule(name, 'update', step, 'together', 'any', order, nil, validate) end
+function Machine.isolated_update(name, step, order, validate) return rule(name, 'update', step, 'own', 'none', order, nil, validate) end
+function Machine.select(name, step, order, validate) return rule(name, 'select', step, 'together', 'any', order, nil, validate) end
+function Machine.select_when(name, probe, step, order, validate) return rule(name, 'select', step, 'together', 'any', order, probe, validate) end
+function Machine.isolated_select(name, step, order, validate) return rule(name, 'select', step, 'own', 'none', order, nil, validate) end
+function Machine.query(name, step, order, validate) return rule(name, 'query', step, 'together', 'none', order, nil, validate) end
+function Machine.query_when(name, probe, step, order, validate) return rule(name, 'query', step, 'together', 'none', order, probe, validate) end
+function Machine.isolated_query(name, step, order, validate) return rule(name, 'query', step, 'own', 'none', order, nil, validate) end
 
 -- Low-level façade for unusual but explicit visibility and supply contracts.
 function Machine.rule(name, mode, step, visibility, supply, order, probe, validate)
@@ -94,10 +73,6 @@ local WRITE = Machine.update('machine.write', function(_, value)
   return Ready.write(value, true)
 end)
 
-local function argument_or_empty(argument)
-  return argument == nil and {} or argument
-end
-
 local function compile_transition(location, resource, transition, options)
   options = options or {}
   -- Public Machines carry managed semantics. Closed resource façades which use
@@ -106,19 +81,14 @@ local function compile_transition(location, resource, transition, options)
   local semantics = options.semantics or resource._value_semantics or ValueSemantics.trusted
   local transition_label = "Machine transition '" .. tostring(transition.name) .. "'"
 
-  local function callback_value(value)
-    return semantics.expose(value)
-  end
-
   local function callback_argument(argument)
-    if argument == nil then return nil end
-    return semantics.expose(argument)
+    return argument == nil and {} or semantics.expose(argument)
   end
 
   local function step(value, argument, context)
     local outcome = transition.step(
-      callback_value(value),
-      argument_or_empty(callback_argument(argument)),
+      semantics.expose(value),
+      callback_argument(argument),
       context
     )
     if type(outcome) == 'table' and outcome._fibers_cell_wait == true then return nil end
@@ -138,8 +108,8 @@ local function compile_transition(location, resource, transition, options)
 
   local probe = transition.probe and function(value, argument, context)
     local result = transition.probe(
-      callback_value(value),
-      argument_or_empty(callback_argument(argument)),
+      semantics.expose(value),
+      callback_argument(argument),
       context
     )
     return result ~= nil
@@ -165,10 +135,13 @@ local function compile_transition(location, resource, transition, options)
   })
 end
 
-function Machine.new(value)
+local function create(value, semantics, label)
   local machine = Facility.identity(setmetatable({}, Machine), Kind)
-  return StateResource.init(machine, value, 'machine', ValueSemantics.managed, 'Machine.new() value')
+  return Facility._state(machine, value, 'machine', semantics, label)
 end
+
+function Machine.new(value) return create(value, ValueSemantics.managed, 'Machine.new() value') end
+function Machine._trusted(value) return create(value, ValueSemantics.trusted, 'trusted Machine state') end
 
 function Machine:write_op(value)
   return self:transition_op(WRITE, value)

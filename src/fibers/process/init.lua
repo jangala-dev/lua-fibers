@@ -24,7 +24,7 @@ local Exit = Task.Exit
 local perform = require('fibers.perform')
 local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
-local TrustedState = require('fibers.internal.trusted_state')
+local Cell = require('fibers.resource.cell')
 
 local next_process = 0
 
@@ -667,7 +667,7 @@ function Command:launch_op(opts)
       kind = 'process',
       _fibers_id = id,
       _command = command,
-      _state = TrustedState.cell({ kind = 'created' }),
+      _state = Cell._trusted({ kind = 'created' }),
       _launch_completion = Completion.new(),
       _exit_completion = Completion.new(),
       _communicating = false,
