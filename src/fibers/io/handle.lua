@@ -8,24 +8,18 @@
 -- when blocking in poll/epoll or when delivering embedded callbacks.
 
 local External = require('fibers.embed.external')
-local External = require('fibers.embed.external')
 local IOError = require('fibers.io.error')
 local IOAudit = require('fibers.internal.io_audit')
 local Label = require('fibers.internal.label')
 local Contract = require('fibers.internal.contract')
+local Readiness = require('fibers.io.readiness')
 
 local Handle = {}
 Handle.__index = Handle
 
 local next_id = 0
 
-local function normalise_mode(mode)
-  mode = mode or 'read'
-  if mode ~= 'read' and mode ~= 'write' then
-    error('readiness mode must be read or write', 3)
-  end
-  return mode
-end
+local normalise_mode = Readiness._mode
 
 local function clear_local_hint(self, mode)
   mode = normalise_mode(mode)
@@ -65,7 +59,7 @@ end
 
 local HANDLE_OPTIONS = {
   label = Contract.non_empty_string, key = true, handle = true, host = true,
-  readiness = true, feed = true,
+  readiness = true,
   read = Contract.func, write = Contract.func,
   shutdown_read = Contract.func, shutdown_write = Contract.func,
   close = Contract.func, set_nonblocking = Contract.func,
@@ -90,7 +84,6 @@ function Handle.new(opts)
     _handle = opts.handle or key,
     _host = opts.host,
     _readiness = opts.readiness,
-    _feed = opts.feed,
     _read_hint = false,
     _write_hint = false,
     _read = opts.read,
@@ -129,35 +122,21 @@ end
 
 local function ensure_readiness(self)
   if self._readiness then return self._readiness end
-  local Readiness = require('fibers.io.readiness')
   local readiness = Readiness.new(self._key, nil)
   self._readiness = readiness
   Label.child(readiness, self, 'readiness')
   if self._read_hint then External.unsafe_deliver(readiness, 'read', true) end
   if self._write_hint then External.unsafe_deliver(readiness, 'write', true) end
-  if self._runtime and not self._feed then
-    self._feed = External.external_feed(self._runtime, readiness)
-  end
   return readiness
 end
 
 function Handle:bind_runtime(rt)
-  if self._runtime == rt then
-    IOAudit.bind(self, rt)
-    if self._readiness and not self._feed then
-      self._feed = External.external_feed(rt, self._readiness)
-    end
-    return self
+  if self._runtime ~= rt then
+    self._runtime = rt
+    local bind = self._bind_runtime
+    if bind then bind(self, rt) end
   end
-  self._runtime = rt
   IOAudit.bind(self, rt)
-  if self._readiness and not self._feed then
-    self._feed = External.external_feed(rt, self._readiness)
-  end
-  local bind = self._bind_runtime
-  if bind then
-    bind(self, rt)
-  end
   return self
 end
 

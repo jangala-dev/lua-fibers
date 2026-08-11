@@ -49,9 +49,9 @@ function Connection.from_host(rt, scope, handle, opts)
   local action = opts.action or 'open_connection'
   local connection
   local opened, open_err = Protected.pcall(function()
-    connection = IO.open_handle_stream(rt, scope, handle, {
+    connection = IO.masked_perform(rt, IO.handle_stream_op(scope, handle, {
       label = opts.label, read = true, write = true,
-    }, opts)
+    }, opts))
   end)
   if not opened then
     local failure = IOError.normalise(open_err, {

@@ -60,68 +60,39 @@ local function acquire_handles(rt, opts)
   return read_handle, write_handle
 end
 
-local function open_endpoint(rt, scope, handle, mode, opts)
-  return IO.open_handle_stream(rt, scope, handle, {
+local function endpoint_op(scope, handle, mode, opts)
+  return IO.handle_stream_op(scope, handle, {
     label = opts.label and (opts.label .. ':' .. mode) or nil,
     read = mode == 'read', write = mode == 'write',
   }, opts)
 end
 
-local function fail_start(rt, start, err)
-  local cleanup_errors = {}
-  if start.read_stream then
-    IOError.capture_cleanup(cleanup_errors, 'pipe', 'abort_read_stream', nil, function()
-      return IO.masked_perform(rt, start.read_stream:abort_op(err))
-    end)
-  end
-  if start.write_stream then
-    IOError.capture_cleanup(cleanup_errors, 'pipe', 'abort_write_stream', nil, function()
-      return IO.masked_perform(rt, start.write_stream:abort_op(err))
-    end)
-  end
-  IOError.capture_cleanup(cleanup_errors, 'pipe', 'close_acquired', nil, start.acquired.close, start.acquired, err)
+local function setup_error(acquired, err)
+  local closed, close_err = acquired:close(err)
+  if closed then return nil, nil, err end
   return nil, nil, IOError.with_cleanup(
-    err, 'pipe', 'start',
-    'pipe start failed and cleanup was incomplete',
-    cleanup_errors
-  )
+    err, 'pipe', 'start', 'pipe start failed and cleanup was incomplete', { close_err })
 end
 
-local function finish_endpoint(rt, start, which, handle, opts)
-  local ok, stream = Protected.pcall(function()
-    return open_endpoint(rt, start.scope, handle, which, opts)
-  end)
-  if not ok then
-    return nil,
-      IOError.normalise(stream, {
-        domain = 'pipe',
-        action = 'open_' .. which .. '_stream',
-      })
-  end
-  start[which .. '_stream'] = stream
-
-  start.acquired:release(which, handle)
-  return stream
-end
-
-local function start_pipe(rt, start, opts)
+local function start_pipe(rt, scope, opts)
   local read_handle, write_handle, err = acquire_handles(rt, opts)
-  if not read_handle then
-    return fail_start(rt, start, err)
-  end
+  if not read_handle then return nil, nil, err end
+  local acquired = Acquired.new()
+  acquired:hold('read', read_handle, close_pipe_handle)
+  acquired:hold('write', write_handle, close_pipe_handle)
 
-  start.acquired:hold('read', read_handle, close_pipe_handle)
-  start.acquired:hold('write', write_handle, close_pipe_handle)
-
-  local read_stream, read_err = finish_endpoint(rt, start, 'read', read_handle, opts)
-  if not read_stream then
-    return fail_start(rt, start, read_err)
+  local opened, streams = Protected.pcall(function()
+    return IO.masked_perform(rt, Op.named_together({
+      read = endpoint_op(scope, read_handle, 'read', opts),
+      write = endpoint_op(scope, write_handle, 'write', opts),
+    }))
+  end)
+  if not opened then
+    return setup_error(acquired, IOError.normalise(streams, { domain = 'pipe', action = 'open_streams' }))
   end
-  local write_stream, write_err = finish_endpoint(rt, start, 'write', write_handle, opts)
-  if not write_stream then
-    return fail_start(rt, start, write_err)
-  end
-  return read_stream, write_stream
+  acquired:release('read', read_handle)
+  acquired:release('write', write_handle)
+  return streams.read, streams.write
 end
 
 function File.pipe_op(opts)
@@ -134,10 +105,7 @@ function File.pipe_op(opts)
   return Op.always(true):wrap(function()
     local rt = Runtime.current()
     if not rt then error('file.pipe_op committed without a current runtime', 2) end
-    return start_pipe(rt, {
-      scope = scope, acquired = Acquired.new(),
-      read_stream = nil, write_stream = nil,
-    }, opts)
+    return start_pipe(rt, scope, opts)
   end)
 end
 

@@ -120,10 +120,6 @@ local function make_fd(binding)
   end
 
   function operations.close(self)
-    if self._native_closed then
-      return true
-    end
-    self._native_closed = true
     local ok, errno, message = raw.close(self._handle)
     if ok == nil or ok == false then
       return nil, error_detail(binding, errno, message), errno

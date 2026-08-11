@@ -311,7 +311,7 @@ indexed HostReactor readiness index and lazily created HostReactor. Committed Fl
 disarm registrations; the host delivers only ready registration identities.
 Linux epoll events carry a fresh registration epoch rather than a raw
 descriptor. The host validates that epoch before delivering the reaction id and
-generation. The reactor then performs one bounded authoritative `read` or
+registration identity. The reactor then performs one bounded authoritative `read` or
 `write` call in fiber phase.
 
 The read side reserves Flow capacity before calling the host. The write side leases a committed byte prefix before calling the host. These space and data leases preserve backpressure and exact byte custody across irreversible calls.
@@ -465,7 +465,7 @@ return Posix.define(binding)
 
 The binding performs native calls, native value conversion and native error
 extraction. `fibers.io.posix` constructs the final host directly and owns
-Fibers handles, generation-safe readiness keys, socket and datagram policy,
+Fibers handles, stale-safe readiness identities, socket and datagram policy,
 resolver deduplication, process endpoints and capability reporting. There is no
 intermediate adapter or provider-description layer.
 
@@ -496,7 +496,7 @@ The host and readiness tests in `tests/` are the executable contract.
 
 ## I/O lifecycle qualification
 
-Host integration is qualified through executable lifecycle and provider contracts rather than a public reactor snapshot. The internal test instrumentation checks that handles retire, registrations disappear, custody is respected and stale readiness generations are ignored. Those counters and indexes are implementation details, not application observability.
+Host integration is qualified through executable lifecycle and provider contracts rather than a public reactor snapshot. The internal test instrumentation checks that handles retire, registrations disappear, custody is respected and stale registration identities are ignored. Those counters and indexes are implementation details, not application observability.
 
 Hosts must declare stream-socket family support separately through
 `socket_ipv4`, `socket_ipv6` and `socket_unix`. Unsupported capabilities should

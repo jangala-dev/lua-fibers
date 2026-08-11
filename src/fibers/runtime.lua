@@ -16,8 +16,8 @@ end
 
 -- Internal perform-boundary interruption token.  Raising is capability-safe:
 -- the token exposes state only; committed interrupt Effects own mutation.
-local function new_interrupt(name)
-  return { name = name or 'interrupt', raised = false, reason = nil, _fibers_interrupt = true }
+local function new_interrupt()
+  return { raised = false, reason = nil, _fibers_interrupt = true }
 end
 
 local Runtime = {}

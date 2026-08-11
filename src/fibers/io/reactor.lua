@@ -43,7 +43,6 @@ local ENTRY_SPEC = {
   service = true, label = Contract.non_empty_string, mode = true, stream = true,
   flow = true, source = true, callback = true, handle = true,
   poll_interval = Contract.non_negative_number, chunk_size = Contract.positive_integer,
-  generation = Contract.positive_integer,
 }
 
 local function optional_shutdown(handle, name, reason)
@@ -219,15 +218,12 @@ function Entry.new(reactor, spec)
     handle_provider = spec.handle,
     reactor = reactor,
     chunk_size = spec.chunk_size or 4096,
-    generation = spec.generation or next_entry,
     key = key,
-    id = id,
     armed = false,
   }, Entry)
   Label.attach(entry, spec.label)
   entry.retired_signal = Signal.new()
   Label.child(entry.retired_signal, entry, 'retired')
-  entry.registered = false
   entry.retired = false
   entry.closing = false
   entry.retire_mode = nil
@@ -235,9 +231,6 @@ function Entry.new(reactor, spec)
   entry.retire_error = nil
   entry.lease = nil
   entry.demand_queued = false
-  entry.service_count = 0
-  entry.would_block_count = 0
-  entry.last_service_sequence = nil
 
   if service == 'flow' then
     local hidden_endpoint
@@ -306,7 +299,6 @@ function Reactor.new(runtime, opts)
     read_quantum = opts.read_quantum or 64 * 1024,
     write_quantum = opts.write_quantum or 64 * 1024,
     control_quantum = opts.control_quantum or 64,
-    service_count = 0,
   }, Reactor)
   Label.attach(self, opts.label)
   self.ready = EventQueue.new( function(_runtime, queue, feed)
@@ -402,7 +394,7 @@ end
 
 function Reactor:_register_committed(rt, entry)
   if entry.retired then error('cannot register a retired reactor entry', 2) end
-  if entry.registered then return entry end
+  if self.entries[entry._fibers_id] == entry then return entry end
   if entry.mode ~= 'poll' and not entry.handle then
     entry.handle = type(entry.handle_provider) == 'function' and entry.handle_provider() or entry.handle_provider
   end
@@ -412,7 +404,6 @@ function Reactor:_register_committed(rt, entry)
     if entry.key == nil then error('reactor registration requires a readiness key', 2) end
     self:_attach_handle(rt, entry)
   end
-  entry.registered = true
   self.entries[entry._fibers_id] = entry
   IOAudit.register(entry, rt, { mode = entry.mode, key = entry.key })
   if entry.key ~= nil then
@@ -422,7 +413,7 @@ function Reactor:_register_committed(rt, entry)
       registrations = {}
       self.by_key[key] = registrations
     end
-    registrations[entry.id] = entry
+    registrations[entry._fibers_id] = entry
   end
   if entry.flow then
     local flow_entries = self.flow_entries[entry.flow]
@@ -468,7 +459,7 @@ function Reactor:_disarm(entry)
 end
 
 function Reactor:_refresh(entry)
-  if not entry or entry.retired or not entry.registered then return end
+  if not entry or entry.retired or self.entries[entry._fibers_id] ~= entry then return end
   if entry.service == 'offer' then
     if entry.closing then
       self:_retire_entry(entry, entry.close_reason or 'closing')
@@ -538,7 +529,7 @@ function Reactor:_retire_entry(entry, reason)
   if entry.key ~= nil then
     local registrations = self.by_key[key_id(entry.key)]
     if registrations then
-      registrations[entry.id] = nil
+      registrations[entry._fibers_id] = nil
       if next(registrations) == nil then self.by_key[key_id(entry.key)] = nil end
     end
   end
@@ -583,7 +574,6 @@ function Reactor:_retire_entry(entry, reason)
     end
   end
 
-  entry.registered = false
   entry.retired = true
   entry.retire_error = retire_error
   self.entries[entry._fibers_id] = nil
@@ -591,10 +581,9 @@ function Reactor:_retire_entry(entry, reason)
 
   local stream = entry.stream
   if stream then
-    stream._reactor_live = math.max(0, (stream._reactor_live or 1) - 1)
     if retire_error then stream._close_error = combine_error(stream._close_error, retire_error) end
-    if stream._reactor_live == 0 and not stream._handle_closed then
-      stream._handle_closed = true
+    local other = entry.mode == 'read' and stream._write_registration or stream._read_registration
+    if not other or other.retired then
       local ok, err = stream._handle:close(reason)
       if not ok then stream._close_error = combine_error(stream._close_error, err or Errors.FLOW_ERROR) end
     end
@@ -641,7 +630,6 @@ function Reactor:_service_offer(entry)
   end
 
   if IOError.is_would_block(err) then
-    entry.would_block_count = entry.would_block_count + 1
     if entry.mode == 'poll' then
       entry.next_poll = self.runtime:now() + (entry.poll_interval or 0.025)
     end
@@ -650,8 +638,8 @@ function Reactor:_service_offer(entry)
   end
 
   if IOError.is(err, 'closed') or IOError.is_eof(err) then
-    source._error = source._closed_error and source._closed_error(err) or err
-    entry.retire_state = { kind = 'succeeded', reason = 'host source closed' }
+    entry.retire_state = { kind = 'succeeded', reason = 'host source closed',
+      error = source._closed_error and source._closed_error(err) or err }
     return self:_retire_entry(entry, 'host source closed')
   end
 
@@ -682,7 +670,6 @@ function Reactor:_service_read(entry)
     masked_perform(self.runtime, entry.flow:inlet():close_op(Errors.EOF))
     return self:_retire_entry(entry, Errors.EOF)
   elseif status == 'would_block' then
-    entry.would_block_count = entry.would_block_count + 1
     self:_refresh(entry)
     return true
   elseif status == 'error' then
@@ -724,7 +711,6 @@ function Reactor:_service_write(entry)
     -- acknowledgement so a partial write observes the remaining suffix.
     entry.lease = nil
   elseif status == 'would_block' then
-    entry.would_block_count = entry.would_block_count + 1
     -- Retain byte custody and rearm the one-shot readiness registration.
   else
     entry.lease = nil
@@ -744,8 +730,7 @@ function Reactor:_service_callback(entry)
   end
   if serviced == nil or serviced == false then
     if IOError.is_would_block(err) then
-      entry.would_block_count = entry.would_block_count + 1
-      self:_refresh(entry)
+        self:_refresh(entry)
       return true
     end
     entry.retire_error = IOError.normalise(err, { domain = 'host', action = 'reactor_callback' })
@@ -755,15 +740,12 @@ function Reactor:_service_callback(entry)
   return true
 end
 
-function Reactor:_service_ready(id, generation)
+function Reactor:_service_ready(id)
   local entry = self.entries[id]
-  if not entry or entry.retired or entry.generation ~= generation then
+  if not entry or entry.retired then
     IOAudit.stale_ready(self.runtime)
     return true
   end
-  self.service_count = self.service_count + 1
-  entry.service_count = entry.service_count + 1
-  entry.last_service_sequence = self.service_count
   IOAudit.service(entry)
   if entry.service == 'offer' then return self:_service_offer(entry) end
   if entry.service == 'callback' then return self:_service_callback(entry) end
@@ -834,11 +816,11 @@ function Reactor:_service_due_polls()
       due[#due + 1] = entry
     end
   end
-  table.sort(due, function(a, b) return a.id < b.id end)
+  table.sort(due, function(a, b) return a._fibers_id < b._fibers_id end)
   for i = 1, #due do
     local entry = due[i]
     if entry.armed and not entry.retired then
-      self:_service_ready(entry.id, entry.generation)
+      self:_service_ready(entry._fibers_id)
     end
   end
   return #due
@@ -873,9 +855,9 @@ function Reactor:_run(rt)
       self:_service_due_polls()
     else
       -- A close or demand transition which arrived with readiness is applied
-      -- first. The generation check in _service_ready then rejects stale work.
+      -- first. Registration identity then rejects work for retired entries.
       self:_drain_control(rt)
-      self:_service_ready(a, b)
+      self:_service_ready(a)
     end
   end
 end
@@ -890,7 +872,7 @@ function Reactor:hint(key, mode)
   for _, entry in pairs(registrations) do
     if entry.armed and not entry.retired and entry.mode == mode then
       entry.armed = false
-      External.unsafe_deliver(self.ready, entry.id, entry.generation, entry.mode, entry.key)
+      External.unsafe_deliver(self.ready, entry._fibers_id, entry.mode, entry.key)
       delivered = true
     end
   end
@@ -898,7 +880,7 @@ function Reactor:hint(key, mode)
 end
 
 function Reactor:_host_delivered(entry)
-  local current = self.entries[entry.id]
+  local current = self.entries[entry._fibers_id]
   if current ~= entry or entry.retired or not entry.armed then
     return false
   end

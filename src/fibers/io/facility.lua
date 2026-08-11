@@ -53,8 +53,7 @@ end
 -- preserve the facility's domain terminal result; without one, the driver's
 -- returned values are authoritative.
 function IO.closed_after_driver_op(task, terminal_op, opts)
-  opts = Contract.options(opts, { require_returned = true }, 'closed_after_driver_op options', 2)
-  Contract.optional_boolean(opts.require_returned, 'closed_after_driver_op require_returned', 2)
+  opts = Contract.options(opts, { require_returned = Contract.boolean }, 'closed_after_driver_op options', 2)
   if task ~= nil and type(task.body_result_op) ~= 'function' then
     error('closed_after_driver_op expects a Task-like driver', 2)
   end
@@ -81,13 +80,11 @@ end
 -- leaving each facility's close/closed operations authoritative.
 function IO._closeable_closure(value, opts)
   opts = Contract.options(opts, {
-    name = true, reason = true, request = true, finish = true, finish_result = true,
+    name = true, reason = Contract.non_empty_string, request = Contract.non_empty_string,
+    finish = Contract.non_empty_string, finish_result = true,
   }, '_closeable_closure options', 2)
   local request = opts.request or 'close_op'
   local finish = opts.finish or 'closed_op'
-  Contract.non_empty_string(request, '_closeable_closure request method', 2)
-  Contract.non_empty_string(finish, '_closeable_closure finish method', 2)
-  if opts.reason ~= nil then Contract.non_empty_string(opts.reason, '_closeable_closure reason', 2) end
   local finish_result = opts.finish_result
   if type(finish_result) == 'string' then
     finish_result = Closure.require_ok(finish_result)
@@ -126,21 +123,15 @@ function IO.safe_close(domain, value, reason, fields)
   return true
 end
 
-function IO.open_handle_stream(rt, scope, handle, opts, tuning)
+function IO.handle_stream_op(scope, handle, opts, tuning)
   tuning = tuning or opts
-  return IO.masked_perform(
-    rt,
-    Stream.open_op(handle, {
-      scope = scope,
-      label = opts.label,
-      read = opts.read == true,
-      write = opts.write == true,
-      read_capacity = tuning.read_capacity or tuning.capacity,
-      write_capacity = tuning.write_capacity or tuning.capacity,
-      read_chunk_size = tuning.read_chunk_size or tuning.chunk_size,
-      write_chunk_size = tuning.write_chunk_size or tuning.chunk_size,
-    })
-  )
+  return Stream.open_op(handle, {
+    scope = scope, label = opts.label, read = opts.read == true, write = opts.write == true,
+    read_capacity = tuning.read_capacity or tuning.capacity,
+    write_capacity = tuning.write_capacity or tuning.capacity,
+    read_chunk_size = tuning.read_chunk_size or tuning.chunk_size,
+    write_chunk_size = tuning.write_chunk_size or tuning.chunk_size,
+  })
 end
 
 return IO

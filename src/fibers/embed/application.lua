@@ -273,21 +273,19 @@ function Application:advance(opts)
       end
       if ready then
         immediate = true
-      elseif type(self.host._has_external) == 'function' and self.host:_has_external() then
-        local ok_more, delivered = drain_external(self, max_external - external_count)
-        if not ok_more then
-          return leave(self, self._complete, status, delivered)
-        end
-        external_count = external_count + delivered
-        immediate = delivered > 0
-      elseif deadline ~= nil and deadline <= self:now() then
-        immediate = true
       else
-        return leave(self, pending_turn, 'wakeup', status, {
-          needs_immediate_resume = false,
-          steps = step,
-          external_deliveries = external_count,
-        })
+        local ok_more, delivered = drain_external(self, max_external - external_count)
+        if not ok_more then return leave(self, self._complete, status, delivered) end
+        external_count = external_count + delivered
+        if delivered > 0 or deadline ~= nil and deadline <= self:now() then
+          immediate = true
+        else
+          return leave(self, pending_turn, 'wakeup', status, {
+            needs_immediate_resume = false,
+            steps = step,
+            external_deliveries = external_count,
+          })
+        end
       end
     end
 

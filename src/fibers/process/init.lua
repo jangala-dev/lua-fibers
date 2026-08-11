@@ -27,6 +27,7 @@ local Label = require('fibers.internal.label')
 local Cell = require('fibers.resource.cell')
 
 local next_process = 0
+local ENDPOINTS = { 'stdin', 'stdout', 'stderr' }
 
 local function process_label(proc)
   return Label.describe(proc, proc._fibers_id or 'process')
@@ -60,7 +61,7 @@ end
 local function after_launch(proc, field)
   return proc._launch_completion:result_op():map(function(launched, err)
     if launched == nil then return nil, err end
-    return proc[field]
+    return field == '_pid' and proc._pid or proc._streams[field]
   end)
 end
 
@@ -73,13 +74,13 @@ function Process:argv()
 end
 
 function Process:stdin_op()
-  return after_launch(self, '_stdin_stream')
+  return after_launch(self, 'stdin')
 end
 function Process:stdout_op()
-  return after_launch(self, '_stdout_stream')
+  return after_launch(self, 'stdout')
 end
 function Process:stderr_op()
-  return after_launch(self, '_stderr_stream')
+  return after_launch(self, 'stderr')
 end
 
 function Process:launch_succeeded_op()
@@ -184,7 +185,7 @@ function Process:communicate(opts)
     return nil, err
   end
 
-  local stdin_stream = self._stdin_stream
+  local stdin_stream = self._streams.stdin
   if not stdin_stream then
     if opts.input ~= nil and opts.input ~= '' then
       return fail(
@@ -223,8 +224,8 @@ function Process:communicate(opts)
     end
   end
 
-  local stdout_stream = self._stdout_stream
-  local stderr_stream = self._stderr_stream
+  local stdout_stream = self._streams.stdout
+  local stderr_stream = self._streams.stderr
   if stderr_stream == stdout_stream then
     stderr_stream = nil
   end
@@ -322,9 +323,9 @@ local function endpoint_opts(spec, which)
   return configured, nil, nil
 end
 
-local function open_parent_stream(rt, scope, handle, which, opts, label)
+local function parent_stream_op(scope, handle, which, opts, label)
   local read = which == 'stdout' or which == 'stderr'
-  return IO.open_handle_stream(rt, scope, handle, {
+  return IO.handle_stream_op(scope, handle, {
     label = label .. ':' .. which, read = read, write = not read,
   }, opts)
 end
@@ -335,18 +336,11 @@ end
 
 local function publish_launch_failure(rt, proc, err)
   Protected.pcall(function()
-    if proc._stdin_pipe_stream then
-      proc._stdin_pipe_stream:abort(err)
+    local seen = {}
+    for _, stream in pairs(proc._pipe_streams) do
+      if not seen[stream] then stream:abort(err); seen[stream] = true end
     end
-    if proc._stdout_pipe_stream then
-      proc._stdout_pipe_stream:abort(err)
-    end
-    if proc._stderr_pipe_stream and proc._stderr_pipe_stream ~= proc._stdout_pipe_stream then
-      proc._stderr_pipe_stream:abort(err)
-    end
-    if proc._host_process then
-      proc._host_process:close(err)
-    end
+    if proc._host_process then proc._host_process:close(err) end
   end)
   publish_state(rt, proc, { kind = 'failed', error = err })
   IO.masked_perform(rt, proc._launch_completion:publish_failure_op(err))
@@ -354,7 +348,6 @@ local function publish_launch_failure(rt, proc, err)
 end
 
 local function publish_exit(rt, proc, status)
-  proc._status = status
   publish_state(rt, proc, { kind = 'exited', status = status, pid = proc._pid })
   IO.masked_perform(rt, proc._exit_completion:publish_success_op(status))
 end
@@ -383,18 +376,13 @@ local function finish_close(proc, reason)
       errors[#errors + 1] = { stage = label, error = ok and b or a }
     end
   end
-  record_close_error('stdin', function()
-    return close_stream(proc._stdin_pipe_stream or proc._stdin_stream, reason, true)
-  end)
-  record_close_error('stdout', function()
-    return close_stream(proc._stdout_pipe_stream or proc._stdout_stream, reason, true)
-  end)
-  local stderr_to_close = proc._stderr_pipe_stream or proc._stderr_stream
-  local stdout_to_close = proc._stdout_pipe_stream or proc._stdout_stream
-  if stderr_to_close and stderr_to_close ~= stdout_to_close then
-    record_close_error('stderr', function()
-      return close_stream(stderr_to_close, reason, true)
-    end)
+  local seen = {}
+  for _, which in ipairs(ENDPOINTS) do
+    local stream = proc._pipe_streams[which] or proc._streams[which]
+    if stream and not seen[stream] then
+      seen[stream] = true
+      record_close_error(which, function() return close_stream(stream, reason, true) end)
+    end
   end
   record_close_error('host_process', function()
     return proc._host_process and proc._host_process:close(reason) or true
@@ -437,7 +425,7 @@ local function supervise(proc, driver_scope, opts, acquired)
   endpoints = endpoints or {}
 
   acquired:hold('process', host_process, close_host_process)
-  for _, which in ipairs({ 'stdin', 'stdout', 'stderr' }) do
+  for _, which in ipairs(ENDPOINTS) do
     if endpoints[which] then acquired:hold(which, endpoints[which], close_process_endpoint) end
   end
 
@@ -465,66 +453,62 @@ local function supervise(proc, driver_scope, opts, acquired)
     return
   end
 
-  for _, which in ipairs({ 'stdin', 'stdout', 'stderr' }) do
+  local stream_ops = {}
+  for _, which in ipairs(ENDPOINTS) do
     local handle = endpoints[which]
     if handle then
-      if type(handle.bind_runtime) == 'function' then
-        handle:bind_runtime(rt)
-      end
-      local ok, stream_or_err = Protected.pcall(
-        open_parent_stream, rt, driver_scope, handle, which, opts, process_label(proc)
-      )
-      if not ok then
-        publish_launch_failure(
-          rt,
-          proc,
-          IOError.normalise(stream_or_err, {
-            domain = 'process',
-            action = 'open_' .. which,
-            pid = proc._pid,
-          })
-        )
-        return
-      end
-      proc['_' .. which .. '_pipe_stream'] = stream_or_err
-      acquired:release(which, handle)
+      if type(handle.bind_runtime) == 'function' then handle:bind_runtime(rt) end
+      stream_ops[which] = parent_stream_op(driver_scope, handle, which, opts, process_label(proc))
     end
+  end
+  local ok, streams = Protected.pcall(function()
+    return IO.masked_perform(rt, Op.named_together(stream_ops))
+  end)
+  if not ok then
+    publish_launch_failure(rt, proc, IOError.normalise(streams, {
+      domain = 'process', action = 'open_endpoints', pid = proc._pid,
+    }))
+    return
+  end
+  proc._pipe_streams = streams
+  for _, which in ipairs(ENDPOINTS) do
+    if endpoints[which] then acquired:release(which, endpoints[which]) end
   end
 
   if stdin_source then
     driver_scope:spawn(function()
-      return stream_bridge(stdin_source, proc._stdin_pipe_stream, {
+      return stream_bridge(stdin_source, proc._pipe_streams.stdin, {
         flush = stdin_redirect.flush,
         close_destination = true,
       })
     end, { label = process_label(proc) .. ':stdin-bridge' })
-    proc._stdin_stream = nil
+    proc._streams.stdin = nil
   else
-    proc._stdin_stream = proc._stdin_pipe_stream
+    proc._streams.stdin = proc._pipe_streams.stdin
   end
   if stdout_destination then
     driver_scope:spawn(function()
-      return stream_bridge(proc._stdout_pipe_stream, stdout_destination, {
+      return stream_bridge(proc._pipe_streams.stdout, stdout_destination, {
         flush = stdout_redirect.flush,
         close_destination = stdout_redirect.close,
       })
     end, { label = process_label(proc) .. ':stdout-bridge' })
-    proc._stdout_stream = nil
+    proc._streams.stdout = nil
   else
-    proc._stdout_stream = proc._stdout_pipe_stream
+    proc._streams.stdout = proc._pipe_streams.stdout
   end
   if stderr_destination then
     driver_scope:spawn(function()
-      return stream_bridge(proc._stderr_pipe_stream, stderr_destination, {
+      return stream_bridge(proc._pipe_streams.stderr, stderr_destination, {
         flush = stderr_redirect.flush,
         close_destination = stderr_redirect.close,
       })
     end, { label = process_label(proc) .. ':stderr-bridge' })
-    proc._stderr_stream = nil
+    proc._streams.stderr = nil
   elseif stderr_mode == 'stdout' then
-    proc._stderr_stream = proc._stdout_stream
+    proc._streams.stderr = proc._streams.stdout
   else
-    proc._stderr_stream = proc._stderr_pipe_stream
+    proc._streams.stderr = proc._pipe_streams.stderr
   end
 
   if type(host_process.start) == 'function' then
@@ -546,7 +530,7 @@ local function supervise(proc, driver_scope, opts, acquired)
   publish_state(rt, proc, { kind = 'running', pid = proc._pid })
   IO.masked_perform(rt, proc._launch_completion:publish_success_op(proc))
 
-  local status
+  local status, close_error
   local close_requested = proc._lifetime:_close_requested()
   if not close_requested then
     local event, value, err = perform(Op.named_choice({
@@ -566,17 +550,15 @@ local function supervise(proc, driver_scope, opts, acquired)
     local _, reason = proc._lifetime:_close_requested()
     reason = reason or 'process closed'
     publish_state(rt, proc, { kind = 'closing', pid = proc._pid, reason = reason })
-    if proc._stdin_pipe_stream then
+    if proc._pipe_streams.stdin then
       Protected.pcall(function()
-        proc._stdin_pipe_stream:abort(reason)
+        proc._pipe_streams.stdin:abort(reason)
       end)
     end
     local signal_ok, signal_err = host_process:signal(spec.shutdown.signal, spec.shutdown.target)
     if not signal_ok and not IOError.is(signal_err, 'closed') then
-      proc._close_error = IOError.normalise(signal_err, {
-        domain = 'process',
-        action = 'terminate',
-        pid = proc._pid,
+      close_error = IOError.normalise(signal_err, {
+        domain = 'process', action = 'terminate', pid = proc._pid,
       })
     end
     local deadline = rt:now() + spec.shutdown.grace
@@ -588,7 +570,7 @@ local function supervise(proc, driver_scope, opts, acquired)
     end
     if not status then
       IO.masked_perform(rt, proc._exit_completion:publish_failure_op(exit_err))
-      proc._close_error = proc._close_error or exit_err
+      close_error = close_error or exit_err
     end
   end
 
@@ -602,12 +584,11 @@ local function supervise(proc, driver_scope, opts, acquired)
   reason = reason or 'process closed'
   publish_state(rt, proc, { kind = 'closing', pid = proc._pid, reason = reason, status = status })
   local closed, close_err = finish_close(proc, reason)
-  proc._close_error = proc._close_error or close_err
-  if closed and not proc._close_error then
-    publish_state(rt, proc, { kind = 'closed', pid = proc._pid, status = status })
-    else
-    publish_state(rt, proc, { kind = 'closed', pid = proc._pid, status = status, error = proc._close_error })
-  end
+  close_error = close_error or close_err
+  publish_state(rt, proc, {
+    kind = 'closed', pid = proc._pid, status = status,
+    error = close_error,
+  })
 end
 
 local function driver_body(proc, driver_scope, opts)
@@ -618,7 +599,8 @@ local function driver_body(proc, driver_scope, opts)
     ok, err = false, cleanup_err
   end
   if ok then
-    if proc._close_error then return nil, proc._close_error end
+    local state = proc._state._location.value
+    if state.kind == 'closed' and state.error then return nil, state.error end
     return true
   end
   local rt = Runtime.current()
@@ -632,10 +614,9 @@ local function driver_body(proc, driver_scope, opts)
   elseif proc._exit_completion:_is_pending() then
     IO.masked_perform(rt, proc._exit_completion:publish_failure_op(failure))
   end
-  proc._close_error = failure
   local state = proc._state._location.value
   if state.kind ~= 'failed' then
-    publish_state(rt, proc, { kind = 'closed', pid = proc._pid, status = proc._status, error = failure })
+    publish_state(rt, proc, { kind = 'closed', pid = proc._pid, status = state.status, error = failure })
   end
   return nil, failure
 end
@@ -672,12 +653,9 @@ function Command:launch_op(opts)
       _exit_completion = Completion.new(),
       _communicating = false,
       _host_process = nil,
-      _stdin_stream = nil,
-      _stdout_stream = nil,
-      _stderr_stream = nil,
+      _streams = {},
+      _pipe_streams = {},
       _pid = nil,
-      _status = nil,
-      _close_error = nil,
     }, Process), opts.label)
     Label.child(proc._state, proc, 'state')
     Label.child(proc._launch_completion, proc, 'launch')

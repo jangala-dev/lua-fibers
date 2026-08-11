@@ -66,25 +66,15 @@ function Listener:lifetime()
   return self._lifetime
 end
 
-local function local_address_now(listener)
-  local state = listener._lifecycle._location.value
-  return state.address or listener._address
-end
-
 function Listener:local_address_op()
   return self._lifecycle:address_op()
 end
 
 
-local function host_handle(listener)
-  local state = listener._lifecycle._location.value
-  return state.handle
-end
-
 local function accept_to_scope_op(listener, target_scope)
   return listener._offers:result_op():wrap(function(offer, source_err)
     if not offer then return nil, source_err end
-    local address = local_address_now(listener)
+    local address = Lifecycle.address(listener)
     return Connection.from_host(
       Runtime.current(),
       target_scope,
@@ -102,14 +92,6 @@ end
 
 function Listener:accept_op(target)
   return accept_to_scope_op(self, IO.require_scope(target, 'Listener:accept_op target'))
-end
-
-local function listener_close_result(state)
-  local err = state.close_error or (state.fatal and state.error or nil)
-  if err then
-    return nil, err
-  end
-  return true
 end
 
 function Listener:close_op(reason)
@@ -131,11 +113,11 @@ end
 
 function Listener:closed_op()
   local terminal = self._lifecycle:terminal_op()
-  if not self._offers then return terminal:map(listener_close_result) end
+  if not self._offers then return terminal:map(Lifecycle.close_result) end
   local source_closed = self._offers:closed_op()
   return source_closed:and_then(Op.guard(function(ok, source_err)
     if not ok then return Op.always(nil, source_err) end
-    return terminal:map(listener_close_result)
+    return terminal:map(Lifecycle.close_result)
   end))
 end
 
@@ -169,7 +151,7 @@ local function accepted_offers(listener, opts)
     action = 'accept',
     role = 'socket_accept_source',
     capacity = opts.accept_capacity or 32,
-    handle = function() return host_handle(listener) end,
+    handle = function() return Lifecycle.handle(listener) end,
     mode = 'read',
     pull = function(registered_handle)
       local handle, peer, accept_err = registered_handle:accept()
@@ -184,7 +166,7 @@ local function accepted_offers(listener, opts)
     closed_error = function(err)
       return IOError.closed('socket', 'accept', {
         reason = err and err.reason or 'listener closed',
-        address = local_address_now(listener),
+        address = Lifecycle.address(listener),
       })
     end,
     retired = function(rt, state)
@@ -216,7 +198,6 @@ function Module.listen_op(address, opts)
     }),
   })
   local private_scope = Scope.for_lifetime(listener._lifetime)
-  listener._private_scope = private_scope
 
   return scope:admit_op(listener):wrap(function()
     local active, activation_err = Activation.create(listener, {

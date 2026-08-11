@@ -31,12 +31,12 @@ local function assert_truthy(v, msg)
   end
 end
 
--- Stale readiness for an earlier registration generation is ignored by the reactor.
+-- Readiness for a stale registration identity is ignored by the reactor.
 do
   local rt = Runtime.new()
-  local owner = Scope.new():label('poller-generation-owner')
+  local owner = Scope.new():label('poller-stale-owner')
   local backend = FakeHandle.new({
-    label = 'poller-generation-backend',
+    label = 'poller-stale-backend',
     readiness = 'manual',
     initial_readable = false,
   })
@@ -50,7 +50,7 @@ do
   rt:spawn_raw(function()
     stream = rt:perform(Stream.open_op(backend, {
       scope = owner,
-      label = 'poller-generation-stream',
+      label = 'poller-stale-stream',
       read = true,
       write = false,
     }))
@@ -59,8 +59,7 @@ do
   local entry = stream._read_registration
   External.unsafe_deliver(
     rt.host_reactor.ready,
-    entry._fibers_id,
-    entry.generation - 1,
+    entry._fibers_id .. ':retired',
     'read',
     entry.key
   )
@@ -119,7 +118,7 @@ do
   local WaitSet = require('fibers.embed.wait_set')
   local key = {}
   local readiness_feed, poller_feed = {}, {}
-  local registration = { id = 'shared', generation = 1, key = key, mode = 'write' }
+  local registration = { _fibers_id = 'shared', key = key, mode = 'write' }
   local poller = {
     _host_active = function()
       return { registration }

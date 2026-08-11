@@ -71,9 +71,9 @@ Each readiness-driven Stream direction owns one reactor registration:
 created -> registered -> retired
 ```
 
-Registration identity contains a generation. A readiness delivery for an older
-generation is stale and cannot invoke the backend. Retirement removes the
-registration from the indexed poller before its resource can close.
+Each registration has a unique, never-reused identity. A readiness delivery for
+a retired identity is stale and cannot invoke the backend. Retirement removes
+the registration from the indexed poller before its resource can close.
 
 The reactor performs bounded work:
 
@@ -232,20 +232,20 @@ A conforming stream-socket host must preserve:
 - local and peer address metadata;
 - half-close and EOF behaviour;
 - structured refusal, address-conflict, closed and broken-pipe errors;
-- generation-safe readiness registration;
+- stale-safe readiness registration;
 - complete handle, task and registration Closure.
 
 
 ## Indexed poller and reactor
 
 Every host-backed direction receives an indexed poller registration containing a
-stable id, generation, readiness key and direction. The poller delivers only the
+stable registration id, readiness key and direction. The poller delivers only the
 ready subset through a persistent FIFO; it does not rebuild an option tree
 containing every Stream.
 
 Linux epoll stores a fresh registration epoch in each armed event token. A stale
 kernel event must resolve through the current epoch before the reaction id and
-generation are accepted.
+registration identity is still active.
 
 The reactor waits on compact control and readiness options:
 

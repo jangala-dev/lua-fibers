@@ -89,5 +89,5 @@ end
 function Readiness:writable_op()
   return self:readiness_op('write')
 end
-Readiness.Kind = Kind
+Readiness.Kind, Readiness._mode = Kind, mode
 return Readiness

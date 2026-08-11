@@ -158,20 +158,10 @@ local function close_socket_handle(socket, rt, state, reason)
   if not ok then IO.masked_perform(rt, socket._lifecycle:record_close_error_op(close_err)) end
 end
 
-local function local_address_now(socket)
-  local state = socket._lifecycle._location.value
-  return state.address or socket._address
-end
-
 function Datagram:local_address_op()
   return self._lifecycle:address_op()
 end
 
-
-local function host_handle(socket)
-  local state = socket._lifecycle._location.value
-  return state.handle
-end
 
 function Datagram:send_to_op(data, address)
   if type(data) ~= 'string' then
@@ -181,7 +171,7 @@ function Datagram:send_to_op(data, address)
   if address.kind ~= 'inet4' and address.kind ~= 'inet6' then
     error('DatagramSocket:send_to_op currently supports IPv4 and IPv6 destinations', 2)
   end
-  local local_address = local_address_now(self)
+  local local_address = Lifecycle.address(self)
   if local_address and local_address.kind ~= address.kind then
     return Op.always(
       nil,
@@ -248,16 +238,6 @@ function Datagram:close_op(reason)
     end)
 end
 
-local function close_result(state)
-  if state.close_error then
-    return nil, state.close_error
-  end
-  if state.fatal and state.error then
-    return nil, state.error
-  end
-  return true
-end
-
 function Datagram:closed_op()
   return IO.closed_after_driver_op(self._driver)
 end
@@ -267,12 +247,12 @@ local function close_from_driver(socket, rt, reason, err, fatal)
   local pending_error = err
     or IOError.closed('datagram', 'send_to', {
       reason = reason,
-      address = local_address_now(socket),
+      address = Lifecycle.address(socket),
     })
   IO.masked_perform(rt, socket._sends:close_op(pending_error))
   if first then close_socket_handle(socket, rt, state, reason) end
   local _, terminal = IO.masked_perform(rt, socket._lifecycle:stopped_op(reason, err, fatal))
-  return close_result(terminal)
+  return Lifecycle.close_result(terminal)
 end
 
 local function normalise_packet(socket, packet)
@@ -288,7 +268,7 @@ local function normalise_packet(socket, packet)
     end
     packet.peer = peer
   end
-  packet.local_address = packet.local_address or local_address_now(socket)
+  packet.local_address = packet.local_address or Lifecycle.address(socket)
   packet.flags = packet.flags or {}
   packet.truncated = packet.truncated == true or packet.flags.truncated == true
   packet.original_size = packet.original_size or packet.flags.original_size
@@ -302,7 +282,7 @@ local function packet_source(socket, capacity)
     action = 'receive_from',
     role = 'datagram_packet_source',
     capacity = capacity,
-    handle = function() return host_handle(socket) end,
+    handle = function() return Lifecycle.handle(socket) end,
     mode = 'read',
     pull = function(registered_handle)
       local packet, err = registered_handle:recv_from(socket._max_datagram_size)
@@ -314,7 +294,7 @@ local function packet_source(socket, capacity)
     closed_error = function(err)
       return IOError.closed('datagram', 'receive_from', {
         reason = err and err.reason or 'datagram socket closed',
-        address = local_address_now(socket),
+        address = Lifecycle.address(socket),
       })
     end,
   })
@@ -393,7 +373,7 @@ local function driver(socket, driver_scope)
     failure = driver_err
   else
     failure = IO.protocol_error('datagram', 'driver', driver_err, {
-      address = local_address_now(socket),
+      address = Lifecycle.address(socket),
     })
     fatal = true
   end

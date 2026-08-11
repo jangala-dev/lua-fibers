@@ -12,6 +12,7 @@ local Cell = require('fibers.resource.cell')
 local Counter = require('fibers.resource.counter')
 local Transfer = require('fibers.io.internal.flow_transfer')
 local BytePlane = require('fibers.file.internal.byte_plane')
+local FileMode = require('fibers.file.internal.mode')
 local IO = require('fibers.io.facility')
 local Mailbox = require('fibers.mailbox')
 local Protected = require('fibers.protected')
@@ -101,13 +102,6 @@ local next_file, next_command, next_job, next_temp = 0, 0, 0, 0
 local DEFAULT_CHUNK = BytePlane.DEFAULT_CHUNK
 local DEFAULT_READ_CAPACITY = 64 * 1024
 local DEFAULT_MAX = BytePlane.DEFAULT_MAX
-local FILE_MODES = {
-  r = true, rb = true, w = true, wb = true, a = true, ab = true,
-  ['r+'] = true, ['r+b'] = true, ['rb+'] = true,
-  ['w+'] = true, ['w+b'] = true, ['wb+'] = true,
-  ['a+'] = true, ['a+b'] = true, ['ab+'] = true,
-}
-
 local function validate_path(path, action)
   if type(path) ~= 'string' or path == '' then
     error('file.' .. action .. ' expects a non-empty path string', 3)
@@ -115,18 +109,11 @@ local function validate_path(path, action)
   return path
 end
 
-local function validate_mode(mode)
-  mode = mode or 'r'
-  if not FILE_MODES[mode] then
-    error('invalid regular-file mode ' .. tostring(mode), 3)
-  end
-  return mode
-end
+local validate_mode = FileMode.require
 
 local function mode_capabilities(mode)
-  local first = mode:sub(1, 1)
-  return first == 'r' or mode:find('+', 1, true) ~= nil,
-    first == 'w' or first == 'a' or mode:find('+', 1, true) ~= nil
+  local parsed = FileMode.parse(mode)
+  return parsed.read, parsed.write
 end
 
 local validate_read_limits = BytePlane.validate_read_limits
@@ -297,7 +284,6 @@ local function rewind_backend(file, backend)
 end
 
 local function fail_write_plane(rt, file, err)
-  file._write_terminal = true
   if file._write_flow then IO.masked_perform(rt, file._write_flow:outlet():fail_op(err)) end
 end
 
@@ -352,11 +338,9 @@ local function service_read(file, backend, item)
     IO.masked_perform(rt, file._eof:write_op(true))
     return true
   elseif status == 'error' then
-    file._read_terminal = true
     return nil, normalise_flow_error(file, 'read', value)
   elseif status == 'would_block' then
     local failure = IO.protocol_error('file', 'read', 'completion-driven file backend returned would-block', { path = file._path })
-    file._read_terminal = true
     IO.masked_perform(rt, file._read_flow:inlet():fail_op(failure))
     return nil, failure
   end
@@ -412,7 +396,7 @@ local function execute_control(file, provider, backend, message)
 end
 
 local function read_candidate(file)
-  if not file._read_flow or file._read_terminal then return nil end
+  if not file._read_flow or file._read_flow:_read_terminal_reason() then return nil end
   return file._eof:expect_op(false):and_then(file._read_generation:read_op()):and_then(Op.guard(function(generation)
     return file._read_flow:inlet():reserve_some_op(file._read_chunk_size, file, { generation = generation }):map(function(space)
       return { space = space, generation = generation }
@@ -426,7 +410,7 @@ local function next_driver_action(file)
     return 'control', message
   end)
   local io
-  if file._write_flow and not file._write_terminal then
+  if file._write_flow and not file._write_flow:_write_terminal_reason() then
     io = file._write_flow:outlet():lease_some_op(file._write_chunk_size, file):map(function(lease)
       return 'write', lease
     end)
@@ -537,8 +521,6 @@ local function new_file_op(path, mode, opts, operation, temporary)
     _provider_opts = opts,
     _temporary = temporary == true,
     _written = 0,
-    _read_terminal = false,
-    _write_terminal = false,
   }, RegularFile), opts.label)
 
   Label.child(file._control_tx, file, 'control')

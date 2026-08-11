@@ -5,7 +5,23 @@ local IOError = require('fibers.io.error')
 local HostLifecycle = require('fibers.internal.host_lifecycle')
 
 local Ready, Wait = StateMachine.Ready, StateMachine.Wait
-local Lifecycle = { copy = HostLifecycle.copy }
+local Lifecycle = {}
+
+
+function Lifecycle.address(owner)
+  local state = owner._lifecycle._location.value
+  return state.address or owner._address
+end
+
+function Lifecycle.handle(owner)
+  return owner._lifecycle._location.value.handle
+end
+
+function Lifecycle.close_result(state)
+  local err = state.close_error or (state.fatal and state.error or nil)
+  if err then return nil, err end
+  return true
+end
 
 function Lifecycle.define(spec)
   local function update(current, payload)

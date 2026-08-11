@@ -74,7 +74,7 @@ function Lifetime.new(opts)
     _role = opts.role,
     _rights = opts.rights,
     _meta = opts.meta,
-    _interrupt = Runtime._new_interrupt(node_kind .. '-interrupt'),
+    _interrupt = Runtime._new_interrupt(),
     _outcome = Completion.new():label(node_kind .. '-outcome'),
   }, Node)
   Label.attach(node)

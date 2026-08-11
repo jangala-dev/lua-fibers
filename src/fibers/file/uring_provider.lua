@@ -6,6 +6,7 @@
 
 local Signal = require('fibers.resource.signal')
 local IOError = require('fibers.io.error')
+local FileMode = require('fibers.file.internal.mode')
 local External = require('fibers.embed.external')
 local Reactor = require('fibers.io.reactor')
 local perform = require('fibers.perform')
@@ -175,25 +176,15 @@ local O_TRUNC = 512
 local O_APPEND = 1024
 local O_CLOEXEC = 0x80000
 
-local function mode_flags(mode, opts)
-  local flags
-  if mode == 'r' or mode == 'rb' then
-    flags = O_RDONLY
-  elseif mode == 'w' or mode == 'wb' then
-    flags = O_WRONLY + O_CREAT + O_TRUNC
-  elseif mode == 'a' or mode == 'ab' then
-    flags = O_WRONLY + O_CREAT + O_APPEND
-  elseif mode == 'r+' or mode == 'r+b' or mode == 'rb+' then
-    flags = O_RDWR
-  elseif mode == 'w+' or mode == 'w+b' or mode == 'wb+' then
-    flags = O_RDWR + O_CREAT + O_TRUNC
-  elseif mode == 'a+' or mode == 'a+b' or mode == 'ab+' then
-    flags = O_RDWR + O_CREAT + O_APPEND
-  end
-  if flags and opts and opts.exclusive then
-    flags = flags + O_EXCL
-  end
-  return flags and (flags + O_CLOEXEC), mode and mode:sub(1, 1) == 'a'
+local function mode_flags(name, opts)
+  local mode = FileMode.parse(name)
+  if not mode then return nil end
+  local flags = mode.read and mode.write and O_RDWR or (mode.write and O_WRONLY or O_RDONLY)
+  if mode.create then flags = flags + O_CREAT end
+  if mode.truncate then flags = flags + O_TRUNC end
+  if mode.append then flags = flags + O_APPEND end
+  if opts and opts.exclusive then flags = flags + O_EXCL end
+  return flags + O_CLOEXEC, mode.append
 end
 
 local function errno_message(self, eno)

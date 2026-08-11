@@ -32,9 +32,9 @@ local OFFER_SPEC = {
 }
 
 local function source_error(source, state)
-  if state and state.kind == 'failed' then return state.error end
-  return source._error or IOError.closed(source._domain, source._action, {
-    reason = state and state.reason or source.reason or 'offer source completed',
+  if state and state.error then return state.error end
+  return IOError.closed(source._domain, source._action, {
+    reason = state and state.reason or 'offer source completed',
   })
 end
 
@@ -129,18 +129,18 @@ end
 
 function Offer:result_op()
   return self:next_op():or_else(self._entry:retired_op():map(function()
-    return nil, source_error(self, self.state or self._entry.retire_state)
+    return nil, source_error(self, self._entry.retire_state)
   end))
 end
 
 function Offer:terminal_op()
   return self._entry:retired_op():map(function(retired, retire_err)
     if not retired then return nil, retire_err end
-    local state = self.state or self._entry.retire_state
+    local state = self._entry.retire_state
     if state and (state.kind == 'failed' or state.kind == 'cancelled') then
       return nil, source_error(self, state)
     end
-    return true, self._error
+    return true, state and state.error
   end)
 end
 
@@ -223,9 +223,7 @@ function Offer:_reactor_retired(rt, state, preserve_offers)
 
   -- Terminal publication is unconditional with respect to disposal or owner
   -- retirement outcome: observers must always learn that the source has stopped.
-  self.state = terminal_state
-  self.reason = terminal_state.reason or self.reason
-  if terminal_state.error then self._error = terminal_state.error end
+  self._entry.retire_state = terminal_state
   if cleanup_error or retired_error then return nil, terminal_state.error end
   return true
 end

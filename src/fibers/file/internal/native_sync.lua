@@ -2,6 +2,7 @@
 -- This module has no Fibers runtime dependency and performs no scheduling.
 
 local unpack_ = table.unpack or unpack
+local FileMode = require('fibers.file.internal.mode')
 
 local ok_nixio, nixio = pcall(require, 'nixio')
 local ok_nixio_fs, nixio_fs = pcall(require, 'nixio.fs')
@@ -83,21 +84,7 @@ local function ffi_failure(number, fallback)
   return failure(ffi.string(C.strerror(number)), number, fallback)
 end
 
-local MODES = {
-  r = true, rb = true, w = true, wb = true, a = true, ab = true,
-  ['r+'] = true, ['r+b'] = true, ['rb+'] = true,
-  ['w+'] = true, ['w+b'] = true, ['wb+'] = true,
-  ['a+'] = true, ['a+b'] = true, ['ab+'] = true,
-}
-local function parse_mode(mode)
-  if not MODES[mode] then return nil end
-  local first = mode:sub(1, 1)
-  local plus = mode:find('+', 1, true) ~= nil
-  return {
-    name = mode, read = first == 'r' or plus, write = first ~= 'r' or plus,
-    create = first == 'w' or first == 'a', truncate = first == 'w', append = first == 'a',
-  }
-end
+local parse_mode = FileMode.parse
 
 local Handle = {}
 Handle.__index = Handle

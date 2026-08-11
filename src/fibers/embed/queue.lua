@@ -72,9 +72,6 @@ function Queue:_consume_wake(fallback)
   return reason
 end
 
-function Queue:_has_external()
-  return self._queue_head ~= nil
-end
 
 function Queue:enqueue(fn, ...)
   if self._closed or self._done then

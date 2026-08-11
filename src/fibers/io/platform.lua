@@ -16,9 +16,9 @@ local SLOT_SET = {}
 for i = 1, #SLOTS do SLOT_SET[SLOTS[i]] = true end
 
 local OPTIONS = {
-  providers = true, backend = true, allow_mixed_wait_domains = true,
+  providers = Contract.table, backend = Contract.table, allow_mixed_wait_domains = Contract.boolean,
   compatible_wait_domains = true, kind = true, label = true, family = true,
-  owns_providers = true,
+  owns_providers = Contract.boolean,
 }
 local WAIT_BOUND = { 'pipe', 'socket', 'datagram', 'process', 'file', 'descriptor' }
 local METHODS = {
@@ -28,7 +28,7 @@ local METHODS = {
   sort_destination_addresses = 'socket', create_datagram = 'datagram',
   resolve = 'resolver', start_process = 'process', file_provider = 'file',
   set_wake_callback = 'wait', _has_pending_wake = 'wait', _consume_wake = 'wait',
-  _has_external = 'wait', _drain_external = 'wait', enqueue = 'wait', deliver = 'wait',
+  _drain_external = 'wait', enqueue = 'wait', deliver = 'wait',
   clear = 'wait', wake = 'wait', mark_done = 'wait', wait_done = 'wait',
 }
 local CONTRACTS = {
@@ -99,17 +99,11 @@ end
 function Platform.new(opts)
   opts = Contract.options(opts, OPTIONS, 'fibers.io.platform options', 2)
   Contract.options(opts.providers, SLOT_SET, 'fibers.io.platform providers', 2)
-  Contract.optional_boolean(opts.allow_mixed_wait_domains, 'allow_mixed_wait_domains', 2)
-  Contract.optional_boolean(opts.owns_providers, 'owns_providers', 2)
   if opts.compatible_wait_domains ~= nil
       and type(opts.compatible_wait_domains) ~= 'table'
       and type(opts.compatible_wait_domains) ~= 'function' then
     error('compatible_wait_domains must be a table, function or nil', 2)
   end
-  if opts.backend ~= nil and type(opts.backend) ~= 'table' then
-    error('fibers.io.platform backend must be a provider table or nil', 2)
-  end
-
   local input, providers = opts.providers or {}, {}
   for i = 1, #SLOTS do
     local slot = SLOTS[i]
