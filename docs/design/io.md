@@ -89,24 +89,21 @@ registrations.
 
 ## Facility closure conformance
 
-For every host-backed facility, `closed_op` denotes completed structural
-retirement. It must not become ready merely because a host completion or local
-state flag was published. Where a private driver exists, closure includes the
-complete driver body and its private Scope.
+A host-backed facility has two deliberately distinct completion facts:
 
-The built-in audit applies this rule as follows:
+- its domain `closed_op`, which proves that the facility's own local consequence
+  has quiesced according to its protocol;
+- its Lifetime `outcome_op`, which proves complete custody retirement, including
+  every descendant Lifetime.
 
-| Facility | Completion observed by `closed_op` |
-|---|---|
-| Regular file | host file terminal state and private file-driver Scope |
-| Process | cached process terminal state, reactor-owned exit completion, generated Streams, bridges and supervisor Scope |
-| Resolver query | both address-family completions and private resolver-driver Scope |
-| Direct and named dial | dial lifecycle terminal state and private dial-driver Scope |
-| Listener | listener terminal state, accepted-handle hold and accept-source registration |
-| Datagram | datagram terminal state and private driver Scope |
-| Duplex Stream | both Flow endpoints, reactor registrations and host handle |
-| Flow endpoint | managed Flow terminal state and retirement of outstanding byte custody |
+A local `closed_op` must not become ready merely because an initial close request
+or host flag was published. Where a private driver exists it waits for that
+Task's body completion and the domain terminal facts required by the facility.
+It does **not** recursively retire private descendants; the Lifetime custody
+engine owns that structural obligation.
 
+Use `Lifetime.of(resource):outcome_op()` or a stronger convenience operation
+which explicitly awaits it when an API promises complete subtree retirement.
 The reusable regression in `tests/internal/test_closed_op_conformance.lua`
 forces a host terminal signal to arrive before a delayed private descendant.
 Any facility using the shared driver-closure rule must continue waiting until
@@ -178,9 +175,10 @@ represented as one speculative all-or-nothing option. Output readers run concurr
 Process Closure before returning.
 
 `Command:launch_op` is different: a guard constructs a fresh Process during the
-current synchronisation attempt, while a committed supervisor-spawn effect
-performs the irreversible launch afterwards. The option means that custody of
-a launch attempt has committed; `Process:launch_result_op` observes the later
+current synchronisation attempt. Transactional admission makes its Process
+Lifetime real; only after that admission commits does the attached Task body
+perform the irreversible host launch. The option therefore means that custody
+of a launch attempt has committed; `Process:launch_result_op` observes the later
 exec handshake.
 
 ## Internal qualification instrumentation

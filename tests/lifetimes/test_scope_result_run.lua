@@ -115,7 +115,7 @@ do
     'closure failure should be reported'
   )
   assert_truthy(
-    Closure.is_failure(r.closure_failure),
+    Closure.Failure.is(r.closure_failure),
     'checked result should retain recovery authority'
   )
   assert_eq(r.closure_failures[1], r.closure_failure)

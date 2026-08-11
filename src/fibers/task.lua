@@ -8,7 +8,7 @@
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
 local perform = require('fibers.perform')
-local Effect = require('fibers.effect')
+local Completion = require('fibers.resource.completion')
 local Protected = require('fibers.protected')
 local Lifetime = require('fibers.lifetime')
 local Closure = require('fibers.closure')
@@ -88,39 +88,41 @@ function Task._new(fn, parent_scope, opts)
     lifetime = true,
     label = true,
     closure = true,
-    body_result_owner = true,
+    execution_kind = true,
   }, 'Task._new options', 2)
-  local body_result_owner = opts.body_result_owner or 'task'
-  if body_result_owner ~= 'task' and body_result_owner ~= 'scope' then
-    error("Task._new body_result_owner must be 'task' or 'scope'", 2)
+  local execution_kind = opts.execution_kind or 'task'
+  if execution_kind ~= 'task' and execution_kind ~= 'resource_driver' then
+    error("Task._new execution_kind must be 'task' or 'resource_driver'", 2)
   end
   local life = opts.lifetime
   if life ~= nil and not Lifetime.is(life) then
     error('Task lifetime must be a Lifetime', 2)
   end
   if not life then
-    life = Lifetime.task(fn, {
+    life = Lifetime.new({
       label = opts.label,
-      closure = Closure.running(Closure.propagation(opts.closure or (parent_scope and parent_scope._lifetime._closure))),
+      role = 'task',
+      closure = Closure.running(),
     })
-  else
-    if life._has_body or life._body ~= nil then
-      error('Lifetime already has a body', 2)
-    end
-    life._body = fn
-    life._has_body = true
-    local propagation = opts.closure or (parent_scope and parent_scope._lifetime._closure)
-    if not life._closure or life._closure.name == 'none' then
-      life._closure = Closure.running(Closure.propagation(propagation))
-    else
-      life._closure = Closure.combine(life._closure, Closure.propagation(propagation))
-    end
+  elseif life:_task() ~= nil then
+    error('Lifetime already has a Task view', 2)
+  elseif not life._protocol or life._protocol.name == 'none' then
+    life._protocol = Closure.protocol(Closure.running(), 'Task running protocol')
   end
-  return setmetatable({
+  local inherited = parent_scope and parent_scope._role and parent_scope._role.policy or nil
+  local scope_role = life:_scope_role(true)
+  scope_role.policy = Closure._merge_policy(scope_role.policy,
+    Closure._merge_policy(inherited, Closure.policy(opts.closure)))
+  local task = setmetatable({
     _lifetime = life,
     _fibers_task = true,
-    _body_result_owner = body_result_owner,
+    _body = fn,
+    _execution_kind = execution_kind,
+    _body_result = Completion.new():label((opts.label or 'task') .. '-body-result'),
   }, Task)
+  life:_attach_task(task)
+  Label.child(task._body_result, life, 'body-result')
+  return task
 end
 
 function Task.is(value)
@@ -153,7 +155,10 @@ function Task:_publish_protected_body_result(results, runtime)
   local rt = runtime or Runtime.current()
   if not rt then error('task body result published without a current runtime', 2) end
   local exit = ScopeOutcome.protected_exit(Exit, results)
-  rt:perform(self._lifetime:publish_body_result_op(exit), { masked = true })
+  local first, conflict = rt:perform(self._body_result:publish_success_op(exit), { masked = true })
+  if first ~= true then
+    error('Task body result already published: ' .. tostring(conflict), 0)
+  end
   return exit
 end
 
@@ -164,46 +169,46 @@ function Task:_spawn_body(fn)
     if not rt then error('task started without a current runtime', 2) end
     local results = pack(Protected.pcall(fn, task))
     fn = nil
-    if task._body_result_owner == 'task' then
-      task:_publish_protected_body_result(results, rt)
-    else
-      local state = rt:perform(task._lifetime._body_result:read_op(), { masked = true })
-      if type(state) ~= 'table' or state.status ~= 'done' then
-        error('Scope-backed Task returned without publishing its body result', 0)
-      end
+    local state = rt:perform(task._body_result:read_op(), { masked = true })
+    if type(state) ~= 'table' or state.kind == 'pending' then
+      error('Scope-backed Task returned without publishing its body result', 0)
     end
   end
 end
 
--- The task body remains dormant while spawn is explored. Effect preparation
--- may inspect its availability, but only committed discharge may move it into a
--- runnable fiber frame.
-function Task:_spawn_effect()
-  local life = self._lifetime
-  return Effect.spawn(nil, life._fibers_id, nil, self)
-end
-
+-- Admission is the semantic birth of a running Task.  The LifetimeStore
+-- activates body-bearing Lifetimes only after the complete admission commit has
+-- installed custody and bound every admitted node to the Runtime.
 function Task:_take_spawn_body(runtime)
   local life = self._lifetime
   if runtime ~= nil and life._runtime ~= runtime then
-    error('committed spawn Task belongs to another Runtime', 2)
+    error('committed Task activation belongs to another Runtime', 2)
   end
-  local fn = life._body
+  local fn = self._body
   if type(fn) ~= 'function' then
-    error('committed spawn Task has no dormant body', 2)
+    error('committed Task activation has no dormant body', 2)
   end
   local runnable = self:_spawn_body(fn)
-  life._body = nil
+  self._body = nil
   return runnable
 end
 
-function Task:spawn_effect_op()
-  local task = self
-  return Op.emit(self:_spawn_effect()):map(function() return task end)
+function Task:_activate_committed(runtime)
+  return runtime:_spawn_committed(self:_take_spawn_body(runtime), nil, self)
+end
+
+-- Execution kind is the one policy distinction needed by structural retirement.
+-- Ordinary Tasks retire their own quiescent Lifetime after any body result. A
+-- domain-resource driver may do so only after normal execution; on failure the
+-- resource remains the custodian's cleanup responsibility.
+function Task:_should_self_retire(body_ok)
+  if self._execution_kind == 'task' then return true end
+  if self._execution_kind == 'resource_driver' then return body_ok == true end
+  error('unknown Task execution kind ' .. tostring(self._execution_kind), 0)
 end
 
 function Task:body_result_op()
-  return self._lifetime:body_result_op()
+  return self._body_result:success_op()
 end
 
 -- `body_result_op` observes immediate execution. `await_op` waits for complete

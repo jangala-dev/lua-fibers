@@ -68,7 +68,7 @@ do
       end)
       :or_else(Op.always('blocked')))
     still_to = fibers.perform(to:has_custody_op(h))
-    fibers.perform(Closure.close_op(to, h))
+    to:close(h)
   end)
   assert_eq(moved, true, 'move_op should update concrete owner')
   assert_eq(from_after, false, 'source should not retain custody after move')
@@ -77,7 +77,7 @@ do
   assert_eq(still_to, true, 'failed move should leave custody unchanged')
 end
 
--- Closure is the only public resolution path. Internal close tokens are not
+-- Closure is the only public resolution path. Internal close claims are not
 -- exposed; successful closure retires custody and records a closed Lifetime.
 do
   local life = FibersScope.new():label('closure-law')
@@ -85,15 +85,15 @@ do
   local live_phase, owner_after, closure_phase
   fibers.run(function()
     fibers.perform(life:admit_op(h))
-    live_phase = Lifetimes.state(h).custody_phase
-    fibers.perform(life:close_op(h, 'law closure'))
+    live_phase = Lifetimes.state(h).phase
+    life:close(h, 'law closure')
     local state = Lifetimes.state(h)
     owner_after = state.custodian
-    closure_phase = state.closure_phase
+    closure_phase = state.phase
   end)
   assert_eq(live_phase, 'live', 'admission should establish live custody')
   assert_eq(owner_after, nil, 'closure should retire custody')
-  assert_eq(closure_phase, 'closed', 'closure should record the terminal phase')
+  assert_eq(closure_phase, 'retired', 'closure should record the terminal phase')
 end
 
 -- Closure protocols use the explicit request/finish contract.
@@ -121,7 +121,7 @@ do
   })
   fibers.run(function()
     fibers.perform(life:admit_op(h))
-    fibers.perform(Closure.close_op(life, h))
+    life:close(h)
   end)
   assert_eq(discharged, true, 'protocol table finish_op should run during Closure')
 end

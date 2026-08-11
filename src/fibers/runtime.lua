@@ -276,6 +276,18 @@ function Runtime:_lifetime_store()
   return store
 end
 
+function Runtime:_lifetime_root()
+  local root = self._root_lifetime
+  if root then return root end
+  local Lifetime = require('fibers.lifetime')
+  root = Lifetime.new({ label = 'runtime-root' })
+  root._runtime_root = true
+  root:_bind_runtime_committed(self)
+  self:_lifetime_store():_bootstrap_root(root)
+  self._root_lifetime = root
+  return root
+end
+
 function Runtime:_add_finalizer(fn)
   if type(fn) ~= 'function' then
     error('runtime finalizer must be a function', 2)

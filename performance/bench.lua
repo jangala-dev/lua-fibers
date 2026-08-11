@@ -46,7 +46,6 @@ local Cell = require('fibers.resource.cell')
 local EventQueue = require('fibers.resource.event_queue')
 local Clock = require('fibers.resource.clock')
 local Lifetime = require('fibers.lifetime')
-local Closure = require('fibers.closure')
 local Scope = require('fibers.scope')
 local Effect = require('fibers.effect')
 
@@ -609,11 +608,11 @@ add('lifetime', 'admit custody close', 500, function(n)
   local result = fibers.try_run(function(scope)
     for i = 1, n do
       local resource = { name = 'resource-' .. tostring(i) }
-      Lifetime.inert(resource)
+      Lifetime.define(resource)
       local admitted = fibers.perform(scope:admit_op(resource))
       local has_custody = fibers.perform(scope:has_custody_op(resource))
-      local closed = fibers.perform(Closure.close_op(scope, resource, 'benchmark'))
-      if admitted == resource and has_custody == true and closed == Lifetime.of(resource) then
+      local closed = scope:close(resource, 'benchmark')
+      if admitted == resource and has_custody == true and closed == resource then
         ok_count = ok_count + 1
       end
     end

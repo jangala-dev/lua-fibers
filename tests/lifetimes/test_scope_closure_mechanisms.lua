@@ -17,19 +17,20 @@ local function assert_eq(a, b, msg)
   end
 end
 
--- Lifetime topology change observation is a managed transactional fact.
+-- Lifetime state observations are native managed selectors rather than
+-- user-visible version polling loops.
 do
   local rt = FibersRuntime.new()
-  local scope = Lifetimes.scope(rt, 'changed-scope')
-  local first, changed
+  local scope = Lifetimes.scope(rt, 'sealed-scope')
+  local observed
   rt:spawn_raw(function()
-    first = rt:perform(scope:_store():status_op(scope))
-    rt:perform(scope:admit_op(Lifetimes.resource('changed-item')))
-    changed = rt:perform(scope:_store():changed_op(scope, first.version))
-  end):label('lifetime-change')
-  repeat
-  until rt:run().tag ~= 'found'
-  assert_eq(changed, first.version + 1)
+    observed = rt:perform(scope:sealed_op())
+  end):label('lifetime-sealed-observer')
+  rt:spawn_raw(function()
+    rt:perform(scope:seal_op('test'))
+  end):label('lifetime-sealer')
+  repeat until rt:run().tag ~= 'found'
+  assert_eq(observed, scope)
 end
 
 -- Cancellation is monotonic and preserves the first cause.

@@ -17,11 +17,11 @@ local function truthy(v, msg) if not v then error(msg or 'expected truthy', 2) e
 
 local function resource(name, children)
   local value = { name = name }
-  Lifetime.inert(value, { label = name, children = children })
+  Lifetime.define(value, { label = name, children = children })
   return value
 end
 
--- The lifetime forest is demand-driven. Closed algebraic work does not pay for
+-- The Lifetime tree is demand-driven. Closed algebraic work does not pay for
 -- it; the first lifetime operation creates one store which is then retained.
 do
   local runtime = Runtime.new()
@@ -33,6 +33,18 @@ do
   eq(runtime:_lifetime_store(), store, 'the Runtime reuses its LifetimeStore')
 end
 
+-- Every live top-level Scope is a child of one distinguished Runtime root.
+do
+  local runtime = Runtime.new()
+  local a = Scope.new({ runtime = runtime }):label('runtime-root-a')
+  local b = Scope.new({ runtime = runtime }):label('runtime-root-b')
+  local root = runtime:_lifetime_root()
+  local store = runtime:_lifetime_store()
+  eq(store:_custodian(root), nil, 'Runtime root has no custodian')
+  eq(store:_custodian(a:lifetime()), root, 'top-level Scope belongs to Runtime root')
+  eq(store:_custodian(b:lifetime()), root, 'all top-level Scopes share the Runtime root')
+end
+
 -- Lifetime topology is versioned per Lifetime node. Updating one boundary must
 -- not invalidate observations of an unrelated boundary in the same Runtime.
 do
@@ -40,11 +52,9 @@ do
   local a = Scope.new({ runtime = runtime, closure = Closure.supervisor({ child_failure = 'ignore' }) }):label('granularity-a')
   local b = Scope.new({ runtime = runtime, closure = Closure.supervisor({ child_failure = 'ignore' }) }):label('granularity-b')
   local store = runtime:_lifetime_store()
-  store:activate_boundary(a:lifetime())
-  store:activate_boundary(b:lifetime())
   local a_location = a:lifetime()._lifetime_location
   local b_location = b:lifetime()._lifetime_location
-  truthy(a_location ~= b_location, 'unrelated Lifetimes must use distinct forest locations')
+  truthy(a_location ~= b_location, 'unrelated Lifetimes must use distinct Lifetime locations')
   local a_before, b_before = a_location.version, b_location.version
   runtime:_spawn_raw(function() runtime:perform(a:seal_op()) end, a):label('seal-granularity-a')
   runtime:run()
@@ -57,20 +67,20 @@ end
 do
   local item = resource('store-item')
   local before = Lifetime.of(item)
-  eq(Lifetimes.state(before).closure_phase, 'dormant')
+  eq(Lifetimes.state(before).phase, 'dormant')
   fibers.run(function(scope)
     eq(fibers.perform(scope:has_custody_op(item)), false)
     eq(fibers.perform(scope:admit_op(item)), item)
-    eq(Lifetimes.state(before).closure_phase, 'open')
+    eq(Lifetimes.state(before).phase, 'live')
     eq(Lifetimes.state(before).custodian, scope:lifetime())
     truthy(fibers.perform(scope:has_custody_op(item)))
   end)
-  eq(Lifetimes.state(before).closure_phase, 'closed')
+  eq(Lifetimes.state(before).phase, 'retired')
   eq(Lifetimes.state(before).custodian, nil)
 end
 
 
--- Lifetime definitions are one-shot and structural children must be explicit.
+-- Lifetime definitions are one-shot and construction children must be explicit.
 do
   local value = resource('one-shot-definition')
   local ok, err = pcall(function()
@@ -84,14 +94,14 @@ do
     Lifetime.of(parent):add_child({ name = 'implicit-child' })
   end)
   eq(ok, false)
-  truthy(tostring(err):match('Lifetime.inert explicitly'))
+  truthy(tostring(err):match('Lifetime.define explicitly'))
 
   local child = resource('explicit-child')
   Lifetime.of(parent):add_child(child)
-  eq(Lifetimes.state(child).parent, Lifetime.of(parent))
+  eq(Lifetimes.state(child).construction_parent, Lifetime.of(parent))
 end
 
--- Dormant structural topology is a tree. Ordinary construction rejects an
+-- Composite construction topology is a tree. Ordinary construction rejects an
 -- ancestor edge, and binding independently validates malformed raw graphs
 -- before recursion can overflow or partial admission can occur.
 do
@@ -103,8 +113,8 @@ do
 
   local c, d = resource('raw-cycle-c'), resource('raw-cycle-d')
   Lifetime.of(c):add_child(d)
-  Lifetime.of(d)._construction_children[1] = Lifetime.of(c)
-  Lifetime.of(c)._construction_parent = Lifetime.of(d)
+  Lifetime.of(d)._construction.children[1] = Lifetime.of(c)
+  Lifetime.of(c)._construction.parent = Lifetime.of(d)
   ok, err = pcall(function() Lifetime.of(c):_bind_runtime(Runtime.new()) end)
   eq(ok, false)
   truthy(tostring(err):match('acyclic tree'))
@@ -113,7 +123,7 @@ do
 end
 
 -- Ordinary Lua fields are not authoritative topology. Trusted code may add
--- fields to a Lifetime handle without changing the store-backed custody forest.
+-- fields to a Lifetime handle without changing the store-backed custody tree.
 do
   local item = resource('store-only-topology')
   fibers.run(function(scope)
@@ -122,8 +132,8 @@ do
     node.parent, node.children, node.phase = 'user-data', {}, 'user-data'
     local state = Lifetimes.state(node)
     eq(state.custodian, scope:lifetime())
-    eq(state.parent, nil)
-    eq(state.closure_phase, 'open')
+    eq(state.custodian, scope:lifetime())
+    eq(state.phase, 'live')
   end)
 end
 
@@ -136,13 +146,13 @@ do
   fibers.run(function(scope)
     fibers.perform(scope:admit_op(item))
     fibers.perform(node:request_close_op('test-close'))
-    requested = Lifetimes.state(node).closure_phase
-    fibers.perform(node:_closing_op('test-close'))
-    closing = Lifetimes.state(node).closure_phase
+    requested = Lifetimes.state(node).phase
+    fibers.perform(node:request_close_op('test-close'))
+    closing = Lifetimes.state(node).phase
   end)
-  eq(requested, 'close_requested')
+  eq(requested, 'closing')
   eq(closing, 'closing')
-  eq(Lifetimes.state(node).closure_phase, 'closed')
+  eq(Lifetimes.state(node).phase, 'retired')
 end
 
 -- A complete subtree moves atomically between Scope capabilities.
@@ -154,11 +164,13 @@ do
     fibers.scope(function(inner)
       fibers.perform(inner:admit_op(root))
       truthy(fibers.perform(inner:has_custody_op(root)))
-      truthy(fibers.perform(inner:has_custody_op(leaf)))
+      eq(fibers.perform(inner:has_custody_op(leaf)), false)
+      eq(Lifetimes.state(leaf).custodian, Lifetime.of(root))
       fibers.perform(inner:move_op(root, outer))
       seen_inner = fibers.perform(inner:has_custody_op(root))
       seen_outer = fibers.perform(outer:has_custody_op(root))
-      truthy(fibers.perform(outer:has_custody_op(leaf)))
+      eq(fibers.perform(outer:has_custody_op(leaf)), false)
+      eq(Lifetimes.state(leaf).custodian, Lifetime.of(root))
     end)
   end)
   eq(seen_inner, false)

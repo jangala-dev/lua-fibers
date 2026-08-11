@@ -13,6 +13,7 @@ local Op = require('fibers.op')
 local FibersRuntime = require('fibers.runtime')
 local FibersScope = require('fibers.scope')
 local Closure = require('fibers.closure')
+local Completion = require('fibers.resource.completion')
 local Lifetimes = require('tests.support.lifetimes')
 
 local function accept_matching(life, pred)
@@ -25,7 +26,7 @@ local function accept_matching(life, pred)
 end
 
 local function retire(rt, scope, item, reason)
-  return rt:perform(Closure.close_op(scope, item, reason or 'done'))
+  return scope:close(item, reason or 'done')
 end
 
 local life = FibersScope.new():label('life')
@@ -35,7 +36,7 @@ local rt = FibersRuntime.new()
 local st = rt:run()
 assert(st.tag == 'idle' or st.tag == 'quiescent')
 local status = Lifetimes.state(life)
-assert(status.sealed == false and status.closure_phase ~= 'closed')
+assert(status.sealed == false and status.phase == 'dormant')
 
 local life_a = FibersScope.new():label('a')
 local life_b = FibersScope.new():label('b')
@@ -44,17 +45,19 @@ local rt2 = FibersRuntime.new()
 rt2:spawn_raw(function()
   task = rt2:perform(life_a:spawn_op(function()
     return 'done'
-  end, { label = 'owned-task' }))
+  end, { label = 'owned-task' }):and_then(Op.guard(function(candidate)
+    return life_a:move_op(candidate, life_b):map(function() return candidate end)
+  end)))
   owned_a = rt2:perform(life_a:has_custody_op(task))
-  rt2:perform(life_a:move_op(task, life_b))
   owned_b = rt2:perform(life_b:has_custody_op(task))
   report = { rt2:perform(task:await_op()) }
-  retire(rt2, life_b, task)
+  assert(Lifetimes.state(task).phase == 'retired')
   rt2:perform(life_b:seal_op())
 end):label('scope-root')
-local st2 = rt2:run()
-assert(st2.tag == 'found' or st2.tag == 'quiescent')
-assert(task and owned_a == true and owned_b == true)
+local st2
+repeat st2 = rt2:run() until st2.tag ~= 'found'
+assert(st2.tag == 'idle' or st2.tag == 'quiescent')
+assert(task and owned_a == false and owned_b == true)
 assert(report[1] == 'done')
 assert(Lifetimes.state(life_b).sealed == true)
 
@@ -88,12 +91,16 @@ local match_from_a = FibersScope.new():label('match-a')
 local match_from_b = FibersScope.new():label('match-b')
 local match_to = FibersScope.new():label('match-to')
 local task_a, task_b, rejected_result, accepted_match, owns_a_after, owns_b_after
+local release_a = Completion.new():label('match-release-a')
+local release_b = Completion.new():label('match-release-b')
 local rt_match = FibersRuntime.new()
 rt_match:spawn_raw(function()
   task_a = rt_match:perform(match_from_a:spawn_op(function()
+    fibers.perform(release_a:success_op())
     return 'a'
   end, { label = 'task-a' }))
   task_b = rt_match:perform(match_from_b:spawn_op(function()
+    fibers.perform(release_b:success_op())
     return 'b'
   end, { label = 'task-b' }))
   rejected_result = rt_match:perform(Op.together({
@@ -117,10 +124,12 @@ rt_match:spawn_raw(function()
   -- print('rows2', rows[2], rows[2] and rows[2][1])
   owns_a_after = rt_match:perform(match_from_a:has_custody_op(task_a))
   owns_b_after = rt_match:perform(match_to:has_custody_op(task_b))
+  rt_match:perform(release_a:publish_success_op(true))
+  rt_match:perform(release_b:publish_success_op(true))
   rt_match:perform(task_a:await_op())
   rt_match:perform(task_b:await_op())
-  retire(rt_match, match_from_a, task_a)
-  retire(rt_match, match_to, task_b)
+  assert(Lifetimes.state(task_a).phase == 'retired')
+  assert(Lifetimes.state(task_b).phase == 'retired')
 end):label('matched-custody-offer-root')
 local st_match
 repeat
@@ -159,12 +168,16 @@ do
   local from_b = FibersScope.new():label('filter-b')
   local to = FibersScope.new():label('filter-to')
   local task_a, task_b, both_result, accepted_b, a_still_owned, b_moved
+  local release_filter_a = Completion.new():label('filter-release-a')
+  local release_filter_b = Completion.new():label('filter-release-b')
   local rt_filter = FibersRuntime.new()
   rt_filter:spawn_raw(function()
     task_a = rt_filter:perform(from_a:spawn_op(function()
+      fibers.perform(release_filter_a:success_op())
       return 'a'
     end, { label = 'filter-task-a' }))
     task_b = rt_filter:perform(from_b:spawn_op(function()
+      fibers.perform(release_filter_b:success_op())
       return 'b'
     end, { label = 'filter-task-b' }))
     both_result = rt_filter:perform(Op.together({
@@ -187,10 +200,12 @@ do
     accepted_b = rows[2][1]
     a_still_owned = rt_filter:perform(from_a:has_custody_op(task_a))
     b_moved = rt_filter:perform(to:has_custody_op(task_b))
+    rt_filter:perform(release_filter_a:publish_success_op(true))
+    rt_filter:perform(release_filter_b:publish_success_op(true))
     rt_filter:perform(task_a:await_op())
     rt_filter:perform(task_b:await_op())
-    retire(rt_filter, from_a, task_a)
-    retire(rt_filter, to, task_b)
+    assert(Lifetimes.state(task_a).phase == 'retired')
+    assert(Lifetimes.state(task_b).phase == 'retired')
   end):label('filtered-accept-root')
   local st_filter
   repeat

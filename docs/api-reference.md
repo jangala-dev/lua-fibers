@@ -304,7 +304,8 @@ Creates a scope capability. Application code normally receives scopes from `run`
 ### `Scope:accept_op([filter]) -> Op`
 ### `Scope:grant_op(item, holder, rights [, opts]) -> Op`
 ### `Scope:can_op(item, right) -> Op`
-### `Scope:close_op(item [, reason]) -> Op`
+### `Scope:start_close_op(item [, reason]) -> Op`
+### `Scope:close(item [, reason]) -> item`
 ### `Scope:request_cancel_op([reason]) -> Op`
 ### `Scope:cancel_requested_op() -> Op`
 ### `Scope:try_run(fn) -> ScopeResult`
@@ -340,19 +341,58 @@ Reports may contain body exits, child exits, child failures, secondary failures 
 local Closure = require('fibers.closure')
 ```
 
-### `Closure.nursery([opts]) -> closure_contract`
+### `Closure.running() -> closure_protocol`
+### `Closure.protocol(spec) -> closure_protocol`
+### `Closure.none() -> closure_protocol`
+### `Closure.request_then_wait(request_fn, finished_fn [, opts]) -> closure_protocol`
 
-Child failure fails the boundary and closes siblings according to the nursery policy.
+Local protocols describe how one Lifetime discharges its own continuing
+consequence. `running()` is the standard protocol for a running execution.
 
-### `Closure.supervisor([opts]) -> closure_contract`
+### `Closure.nursery([opts]) -> supervision_policy`
 
-Creates an explicit supervisor policy.
+Child failure fails the Scope boundary and requests closure of siblings.
 
-### `Closure.running([opts])`
-### `Closure.propagation(contract)`
-### `Closure.combine(local_contract, propagation)`
+### `Closure.supervisor([opts]) -> supervision_policy`
+### `Closure.policy(value) -> supervision_policy`
 
-Advanced helpers for composing Closure contracts.
+Scope policy is separate from local shutdown. It reacts to body, cancellation
+and child outcomes, and is supplied to Scope/task construction rather than
+being packaged into a Lifetime protocol.
+
+### `Closure.start_close_op(scope, item [, reason]) -> Op`
+
+Transactionally acquires structural closure responsibility and emits the
+committed start of a closure process. The returned `Closure.Process` is a
+transactional result: `map`, `and_then`, `each`, `together` and `or_else` may
+continue to compose with the initiation transaction. If that complete world
+loses, no closure driver starts.
+
+### `Closure.Process.is(value) -> boolean`
+### `process:success_op() -> Op`
+### `process:failure_op() -> Op`
+### `process:result_op() -> Op`
+### `process:success() -> item`
+### `process:failure() -> Closure.Failure`
+### `process:result() -> boolean, item | Closure.Failure`
+
+A `Closure.Process` is the committed structural closure already in progress.
+Its observation Options are fresh transactions. `result_op()` returns
+`true, item` on successful discharge or `false, failure` when responsibility
+is retained after a closure fault.
+
+### `Closure.Failure.is(value) -> boolean`
+### `failure:inspect() -> table`
+### `failure:inspect_op() -> Op`
+### `failure:retry_op() -> Op`
+### `failure:force_op() -> Op`
+### `failure:retry() -> Closure.Process`
+### `failure:force() -> Closure.Process`
+
+Recovery authority is linear. `retry_op()` and `force_op()` transactionally
+consume it, restart the retained CloseClaim and emit the committed closure
+driver. They return a fresh `Closure.Process` for the recovery attempt; observe its
+result in a later transaction.
 
 ## `fibers.lifetime`
 
@@ -361,13 +401,10 @@ local Lifetime = require('fibers.lifetime')
 ```
 
 ### `Lifetime.new([opts]) -> Lifetime`
-### `Lifetime.task(body [, opts]) -> Lifetime`
-### `Lifetime.resource(value [, opts]) -> Lifetime`
-### `Lifetime.inert(value [, opts]) -> Lifetime`
+### `Lifetime.define(value [, opts]) -> value`
 ### `Lifetime.is(value) -> boolean`
 ### `Lifetime.of(value) -> Lifetime | nil`
 ### `Lifetime.require(value [, level]) -> Lifetime`
-### `Lifetime.define(value, opts) -> value`
 
 Lifetime nodes support:
 
@@ -377,13 +414,13 @@ life:closed_op()
 life:request_close_op([reason])
 life:request_cancel_op([reason])
 life:cancel_requested_op()
-life:body_result_op()
+life:close_requested_op()
 life:outcome_op()
 ```
 
 Most applications should use Tasks and Scopes rather than constructing Lifetimes directly.
 
-Live managed state has no generic snapshot API or raw epoch. Observe the domain fact needed by the program through a focused Option such as `closed_op`, `cancel_requested_op`, `body_result_op`, `outcome_op` or a resource-specific operation. Friendly direct methods are performing twins of those Options; they are not a second observation path. Internal versions and epochs are not public semantics. Trusted facility-authoring and host-provider interfaces are implementation boundaries, not application observation APIs.
+Live managed state has no generic snapshot API or raw epoch. Observe the domain fact needed by the program through a focused Option such as `closed_op`, `close_requested_op`, `cancel_requested_op`, `outcome_op` or a resource-specific operation. Task execution completion is deliberately task-specific and is observed through `Task:body_result_op()`; a generic Lifetime exposes only its complete terminal outcome. Friendly direct methods are performing twins of those Options; they are not a second observation path. Internal versions and epochs are not public semantics. Trusted facility-authoring and host-provider interfaces are implementation boundaries, not application observation APIs.
 
 ## `fibers.grant`
 
@@ -793,7 +830,6 @@ local Effect = require('fibers.effect')
 ### `Effect.is_rejection(value) -> boolean`
 ### `Effect.rejection_reason(value) -> any`
 ### `Effect.interrupt(token [, reason]) -> Effect`
-### `Effect.spawn(fn, id, scope, owner) -> Effect`
 
 Most applications should use higher-level facilities. See [Committed effects](advanced/extending.md#committed-effects).
 
@@ -829,6 +865,18 @@ local Roblox = require('fibers.roblox')
 ### `Roblox.try_run(fn [, opts]) -> ScopeResult`
 ### `Roblox.run(fn [, opts]) -> ...`
 ### `Roblox.bind_to_close([scope_or_opts, opts])`
+
+Subscriptions support:
+
+```lua
+subscription:next_op()
+subscription:closed_op()
+subscription:start_close_op([reason])
+subscription:close([reason])
+```
+
+`start_close_op` has the same two-stage structural Closure semantics as the
+Scope operation and returns a `Closure.Process` when performed.
 
 See [Fibers for Roblox](guide/roblox.md).
 

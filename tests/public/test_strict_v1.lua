@@ -128,7 +128,7 @@ do
   local life = Lifetime.new()
   for _, name in ipairs({
     'current_state', 'inspect_op', 'cancellation_op',
-    'runtime', 'closure', 'body', 'has_body', 'role', 'rights', 'meta', 'value', 'standalone_boundary',
+    'runtime', 'closure', 'body', 'has_body', 'role', 'rights', 'meta', 'value',
     'bind_runtime', 'record_map', 'assert_runtime_compatible',
   }) do
     if life[name] ~= nil then

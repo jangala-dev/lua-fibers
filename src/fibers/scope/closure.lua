@@ -1,4 +1,4 @@
--- Lifetime Closure boundary driver.
+-- Scope supervision and execution driver.
 --
 -- Child completion is committed directly into the current owning Lifetime.
 -- There is no closure-monitor fiber and no separate custody event queue. Task and Scope
@@ -11,6 +11,7 @@ local Exit = require('fibers.task').Exit
 local ScopeOutcome = require('fibers.scope.outcome')
 local ScopeResult = ScopeOutcome.Result
 local Lifetime = require('fibers.lifetime')
+local LifetimeClosure = require('fibers.internal.lifetime.closure')
 local Op = require('fibers.op')
 
 local Driver = {}
@@ -72,7 +73,15 @@ local function state_for(scope)
   if not lifetime then
     error('scope Closure requires a Scope Lifetime', 3)
   end
-  return lifetime._closure_state
+  -- Supervision accounting belongs to the Scope role, not the generic
+  -- Lifetime. All Scope views over one Lifetime share this role.
+  local role = lifetime:_scope_role(true)
+  local state = role.driver_state
+  if not state then
+    state = { processed = {}, child_exits = {}, child_failures = {} }
+    role.driver_state = state
+  end
+  return state
 end
 
 local function record_entry(state, child, exit)
@@ -114,7 +123,7 @@ local function apply_child_entry(scope, state, entry)
   entry.decision_applied = true
   local exit = entry.exit
   local decision = normalise_decision(
-    call_closure(scope._lifetime._closure, 'on_child_outcome', scope._lifetime, state, entry.lifetime, exit),
+    call_closure(scope._role.policy, 'on_child_outcome', scope._lifetime, state, entry.lifetime, exit),
     exit
   )
   apply_decision(scope, state, decision, exit and (exit.error or exit.reason or exit) or nil)
@@ -135,67 +144,74 @@ function Driver.record_child_outcome(scope, child, exit, opts)
 end
 
 function Driver.request_cancel_op(scope, reason)
-  local state = state_for(scope)
-  local decision = call_closure(scope._lifetime._closure, 'on_cancel_requested', scope._lifetime, state, reason)
-    or { seal = true, cancel_children = true, reason = reason }
-  local close_op
-  if decision.seal or decision.cancel_children then
-    close_op = scope:begin_close_op(decision.reason or reason, {
-      cancel_body = false,
-      cancel_children = decision.cancel_children == true,
-    })
-  end
-  return scope:_request_cancel_op(reason):and_then(Op.guard(function(first, recorded_reason)
-    if not first then
-      return Op.always(false, recorded_reason)
+  -- Constructing cancellation is inert. Supervision state is allocated only by
+  -- an active Scope driver or child-outcome accounting, never merely because a
+  -- cancellation Option was described or explored and defeated.
+  return Op.guard(function()
+    local state = scope._role.driver_state or {
+      processed = {}, child_exits = {}, child_failures = {},
+    }
+    local decision = call_closure(scope._role.policy, 'on_cancel_requested', scope._lifetime, state, reason)
+      or { seal = true, cancel_children = true, reason = reason }
+    local close_op
+    if decision.seal or decision.cancel_children then
+      close_op = scope:begin_close_op(decision.reason or reason, {
+        cancel_body = false,
+        cancel_children = decision.cancel_children == true,
+      })
     end
-    if close_op then
-      return close_op:map(function()
-        return true, recorded_reason
-      end)
-    end
-    return Op.always(true, recorded_reason)
-  end))
+    return scope:_request_cancel_op(reason):and_then(Op.guard(function(first, recorded_reason)
+      if not first then return Op.always(false, recorded_reason) end
+      if close_op then
+        return close_op:map(function() return true, recorded_reason end)
+      end
+      return Op.always(true, recorded_reason)
+    end))
+  end)
 end
 
-local function retire_roots(scope, reason)
-  local first_bad
-  while true do
-    local roots = perform_masked(scope, scope:_store():roots_op(scope))
-    if #roots == 0 then
-      break
-    end
-    local progressed = false
-    for i = 1, #roots do
-      local item = roots[i]
-      if perform_masked(scope, scope:has_custody_op(item)) then
-        local rec = perform_masked(scope, scope:_store():record_op(scope, item))
-        local phase = rec and rec.phase
-        if not rec then
-          -- Custody changed between root discovery and record lookup; take another pass.
-        elseif phase ~= 'live' then
-          local err = rec.closure_error or ('cannot retire non-live root in phase ' .. tostring(phase))
-          if not first_bad then
-            first_bad = err
-          end
-        else
-          local ok, err = Protected.pcall(function()
-            perform_masked(scope, scope:close_op(item, reason))
-          end)
-          if not ok and not first_bad then
-            first_bad = err
-          end
-          progressed = true
-        end
+local function await_owned_execution_results(scope)
+  local children = perform_masked(scope, scope:_store():children_op(scope))
+  local waits = {}
+  for i = 1, #children do
+    local node = Lifetime.of(children[i])
+    if node then
+      local task = node:_task()
+      if task and task.body_result_op then
+        -- A Task may not have entered its Scope driver when the snapshot is
+        -- taken. Body completion proves the driver has started and therefore
+        -- installed its Scope-result Completion before we inspect it.
+        waits[#waits + 1] = task:body_result_op():and_then(Op.guard(function()
+          local role = node:_scope_role(false)
+          local result = role and role.result
+          return result and result:success_op() or Op.always(true)
+        end))
+      else
+        local role = node:_scope_role(false)
+        if role and role.result then waits[#waits + 1] = role.result:success_op() end
       end
     end
-    if first_bad or not progressed then
-      break
-    end
   end
-  if first_bad then
-    error(first_bad, 0)
+  if #waits > 0 then perform_masked(scope, Op.each(waits)) end
+end
+
+local function await_close_process(scope, process)
+  local ok, result = perform_masked(scope, process:result_op())
+  if not ok then error(result, 0) end
+  return result
+end
+
+local function retire_owned(scope, reason)
+  local mode, process = perform_masked(scope, LifetimeClosure._start_descendants_op(scope, reason))
+  if mode == 'started' then
+    await_close_process(scope, process)
+  elseif mode == 'delegated' then
+    -- The overlapping ancestor CloseClaim owns structural retirement. This
+    -- Scope still waits for execution results needed by supervision, but never
+    -- competes for those Lifetimes structurally.
+    await_owned_execution_results(scope)
   end
+  return mode
 end
 
 local function filter_duplicate_cancellation(primary, failures)
@@ -253,8 +269,8 @@ local function default_result(scope, state, body_ok, body_results, closure_failu
 
   local secondaries = {}
   -- Collected and ignored child failures remain structured report facts,
-  -- not secondary boundary failures. Once a child failure is selected as the
-  -- boundary cause, additional failures are retained as secondaries.
+  -- not secondary supervision failures. Once a child failure is selected as the
+  -- Scope cause, additional failures are retained as secondaries.
   if state.first_child_failure then
     for i = 1, #state.child_failures do
       local entry = state.child_failures[i]
@@ -305,19 +321,25 @@ local function result_exit(result)
 end
 
 local function completed_exit(node)
-  if not node or not node._has_body then return nil end
-  local boundary = node._outcome and node._outcome._location.value
-  if type(boundary) == 'table' and boundary.status == 'done' then
-    return result_exit(boundary.result)
+  if not node or node:_task() == nil then return nil end
+  local terminal = node._outcome and node._outcome._location.value
+  if type(terminal) == 'table' and terminal.kind == 'succeeded' then
+    local values = terminal.values or {}
+    return result_exit(values[1])
   end
-  local body = node._body_result and node._body_result._location.value
-  return type(body) == 'table' and body.status == 'done' and Exit.is(body.result) and body.result or nil
+  local task = node:_task()
+  local body = task and task._body_result and task._body_result._location.value
+  if type(body) == 'table' and body.kind == 'succeeded' then
+    local values = body.values or {}
+    return Exit.is(values[1]) and values[1] or nil
+  end
+  return nil
 end
 
 local function account_existing_children(scope, state)
-  local roots = scope:_store():_roots(scope)
-  for i = 1, #roots do
-    local node = roots[i]
+  local children = scope:_store():_children(scope)
+  for i = 1, #children do
+    local node = children[i]
     local exit = completed_exit(node)
     if exit then
       local entry = record_entry(state, node, exit)
@@ -328,6 +350,11 @@ local function account_existing_children(scope, state)
 end
 
 local function stage_custodian_outcome(scope, result)
+  -- Custody and supervision are distinct. Task-backed Lifetimes report their
+  -- execution outcome to the custodian's supervision policy. A lexical Scope is
+  -- synchronously observed through try_scope/scope and must not fail its parent
+  -- a second time merely because the parent owns its Lifetime.
+  if scope._lifetime:_task() == nil then return nil end
   local custodian = scope:_store():_custodian(scope._lifetime)
   if not custodian or custodian == scope._lifetime then return nil end
   local parent = require('fibers.scope').for_lifetime(custodian)
@@ -358,7 +385,8 @@ function Driver.run(scope, fn, closure, on_body_exit)
     error('Scope:run requires a current runtime', 2)
   end
   scope._lifetime:_bind_runtime(rt)
-  scope._lifetime._closure = closure
+  scope._role.policy = closure or {}
+  scope:_result_completion()
 
   local state = state_for(scope)
   state.active = true
@@ -399,7 +427,14 @@ function Driver.run(scope, fn, closure, on_body_exit)
       }))
     end
   end)
-  capture_failure(closure_failures, function() retire_roots(scope, close_reason) end)
+  -- Structural retirement has one authority: CloseClaim/CloseProcess. A Scope
+  -- acquires one children-drain claim for its complete owned subtree; if an
+  -- ancestor already owns an overlapping claim this operation observes
+  -- delegation transactionally instead of racing child-by-child closure.
+  capture_failure(closure_failures, function()
+    retire_owned(scope, close_reason)
+    account_existing_children(scope, state)
+  end)
 
   state.active = false
 
@@ -409,17 +444,33 @@ function Driver.run(scope, fn, closure, on_body_exit)
     staged = stage_custodian_outcome(scope, result)
   end)
   if not stage_ok and result.ok then
-    result = failed_result(scope, 'closure_contract_failed', stage_err, {},
-      { reason = 'closure_contract_failed' })
+    result = failed_result(scope, 'supervision_failed', stage_err, {},
+      { reason = 'supervision_failed' })
     staged = nil
   end
 
-  -- Publish complete closure before applying parent propagation. A parent may
-  -- begin settling this child as soon as propagation requests closure; making
-  -- the outcome visible first prevents the parent from waiting on a fact which
-  -- this child has not yet had an opportunity to publish.
+  -- The accounted Scope result is published before retirement. Retirement itself
+  -- always belongs to CloseClaim/CloseProcess: either this Scope claims its now
+  -- quiescent Lifetime through its custodian, or an overlapping ancestor claim
+  -- already owns that responsibility.
   local mark_ok, mark_err = Protected.pcall(function()
-    perform_masked(scope, scope:_mark_done_op(result))
+    perform_masked(scope, scope:_settle_done_op(result))
+    -- Execution settlement and structural retirement are distinct. Ordinary
+    -- Task Lifetimes and successful resource drivers may discharge a quiescent
+    -- node through the custodian. An abnormal domain-resource driver leaves
+    -- structural cleanup to its custodian so cleanup failure is reported by the
+    -- owner rather than stranding a self-held recovery claim inside the failed
+    -- execution.
+    local task = scope._lifetime:_task()
+    local self_retires = task == nil or task:_should_self_retire(body_ok)
+    if self_retires
+      and not (ScopeResult.is(result) and result.closure_failures and #result.closure_failures > 0) then
+      local parent = scope:parent_scope()
+      if parent then
+        local mode, process = perform_masked(scope, LifetimeClosure._start_scope_op(parent, scope._lifetime, close_reason))
+        if mode == 'started' then await_close_process(scope, process) end
+      end
+    end
   end)
   if not mark_ok then
     result = failed_result(scope, 'closure_failed', mark_err, {}, { reason = 'done_mark_failed' })
@@ -428,10 +479,8 @@ function Driver.run(scope, fn, closure, on_body_exit)
       apply_child_entry(staged.parent, state_for(staged.parent), staged.entry)
     end)
     if not apply_ok and result.ok then
-      result = failed_result(scope, 'closure_contract_failed', apply_err, {},
-        { reason = 'closure_contract_failed' })
-      -- The published outcome remains the original value. Contract functions
-      -- are required to be pure and non-throwing; this branch is diagnostic.
+      result = failed_result(scope, 'supervision_failed', apply_err, {},
+        { reason = 'supervision_failed' })
     end
   end
 
@@ -440,7 +489,7 @@ function Driver.run(scope, fn, closure, on_body_exit)
 end
 
 function Driver.try_run(scope, fn)
-  return Driver.run(scope, fn, scope._lifetime._closure or {})
+  return Driver.run(scope, fn, scope._role.policy or {})
 end
 
 return Driver

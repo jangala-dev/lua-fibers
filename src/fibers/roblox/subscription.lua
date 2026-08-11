@@ -201,20 +201,21 @@ function Subscription:closed_op()
   return Lifetime.require(self):closed_op():map(function() return self end)
 end
 
----Return an option which retires this subscription from its owning scope.
-function Subscription:close_op(reason)
+---Transactionally start retirement of this subscription from its owning Scope.
+function Subscription:start_close_op(reason)
   if self._closed then
-    return require('fibers.op').always(true)
+    return require('fibers.op').always(nil)
   end
-  return Closure.close_op(self._scope, self, reason or 'subscription closed')
+  return Closure.start_close_op(self._scope, self, reason or 'subscription closed')
 end
 
 ---Retire and disconnect the subscription through its owning Scope.
 function Subscription:close(reason)
-  if self._closed then
-    return true
-  end
-  return self._scope:perform(self:close_op(reason))
+  if self._closed then return true end
+  local process = self._scope:perform(self:start_close_op(reason))
+  local ok, result = self._scope:perform(process:result_op())
+  if not ok then error(result, 0) end
+  return result
 end
 
 Direct.install(Subscription, { 'next', 'closed' })

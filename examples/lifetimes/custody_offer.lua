@@ -88,7 +88,7 @@ rt:spawn_raw(function()
   rt:perform(resume:put_op('supervisor holds custody of the session'))
   result.await = { rt:perform(session:await_op()) }
 
-  rt:perform(supervisor:close_op(session, 'session complete'))
+  supervisor:close(session, 'session complete')
   result.supervisor_has_custody_after_close = rt:perform(supervisor:has_custody_op(session))
 
   rt:perform(request:seal_op())

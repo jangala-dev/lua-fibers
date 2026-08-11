@@ -11,10 +11,13 @@ local count
 fibers.run(function(scope)
   for i = 1, n do
     local resource = { name = 'resource-' .. tostring(i) }
-    Lifetime.inert(resource)
+    Lifetime.define(resource)
     resources[i] = resource
     fibers.perform(scope:admit_op(resource))
   end
-  count = #fibers.perform(scope:children_op())
+  count = 0
+  for i = 1, #resources do
+    if fibers.perform(scope:has_custody_op(resources[i])) then count = count + 1 end
+  end
 end)
 print(string.format('n=%d cpu=%.6f live=%d', n, os.clock() - t, count or 0))

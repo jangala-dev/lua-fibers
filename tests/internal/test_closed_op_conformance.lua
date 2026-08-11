@@ -19,8 +19,10 @@ local function assert_eq(actual, expected, message)
   end
 end
 
--- The common host-facility closure join must not equate an early public terminal
--- event with complete settlement of the private structured driver.
+-- The common host-facility closure join observes the driver's local
+-- computation and any domain terminal event. Descendant retirement remains a
+-- separate Lifetime obligation and must not be folded back into the local
+-- close protocol.
 do
   local descendant_finished = false
   local observed
@@ -36,16 +38,14 @@ do
       return true
     end, { label = 'conformance-driver' }))
 
-    scope:spawn(function()
-      fibers.perform(terminal:success_op())
-      assert(not descendant_finished, 'private descendant finished before the public terminal event')
-      fibers.perform(release_descendant:publish_success_op(true))
-    end):label('release-delayed-driver-descendant')
-
     observed = fibers.perform(IO.closed_after_driver_op(driver, terminal:success_op(), {
       require_returned = true,
     }))
-    assert(descendant_finished, 'closed_after_driver_op returned before the private descendant retired')
+    assert(not descendant_finished,
+      'local driver closure should not wait for private descendant retirement')
+    fibers.perform(release_descendant:publish_success_op(true))
+    driver:await()
+    assert(descendant_finished, 'driver Lifetime should still account for its descendant')
   end)
   assert_eq(observed, 'terminal')
 end

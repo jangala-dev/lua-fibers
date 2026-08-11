@@ -79,7 +79,7 @@ do
     local rt = Runtime.new()
     local scope = Scope.new( { runtime = rt }):label('temporary-scope')
     local item = { name = 'temporary-item' }
-    Lifetime.inert(item)
+    Lifetime.define(item)
     weak[1], weak[2], weak[3] = scope, item, rt
     rt:_spawn_raw(function()
       scope:run(function(s)
@@ -90,7 +90,7 @@ do
       local st = rt:run()
       if st.tag == 'idle' or st.tag == 'quiescent' then break end
     end
-    eq(#Lifetimes.roots(scope), 0, 'completed Scope should retain no Lifetime records under custody')
+    eq(#Lifetimes.children(scope), 0, 'completed Scope should retain no Lifetime children under custody')
     rt, scope, item = nil, nil, nil
   end
   collect()

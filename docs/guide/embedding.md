@@ -339,7 +339,7 @@ handle:close(reason)
 
 The callback set is authoritative for a concrete handle. Do not duplicate it in a `features` table: `supports(name)` follows the presence of the corresponding callback, and `close` is mandatory.
 
-Opening a Stream commits its custody and both reactor-registration effects together. If the option loses, no handle is attached and no reactor service starts. Retirement is structural: both registrations retire, active leases close, the handle closes exactly once, and `closed_op` observes complete Flow and registration closure.
+Opening a Stream commits its custody and both reactor-registration effects together. If the option loses, no handle is attached and no reactor service starts. Local Stream closure retires both registrations, closes active leases and closes the handle exactly once; `closed_op` observes those domain facts. Complete custody retirement remains the Stream Lifetime's `outcome_op`.
 
 See the [Flow and Stream contract](resources.md#detailed-flow-and-stream-contract) for leases and portable byte semantics, and [I/O design](../design/io.md) for the reactor service model.
 

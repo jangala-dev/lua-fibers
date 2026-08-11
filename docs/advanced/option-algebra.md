@@ -555,7 +555,7 @@ Lifetime operations make continuing responsibility part of the committed world:
 admit a dormant Lifetime
 move custody
 create or close a Grant
-request or finish Closure
+request close intent or start structural Closure
 seal a Scope against new children
 ```
 
@@ -571,14 +571,21 @@ successful Closure progress is retained across later failure and retry
 failed Closure remains represented in the Lifetime store
 ```
 
-Closure protocols run only after the close operation commits and may themselves
-perform options. They expose `request_op`, `finish_op` and optional `force_op`
-phases. The engine's exclusive close token is private; callbacks receive only a
-bounded Closure context.
+Structural Closure initiation is an ordinary transaction. `start_close_op`
+acquires a private CloseClaim and carries an emitted consequence which schedules
+the closure driver only if the complete world commits. The returned
+`Closure.Process` remains transactionally sequenceable; its attempt result is
+published through an ordinary Completion and observed through a later Option.
 
-Custody, Grant and Closure operations are ordinary `Op` values. The Lifetime
-model therefore uses this algebra rather than defining a second set of choice or
-sequencing operators.
+The driver runs local `request_op`, `finish_op` and optional `force_op` protocols
+as ordinary Fibers work after initiation commits. Protocol callbacks receive
+only a bounded Closure context, never the private CloseClaim. Retry and force
+are fresh transactional initiations using a linear Counter capability and the
+same emitted start consequence.
+
+Custody, Grant and Closure operations therefore use the existing Option and
+Effect algebra rather than defining a second set of choice or sequencing
+operators.
 
 ## 18. Host boundary
 

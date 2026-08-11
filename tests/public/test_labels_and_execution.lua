@@ -61,7 +61,7 @@ local function test_identity_labels_are_fluent_and_non_semantic()
   channel:label(nil)
   assert(channel:label() == nil)
 
-  local retained = Lifetime.inert({ name = 'retained-resource' }, {
+  local retained = Lifetime.define({ name = 'retained-resource' }, {
     label = 'initial-resource-label',
   })
   assert(retained:label() == 'initial-resource-label')

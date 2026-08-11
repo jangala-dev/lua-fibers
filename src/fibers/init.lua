@@ -8,6 +8,7 @@ local External = require('fibers.embed.external')
 local Protected = require('fibers.protected')
 local Runtime = require('fibers.runtime')
 local Scope = require('fibers.scope')
+local Closure = require('fibers.closure')
 local perform = require('fibers.perform')
 local RootSession = require('fibers.internal.root_session')
 local Contract = require('fibers.internal.contract')
@@ -189,7 +190,7 @@ function M.try_scope(opts, fn)
   local scope = Scope.new({
     runtime = rt,
     parent = parent,
-    closure = opts.closure or (parent and parent._lifetime._closure),
+    closure = opts.closure or (parent and parent._role.policy),
   })
   if opts.label ~= nil then scope:label(opts.label) end
   return scope:try_run(fn)

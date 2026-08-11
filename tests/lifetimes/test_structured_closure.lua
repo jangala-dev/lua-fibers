@@ -115,12 +115,17 @@ do
   local child, grandchild
   local r = fibers.try_run(function()
     local never = FibersSignal.new():label('nested-cancel-never')
+    local ready = FibersRendezvous.new():label('nested-cancel-ready')
     child = fibers.spawn(function()
       grandchild = fibers.spawn(function()
         fibers.perform(never:wait_op())
       end):label('grandchild')
+      fibers.perform(ready:put_op(true))
       fibers.perform(never:wait_op())
     end):label('child-with-grandchild')
+    -- The law under test is cancellation propagation, not scheduler ordering.
+    -- Establish the grandchild before introducing the sibling failure.
+    fibers.perform(ready:get_op())
     fibers.spawn(function()
       error('parent failure', 0)
     end):label('parent-failure')
@@ -142,7 +147,7 @@ do
   local denied = false
   fibers.run(function(root)
     local h = { name = 'strict-move' }
-    Lifetime.inert(h)
+    Lifetime.define(h)
     fibers.scope({ closure = FibersClosure.nursery({ permit_outward_move = false }) }, function(inner)
       fibers.perform(inner:admit_op(h))
       local ok, err = pcall(function() fibers.perform(inner:move_op(h, root)) end)

@@ -18,6 +18,7 @@ local FibersScope = require('fibers.scope')
 local FibersFlow = require('fibers.resource.flow')
 local FibersStream = require('fibers.io.stream')
 local FibersClosure = require('fibers.closure')
+local Channel = require('fibers.channel')
 local Stream = FibersStream
 local function fail(msg)
   error(msg, 2)
@@ -91,7 +92,7 @@ do
   local root = FibersScope.new( { runtime = rt, closure = FibersClosure.nursery() }):label('closure-hook-root')
   rt:_spawn_raw(function()
     root:run(function()
-      fibers.scope({ closure = FibersClosure.running(closure) }, function()
+      fibers.scope({ closure = closure }, function()
         error('closure body failure')
       end)
     end)
@@ -195,6 +196,31 @@ do
     owner_was_root = fibers.perform(root:has_custody_op(stream))
   end)
   assert_eq(owner_was_root, true, 'Stream.open_op should bind to the current scope')
+end
+
+
+-- An externally closed lexical Scope waits for its local Scope body settlement,
+-- not for its own terminal Lifetime outcome. Waiting for outcome here would be
+-- circular: the custodian owns the transaction which publishes that outcome.
+do
+  local close_finished = false
+  local report = fibers.try_run(function(root)
+    local handoff = Channel.new(1)
+    root:spawn(function()
+      local inner = handoff:get()
+      root:close(inner, 'external lexical close')
+      close_finished = true
+    end)
+
+    local inner = fibers.try_scope(function(scope)
+      handoff:put(scope)
+      Channel.new():get() -- remain blocked until the external close interrupts us
+    end)
+    assert_eq(inner.ok, false, 'external close should end the lexical Scope body')
+  end, { quiet_deadlock = true, max_iterations = 10000 })
+
+  assert_eq(report.ok, true, 'external lexical Scope closure should complete')
+  assert_eq(close_finished, true, 'custodian close should finish after Scope settlement')
 end
 
 print('tests/test_scope_hardening.lua: ok')

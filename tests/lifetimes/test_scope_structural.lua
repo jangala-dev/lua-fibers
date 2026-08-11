@@ -85,7 +85,7 @@ end
 -- Current scope is restored after suspension, so safe acquisition/admission after
 -- a blocking operation still attaches to the intended inline scope.
 do
-  local h = { name = 'post-suspend-owned' }; Lifetime.inert(h)
+  local h = { name = 'post-suspend-owned' }; Lifetime.define(h)
   local owned_inside
   fibers.run(function()
     local ch = FibersRendezvous.new():label('scope-stack-check')

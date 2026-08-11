@@ -1,4 +1,4 @@
--- Structured reports and checked results for a lifetime boundary.
+-- Structured reports and checked results for Scope execution and supervision.
 
 local Label = require('fibers.internal.label')
 

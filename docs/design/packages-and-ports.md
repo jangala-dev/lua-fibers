@@ -234,7 +234,7 @@ Roblox task scheduler or Actor VM
 └── one Fibers runtime
     ├── proof and commit engine
     ├── lightweight internal Luau fibers
-    ├── Lifetime forest, capability views and Closure
+    ├── Lifetime tree, capability views and Closure
     └── RBXScriptSignal and engine-resource adapters
 ```
 
@@ -324,7 +324,7 @@ host executor task or root Promise
 └── Fibers runtime Future
     ├── proof and commit engine
     ├── ready-fiber queue
-    ├── Lifetime forest and Scope views
+    ├── Lifetime tree and Scope views
     └── lightweight internal Future frames
 ```
 

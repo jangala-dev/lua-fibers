@@ -120,11 +120,10 @@ function Listener:close_op(reason)
       if not requested then return nil, request_err end
       local source_closed, source_err = perform(self._offers:closed_op())
       if not source_closed then return nil, source_err end
-      local owns_source = perform(self._private_scope:has_custody_op(self._offers))
-      if owns_source then
-        local retired, retire_err = perform(self._private_scope:close_op(self._offers, reason))
-        if not retired then return nil, retire_err end
-      end
+      -- Closing the offer source discharges the listener's local domain
+      -- obligation.  Its Lifetime remains a child of the listener until the
+      -- structural closure driver retires the ownership subtree; doing that here
+      -- would compete with an enclosing close claim.
     end
     return true, state
   end)

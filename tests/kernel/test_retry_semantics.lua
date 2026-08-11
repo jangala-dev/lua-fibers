@@ -46,7 +46,7 @@ end
 do
   local scope = FibersScope.new():label('absence-scope-alone')
   local item = { name = 'unowned' }
-  Lifetime.inert(item)
+  Lifetime.define(item)
   local got
   local st = fibers.try_run(function()
     got = fibers.perform(scope:can_op(item, 'use')
@@ -63,7 +63,7 @@ end
 do
   local scope = FibersScope.new():label('absence-scope-partner')
   local item = { name = 'admitted-later' }
-  Lifetime.inert(item)
+  Lifetime.define(item)
   local got, admitted
   local rt = FibersRuntime.new()
   rt:spawn_raw(function()
@@ -79,13 +79,13 @@ do
   assert_eq(admitted, item)
   assert_eq(got, 'primary')
   assert_eq(Lifetimes.state(item).custodian, scope:lifetime())
-  local record = Lifetimes.record(scope, item)
+  local record = Lifetimes.custody_snapshot(scope, item)
   assert_truthy(record and record.phase == 'live', 'admission should establish live custody')
 end
 
--- A dormant running Lifetime has no outcome and therefore permits fallback.
+-- A dormant Lifetime has no outcome and therefore permits fallback.
 do
-  local life = Lifetime.task(function() return 'unused' end, { label = 'absence-dormant-running' })
+  local life = Lifetime.new({ label = 'absence-dormant' })
   local got
   local st = fibers.try_run(function()
     got = fibers.perform(life:outcome_op():or_else(Op.always('fallback')))

@@ -5,6 +5,7 @@
 
 local Op = require('fibers.op')
 local Facility = require('fibers.resource.authoring')
+local Completion = require('fibers.resource.completion')
 local Task = require('fibers.task')
 local Grant = require('fibers.grant')
 local Runtime = require('fibers.runtime')
@@ -36,8 +37,8 @@ local function target_scope(target)
 end
 
 local function require_closure_permission(scope, field, action)
-  local closure = scope._lifetime._closure
-  if closure and closure[field] == false then
+  local policy = scope._role.policy
+  if policy and policy[field] == false then
     error((action or field) .. ' denied by scope Closure', 3)
   end
 end
@@ -45,7 +46,7 @@ end
 local function item_kind(item)
   local life = Lifetime.of(item)
   if not life then return nil end
-  return life._has_body and 'task' or 'resource'
+  return life:_task() ~= nil and 'task' or 'resource'
 end
 
 local function offer_op(lifetime, role, value)
@@ -54,6 +55,16 @@ local function offer_op(lifetime, role, value)
 end
 
 local SCOPE_OPTIONS = { parent = true, closure = true, runtime = true, lifetime = true, label = true }
+
+local function ensure_scope_result(lifetime)
+  local role = lifetime:_scope_role(true)
+  local completion = role.result
+  if completion then return completion end
+  completion = Completion.new():label('scope-result')
+  role.result = completion
+  Label.child(completion, lifetime, 'scope-result')
+  return completion
+end
 
 function Scope.new(opts)
   opts = Contract.options(opts, SCOPE_OPTIONS, 'Scope.new options', 2)
@@ -68,20 +79,22 @@ function Scope.new(opts)
   end
   if not lifetime then
     lifetime = Lifetime.new({
-      parent = opts.parent and opts.parent._lifetime or nil,
-      closure = opts.closure,
-      standalone_boundary = true,
+      closure = Closure.running(),
       label = opts.label,
     })
   end
-  if opts.runtime then lifetime:_bind_runtime(opts.runtime) end
-  lifetime._closure = Closure.combine(lifetime._closure, Closure.propagation(opts.closure))
-  return setmetatable({
+  local role = lifetime:_scope_role(true)
+  role.policy = Closure._merge_policy(role.policy, Closure.policy(opts.closure))
+  local scope = setmetatable({
     _mask_depth = 0,
     _lifetime = lifetime,
+    _role = role,
+    _parent_hint = opts.parent,
     _fibers_id = id,
     _fibers_scope = true,
   }, Scope)
+  if opts.runtime then scope:_bind_runtime(opts.runtime) end
+  return scope
 end
 
 
@@ -93,6 +106,7 @@ function Scope.for_lifetime(lifetime)
   return setmetatable({
     _mask_depth = 0,
     _lifetime = lifetime,
+    _role = lifetime:_scope_role(true),
     _fibers_id = 'scope-view-' .. tostring(next_id),
     _fibers_scope = true,
   }, Scope)
@@ -104,7 +118,7 @@ function Scope:parent_scope()
   if lifetime._runtime then
     parent = lifetime._runtime:_lifetime_store():_custodian(lifetime)
   end
-  parent = parent or lifetime:_construction_parent_node()
+  parent = parent or (self._parent_hint and self._parent_hint._lifetime or nil)
   if not parent or parent == lifetime then return nil end
   return Scope.for_lifetime(parent)
 end
@@ -130,8 +144,16 @@ function Scope:_bind_runtime(runtime)
   runtime = runtime or self._lifetime._runtime or Runtime.current()
   if not runtime then error('Scope requires a current Runtime', 2) end
   local parent = self:parent_scope()
-  if parent then parent:_bind_runtime(runtime) end
-  self._lifetime:_bind_runtime(runtime)
+  if parent then
+    parent:_bind_runtime(runtime)
+    self._lifetime:_bind_runtime(runtime)
+  else
+    self._lifetime:_bind_runtime(runtime)
+    local store = runtime:_lifetime_store()
+    if store:_phase(self._lifetime) == 'dormant' then
+      store:_bootstrap_admit(runtime:_lifetime_root(), self._lifetime)
+    end
+  end
   return runtime
 end
 
@@ -177,24 +199,18 @@ function Scope:mask(fn, ...)
   return unpack_(r, 2, r.n)
 end
 
-function Scope:_run_child_body(fn, task, opts)
-  opts = opts or {}
+function Scope:_run_child_body(fn, task)
   if not task or not task._lifetime then
     error('Scope:_run_child_body expects a Task Lifetime', 2)
   end
-  local child = Scope.new({
-    parent = self,
-    closure = opts.closure or self._lifetime._closure,
-    runtime = self._lifetime._runtime or Runtime.current(),
-    lifetime = task._lifetime,
-  })
-  -- ScopeClosure owns publication for Scope-backed Tasks. The body-exit hook
-  -- runs exactly once, immediately after the protected user body returns and
-  -- before descendant retirement begins. The outer Task runner verifies that
-  -- this publication happened; it never republishes as a fallback.
+  -- Task creation fixes the Scope role and policy before admission. Once the
+  -- admission commit activates the body, execution needs only another view of
+  -- that already-configured Lifetime; no policy is merged a second time.
+  local child = Scope.for_lifetime(task._lifetime)
+  child:_bind_runtime(self._lifetime._runtime or Runtime.current())
   return ScopeClosure.run(child, function(s)
     return fn(s, task)
-  end, child._lifetime._closure or {}, function(results, runtime)
+  end, child._role.policy, function(results, runtime)
     task:_publish_protected_body_result(results, runtime)
   end):raise()
 end
@@ -207,12 +223,21 @@ function Scope:_drive_op(value, spec)
     closure = assert(spec.closure, 'driven Lifetime requires spec.closure'), children = spec.children,
   })
   for _, state in ipairs(spec.causal_states or {}) do Lifetime._mark_causal_state(value, state) end
-  local private_scope = Scope.for_lifetime(value._lifetime)
-  local driver = Task._new(function() return private_scope:run(spec.run) end, self, {
-    lifetime = value._lifetime, closure = self._lifetime._closure, label = spec.label,
+  -- A driven resource is an ordinary Scope-backed Task view over the same
+  -- Lifetime.  Its computation result must publish when spec.run returns,
+  -- before descendant closure and retirement, exactly like Scope:spawn_op.
+  -- Wrapping private_scope:run inside a Task-owned body result would make body
+  -- completion depend on the Lifetime's own retirement and can deadlock an
+  -- ancestor close claim.
+  local parent = self
+  local driver = Task._new(function(task_handle)
+    return parent:_run_child_body(spec.run, task_handle)
+  end, self, {
+    lifetime = value._lifetime, closure = self._role.policy, label = spec.label,
+    execution_kind = 'resource_driver',
   })
   value._driver = driver
-  return self:admit_op(value):and_then(driver:spawn_effect_op()):map(function() return value end)
+  return self:admit_op(value):map(function() return value end)
 end
 
 function Scope:spawn_op(fn, opts)
@@ -222,15 +247,14 @@ function Scope:spawn_op(fn, opts)
   opts = Contract.options(opts, { label = true, closure = true }, 'Scope:spawn_op options', 2)
   local parent = self
   local task = Task._new(function(task_handle)
-    return parent:_run_child_body(fn, task_handle, opts)
+    return parent:_run_child_body(fn, task_handle)
   end, self, {
     label = opts.label,
-    closure = Closure.running(Closure.propagation(opts.closure or self._lifetime._closure)),
-    body_result_owner = 'scope',
+    closure = opts.closure,
+    execution_kind = 'task',
   })
   return self
     :admit_op(task)
-    :and_then(task:spawn_effect_op())
     :map(function()
       return task
     end)
@@ -249,7 +273,9 @@ function Scope:move_op(item, target)
     error('Scope:move_op expects a target Scope', 2)
   end
   require_closure_permission(self, 'permit_outward_move', 'outward movement')
-  return self:_store():move_op(self, item, r):map(function()
+  local runtime = self:_bind_runtime()
+  r:_bind_runtime(runtime)
+  return runtime:_lifetime_store():move_op(self, item, r):map(function()
     return item
   end)
 end
@@ -290,13 +316,13 @@ function Scope:accept_op(filter)
   end))
 end
 
-local function phase_live(record)
-  return record ~= nil and record.phase == 'live'
+local function phase_live(snapshot)
+  return snapshot ~= nil and snapshot.phase == 'live'
 end
 
 local function grant_can_op(scope, item, right)
   local subject_lifetime = Lifetime.require(item, 3)
-  return scope:_store():roots_op(scope):and_then(Op.guard(function(items)
+  return scope:_store():children_op(scope):and_then(Op.guard(function(items)
     local function scan(i)
       if i > #items then
         return Op.never()
@@ -304,12 +330,12 @@ local function grant_can_op(scope, item, right)
       local b = items[i]
       if Grant.is(b) and Grant._subject_lifetime(b) == subject_lifetime and b:has_right(right) then
         return Op.each({
-          scope:_store():record_op(scope, b),
+          scope:_store():custody_snapshot_op(scope, b),
           scope:_store():active_op(subject_lifetime),
         }):and_then(Op.guard(function(rows)
-          local record = rows[1][1]
+          local snapshot = rows[1][1]
           local subject_active = rows[2][1]
-          if phase_live(record) and subject_active then
+          if phase_live(snapshot) and subject_active then
             return Op.always(item, { kind = 'grant', grant = b, right = right })
           end
           return scan(i + 1)
@@ -376,8 +402,19 @@ function Scope:grant_op(item, holder, rights, opts)
     end)
 end
 
-function Scope:close_op(item, reason)
-  return Closure.close_op(self, item, reason or 'closed')
+function Scope:start_close_op(item, reason)
+  return Closure.start_close_op(self, item, reason or 'closed')
+end
+
+-- Direct structural closure is intentionally two transactions: start commits
+-- the CloseClaim and its emitted driver; result observes the later retirement or
+-- retained failure. The `_op` surface exposes those phases separately.
+function Scope:close(item, reason)
+  local perform = require('fibers.perform')
+  local process = perform(self:start_close_op(item, reason))
+  local ok, result = perform(process:result_op())
+  if not ok then error(result, 0) end
+  return result
 end
 
 function Scope:_request_cancel_op(reason)
@@ -385,6 +422,11 @@ function Scope:_request_cancel_op(reason)
 end
 
 function Scope:request_cancel_op(reason)
+  -- Bind the Scope while the Option is constructed, as other Scope operations
+  -- do. Guard activation happens inside kernel search, where Runtime.current()
+  -- is deliberately not an ambient dependency. Binding does not request close
+  -- or raise interruption; those remain transactional consequences.
+  self:_bind_runtime()
   return ScopeClosure.request_cancel_op(self, reason)
 end
 
@@ -393,13 +435,13 @@ function Scope:cancel_requested_op()
 end
 
 function Scope:_running_children_op()
-  return self:_store():roots_op(self):map(function(roots)
+  return self:_store():children_op(self):map(function(children)
     local tasks = {}
-    for i = 1, #roots do
-      local life = Lifetime.of(roots[i])
-      if life and life._has_body then tasks[#tasks + 1] = life end
+    for i = 1, #children do
+      local life = Lifetime.of(children[i])
+      if life and life:_task() ~= nil then tasks[#tasks + 1] = life end
     end
-    return { tasks = tasks, roots = roots }
+    return { tasks = tasks, children = children }
   end)
 end
 
@@ -408,10 +450,12 @@ function Scope:begin_close_op(reason, opts)
   Contract.optional_boolean(opts.cancel_body, 'Scope:begin_close_op cancel_body', 2)
   Contract.optional_boolean(opts.cancel_children, 'Scope:begin_close_op cancel_children', 2)
   return self:_running_children_op():and_then(Op.guard(function(snapshot)
-    local ops = { self._lifetime:request_close_op(reason), self:seal_op(reason) }
-    if opts.cancel_body ~= false then
-      ops[#ops + 1] = self:_request_cancel_op(reason)
-    end
+    -- Cancellation is a close request with interruption, not a second lifecycle
+    -- transition. Choose one close-intent operation for this Lifetime.
+    local close_intent = opts.cancel_body ~= false
+      and self:_request_cancel_op(reason)
+      or self._lifetime:request_close_op(reason)
+    local ops = { close_intent, self:seal_op(reason) }
     if opts.cancel_children ~= false then
       for i = 1, #snapshot.tasks do
         ops[#ops + 1] = snapshot.tasks[i]:request_cancel_op(reason)
@@ -429,39 +473,44 @@ function Scope:seal_op(_reason)
   end)
 end
 
-local function lifetime_sealed_op(scope)
-  return scope:_store():status_op(scope):and_then(Op.guard(function(status)
-    if status.sealed then
-      return Op.always(true)
-    end
-    return scope:_store():changed_op(scope, status.version):and_then(Op.guard(function()
-      return lifetime_sealed_op(scope)
-    end))
-  end))
-end
-
 function Scope:sealed_op()
-  return lifetime_sealed_op(self):map(function()
-    return self
-  end)
+  return self:_store():sealed_op(self):map(function() return self end)
 end
 
-function Scope:_mark_done_op(result)
-  local scope, lifetime = self, self._lifetime
-  local unresolved = ScopeResult.is(result)
-    and result.reason == 'closure_failed'
+local function unresolved_closure(result)
+  -- Closure failure is orthogonal to the Scope's primary result.  A body or
+  -- child failure may remain primary while cleanup also leaves live
+  -- responsibility behind.  Any retained closure failure therefore prevents
+  -- self-retirement until that responsibility is recovered.
+  return ScopeResult.is(result)
     and result.closure_failures
     and #result.closure_failures > 0
-  local phase_op
-  if unresolved then
-    phase_op = lifetime:_mark_closure_failed_op(result.primary, result.reason)
-  else
-    phase_op = lifetime:_mark_closed_op(result.reason)
-  end
-  return Op.each({ phase_op, lifetime:publish_outcome_op(result) }):map(function()
-    return ScopeResult.is(result) and result:done_outcome() or result, scope
-  end)
 end
+
+-- Scope execution completion is separate from terminal Lifetime outcome.  The
+-- result is published on the Scope execution view while the Lifetime may still
+-- be CLOSING; retirement alone publishes the terminal Lifetime outcome.
+function Scope:_settle_done_op(result)
+  local completion = ensure_scope_result(self._lifetime)
+  local publish = completion:publish_success_op(result):and_then(Op.guard(function(first, conflict)
+    if first ~= true then error('Scope result already published: ' .. tostring(conflict), 3) end
+    return Op.always(result)
+  end))
+  if unresolved_closure(result) then
+    return publish:and_then(self._lifetime:_record_closure_fault_op(result.primary, result.reason))
+      :map(function() return result, self end)
+  end
+  return publish:map(function() return result, self end)
+end
+
+function Scope:_result_completion()
+  return ensure_scope_result(self._lifetime)
+end
+
+function Scope:_result_op()
+  return self:_result_completion():success_op()
+end
+
 
 function Scope:done_op()
   return self._lifetime:outcome_op():map(function(result)
@@ -477,6 +526,15 @@ function Scope:_make_report(primary, secondaries, fields)
 end
 
 function Scope:try_run(fn)
+  local runtime = self:_bind_runtime()
+  local parent = self:parent_scope()
+  ensure_scope_result(self._lifetime)
+  if parent and self:_store():_phase(self._lifetime) == 'dormant' then
+    -- A child Scope is itself an owned Lifetime. Synchronous lexical use does
+    -- not bypass the same admission law used by Tasks and resources.
+    parent:perform(parent:admit_op(self._lifetime))
+    self:_bind_runtime(runtime)
+  end
   return ScopeClosure.try_run(self, fn)
 end
 

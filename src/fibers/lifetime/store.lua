@@ -1,10 +1,8 @@
--- Runtime-local transactional forest for continuing Lifetimes.
+-- Runtime-local transactional custody tree for continuing Lifetimes.
 --
--- Each Lifetime node owns one authoritative kernel location containing exactly
--- two pieces of live topology: its custody record (the item side) and its
--- custody-boundary state (the owner side). There is no global forest value.
--- Multi-node changes are ordinary atomic Option compositions over only the
--- nodes they touch, so unrelated scopes no longer share a dependency location.
+-- Each Lifetime owns one authoritative kernel location.  The location contains
+-- only mutable lifecycle/custody facts; immutable description (protocol, role,
+-- rights and metadata) stays on the Lifetime object itself.
 
 local Op = require('fibers.op')
 local Effect = require('fibers.effect')
@@ -15,23 +13,20 @@ local Store = {}
 Store.__index = Store
 
 local Ready, Wait = StateMachine.Ready, StateMachine.Wait
-local Phase = { live = 'live', closing = 'closing', closure_failed = 'closure_failed' }
-local RECORD_ABSENT = { _fibers_lifetime_record_absent = true }
-local BOUNDARY_ABSENT = { _fibers_lifetime_boundary_absent = true }
 
 local function node_of(value)
   if type(value) ~= 'table' then return nil end
   return value._fibers_lifetime and value or value._lifetime
 end
 
-local boundary_of = node_of
+local custodian_of = node_of
 
 local function view_of(node)
   return node and (node._value or node) or nil
 end
 
-local function is_close_token(x)
-  return type(x) == 'table' and x._fibers_close_token == true
+local function is_close_claim(x)
+  return type(x) == 'table' and x._fibers_close_claim == true
 end
 
 local function copy_list(xs)
@@ -40,78 +35,69 @@ local function copy_list(xs)
   return out
 end
 
-local function copy_record(r)
-  if not r or r == RECORD_ABSENT then return nil end
-  local out = {}
-  for field, value in pairs(r) do out[field] = value end
-  out.children = copy_list(r.children)
-  if r._members then out._members = copy_list(r._members) end
-  return out
-end
-
-local function record_view(node, r)
-  local out = copy_record(r)
-  if not out then return nil end
-  out._fibers_value, out.node, out.item = true, node, view_of(node)
-  out.close_token, out._members, out.parent = nil, nil, view_of(r.parent)
-  for i = 1, #out.children do out.children[i] = view_of(out.children[i]) end
-  return out
-end
-
-local function new_boundary()
+local function copy_close_request(request)
+  if type(request) ~= 'table' then return nil end
   return {
-    sealed = false,
-    count = 0,
-    roots = {}, -- newest admission first, matching the former admission-order view
-    closure_phase = 'dormant',
+    reason = request.reason,
+    interrupt = request.interrupt == true,
+    interrupt_reason = request.interrupt_reason,
   }
 end
-
-local function copy_boundary(bs)
-  if not bs or bs == BOUNDARY_ABSENT then return new_boundary() end
-  return {
-    sealed = bs.sealed == true,
-    count = bs.count or 0,
-    roots = copy_list(bs.roots),
-    closure_phase = bs.closure_phase or 'dormant',
-    closure_reason = bs.closure_reason,
-    closure_error = bs.closure_error,
-  }
-end
-
-local function boundary_state(bs)
-  return (bs == nil or bs == BOUNDARY_ABSENT) and new_boundary() or bs
-end
-
-local STATUS_RESULT = Facility.result.project(function(state, leaf)
-  local bs = boundary_state(state.boundary)
-  return { sealed = bs.sealed == true, version = leaf.location.version or 0 }
-end)
 
 local function new_node_state()
-  return { record = RECORD_ABSENT, boundary = BOUNDARY_ABSENT }
+  return {
+    phase = 'dormant',
+    custodian = nil,
+    children = {}, -- newest admission first
+    sealed = false,
+    close_request = nil,
+    closure_fault = nil,
+    close_claim = nil,
+  }
 end
 
-local function copy_node_state(state)
-  return { record = state.record, boundary = state.boundary }
+local function copy_state(state)
+  return {
+    phase = state.phase or 'dormant',
+    custodian = state.custodian,
+    children = copy_list(state.children),
+    sealed = state.sealed == true,
+    close_request = copy_close_request(state.close_request),
+    closure_fault = state.closure_fault,
+    close_claim = state.close_claim,
+  }
 end
 
-local function prepend_root(bs, root)
-  local roots = bs.roots or {}
-  local out = { root }
-  for i = 1, #roots do
-    if roots[i] ~= root then out[#out + 1] = roots[i] end
+local function close_reason(state)
+  local request = state and state.close_request
+  return type(request) == 'table' and request.reason or nil
+end
+
+local function ensure_closing(state, reason)
+  if state.phase == 'retired' or state.phase == 'dormant' then return false end
+  local changed = state.phase ~= 'closing'
+  state.phase = 'closing'
+  if state.close_request == nil then
+    state.close_request = { reason = reason, interrupt = false }
+    changed = true
   end
-  bs.roots = out
+  return changed
 end
 
-local function remove_root(bs, root)
-  local roots, out, found = bs.roots or {}, {}, false
-  for i = 1, #roots do
-    if roots[i] == root then found = true else out[#out + 1] = roots[i] end
-  end
-  bs.roots = out
-  return found
+local function is_owned(state)
+  return state.phase == 'live' or state.phase == 'closing'
+end
+
+local function custody_snapshot(node, state)
+  if not is_owned(state) then return nil end
+  return {
+    _fibers_value = true,
+    node = node,
+    item = view_of(node),
+    custodian = state.custodian,
+    phase = state.phase,
+    closure_fault = state.closure_fault,
+  }
 end
 
 local function rights_allow(rights, right)
@@ -119,26 +105,33 @@ local function rights_allow(rights, right)
   if type(rights) == 'string' then return rights == right or rights == '*' end
   if type(rights) ~= 'table' then return false end
   if rights[right] == true or rights['*'] == true then return true end
-  for i = 1, #rights do if rights[i] == right or rights[i] == '*' then return true end end
+  for i = 1, #rights do
+    if rights[i] == right or rights[i] == '*' then return true end
+  end
   return false
 end
 
-local closure_rank = {
-  dormant = 0,
-  open = 1,
-  close_requested = 2,
-  closing = 3,
-  closure_failed = 4,
-  closed = 5,
-}
+local function prepend_child(state, child)
+  local children, out = state.children or {}, { child }
+  for i = 1, #children do
+    if children[i] ~= child then out[#out + 1] = children[i] end
+  end
+  state.children = out
+end
 
-local function advance_closure(bs, phase, reason, err)
-  local current = bs.closure_phase or 'dormant'
-  if (closure_rank[phase] or -1) <= (closure_rank[current] or -1) then return false end
-  bs.closure_phase = phase
-  if reason ~= nil then bs.closure_reason = reason end
-  if err ~= nil or phase ~= 'closure_failed' then bs.closure_error = err end
-  return true
+local function remove_child(state, child)
+  local children, out, found = state.children or {}, {}, false
+  for i = 1, #children do
+    if children[i] == child then found = true else out[#out + 1] = children[i] end
+  end
+  state.children = out
+  return found
+end
+
+local function children_view(state)
+  local out = {}
+  for i = 1, #(state.children or {}) do out[i] = view_of(state.children[i]) end
+  return out
 end
 
 local function machine_op(store, node, transition, payload)
@@ -157,256 +150,238 @@ local function machine_op(store, node, transition, payload)
   return Facility.bind(spec, payload == nil and {} or payload)
 end
 
--- Admission of an item is one-shot. Do not retain a compiled transition on
--- every live Lifetime for an operation which can never be performed again.
 local function machine_once(store, node, transition, payload)
   store:attach_node(node)
   local spec = StateMachine._compile(node._lifetime_location, node, transition)
   return Facility.bind(spec, payload == nil and {} or payload)
 end
 
-local function roots_view(bs)
-  bs = boundary_state(bs)
-  local out = {}
-  for i = 1, #(bs.roots or {}) do out[i] = view_of(bs.roots[i]) end
-  return out
-end
-
-local function row1(rows, index)
-  local row = rows[index]
-  return row and row[1] or nil
-end
-
--- Ordinary node fields are commit-local mirrors used by Task/Scope/domain
--- objects. The transactional topology itself lives solely in node locations.
-local CommitKind
-CommitKind = Effect.kind({
-  name = 'lifetime-node-commit',
+-- Commit-local mirrors used only to bind/activate/retire ordinary Lua views.
+local CommitKind = Effect.kind({
+  name = 'lifetime-admission',
   key = function(payload) return payload.store end,
   merge = function(left, right)
-    local changes = {}
-    for node, change in pairs(left.changes or {}) do changes[node] = change end
-    for node, change in pairs(right.changes or {}) do changes[node] = change end
-    return { store = left.store, changes = changes }
+    local nodes = {}
+    for node in pairs(left.nodes or {}) do nodes[node] = true end
+    for node in pairs(right.nodes or {}) do nodes[node] = true end
+    return { store = left.store, nodes = nodes }
   end,
   prepare = function(_runtime, payload)
-    local owner_runtime = payload.store.runtime
-    local changes = payload.changes or {}
-    return {
-      discharge = function()
-        for node, change in pairs(changes) do
-          if change.state == 'admitted' and node._bind_runtime_committed then
-            node:_bind_runtime_committed(owner_runtime)
-          end
-        end
-        for node, change in pairs(changes) do
-          if change.state == 'admitted' then
-            if node._on_admitted then node:_on_admitted() end
-          elseif change.state == 'retired' then
-            if node._on_retired then node:_on_retired(change.reason) end
-          end
-        end
-        return true
-      end,
-    }
+    local runtime, nodes = payload.store.runtime, payload.nodes or {}
+    return { discharge = function()
+      for node in pairs(nodes) do node:_bind_runtime_committed(runtime) end
+      for node in pairs(nodes) do node:_on_admitted() end
+      for node in pairs(nodes) do node:_activate_committed(runtime) end
+      return true
+    end }
   end,
 })
 
-local function commit_effect(store, state, nodes, reason)
-  local changes = {}
-  for i = 1, #nodes do changes[nodes[i]] = { state = state, reason = reason } end
-  return Effect.of(CommitKind, { store = store, changes = changes })
+local function admission_effect(store, node)
+  return Effect.of(CommitKind, { store = store, nodes = { [node] = true } })
 end
 
 -- Queries ------------------------------------------------------------------
 
 local NodeQuery = StateMachine.isolated_query('lifetime.node.query', function(state, p)
-  local rec, bs = state.record, boundary_state(state.boundary)
   local kind = p.kind
   if kind == 'has_custody' then
-    return Ready.same(rec ~= RECORD_ABSENT and rec.custodian == p.boundary)
-  elseif kind == 'record' then
-    return Ready.same(rec ~= RECORD_ABSENT and rec.custodian == p.boundary and record_view(p.item, rec) or nil)
+    return Ready.same(is_owned(state) and state.custodian == p.custodian)
+  elseif kind == 'custody_snapshot' then
+    return Ready.same(is_owned(state) and state.custodian == p.custodian and custody_snapshot(p.item, state) or nil)
   elseif kind == 'active' then
-    return Ready.same(rec ~= RECORD_ABSENT and rec.phase == Phase.live)
+    return Ready.same(state.phase == 'live')
   elseif kind == 'authorise' then
-    if rec == RECORD_ABSENT or rec.custodian ~= p.boundary then return Ready.same(false, nil) end
-    local phase = rec.phase
-    local allowed = phase == Phase.live or (p.allow_closing and phase == Phase.closing)
-    local rights = rec.rights or (type(rec.meta) == 'table' and rec.meta.rights or nil)
-    return Ready.same(allowed and rights_allow(rights, p.right), phase)
-  elseif kind == 'root' then
-    if rec == RECORD_ABSENT or rec.custodian ~= p.boundary or rec.parent ~= nil then return Wait end
-    return Ready.same(copy_record(rec))
-  elseif kind == 'roots' then
-    return Ready.same(roots_view(bs))
-  elseif kind == 'live_member' then
-    if rec == RECORD_ABSENT or rec.custodian ~= p.boundary or rec.phase ~= Phase.live then return Wait end
+    if not is_owned(state) or state.custodian ~= p.custodian then return Ready.same(false, nil) end
+    local allowed = state.phase == 'live' or (p.allow_closing and state.phase == 'closing')
+    local rights = p.item._rights or (type(p.item._meta) == 'table' and p.item._meta.rights or nil)
+    return Ready.same(allowed and rights_allow(rights, p.right), state.phase)
+  elseif kind == 'owned_by' then
+    if not is_owned(state) or state.custodian ~= p.custodian then return Wait end
+    return Ready.same(custody_snapshot(p.item, state))
+  elseif kind == 'children' then
+    return Ready.same(children_view(state))
+  elseif kind == 'sealed' then
+    if not state.sealed then return Wait end
     return Ready.same(true)
-  elseif kind == 'token_containment' then
-    if rec == RECORD_ABSENT or rec.custodian ~= p.boundary or rec.close_token ~= p.token then return Wait end
-    if rec.phase ~= Phase.closing and rec.phase ~= Phase.closure_failed then return Wait end
-    return Ready.same(bs.count or 0, bs.closure_error)
+  elseif kind == 'custodian' then
+    return Ready.same(is_owned(state) and state.custodian or nil)
+  elseif kind == 'close_requested' then
+    if state.close_request == nil and state.phase ~= 'retired' then return Wait end
+    return Ready.same(close_reason(state))
+  elseif kind == 'cancel_requested' then
+    local request = state.close_request
+    if type(request) ~= 'table' or request.interrupt ~= true then return Wait end
+    return Ready.same(true, request.interrupt_reason or request.reason)
+  elseif kind == 'closed' then
+    if state.phase ~= 'retired' then return Wait end
+    return Ready.same(true, close_reason(state))
+  elseif kind == 'close_claim' then
+    return Ready.same(state.close_claim, state.closure_fault)
+  elseif kind == 'claim_containment' then
+    if not is_owned(state) or state.custodian ~= p.custodian or state.close_claim ~= p.authority then return Wait end
+    local unresolved = 0
+    local members = p.claim.member_set or {}
+    for i = 1, #(state.children or {}) do
+      if not members[state.children[i]] then unresolved = unresolved + 1 end
+    end
+    return Ready.same(unresolved, state.closure_fault)
   end
   error('unknown Lifetime node query ' .. tostring(kind), 0)
 end, 10)
 
--- Node changes ---------------------------------------------------------------
+-- Node changes -------------------------------------------------------------
 
-local function new_close_token(store, boundary, root, members, purpose)
-  store._next_close_token = store._next_close_token + 1
-  return {
-    _fibers_close_token = true, _fibers_value = true,
-    id = 'close-token-' .. tostring(store._next_close_token),
-    boundary = boundary, root = root, members = copy_list(members), records = {}, purpose = purpose,
-    reason = type(purpose) == 'table' and purpose.reason or nil,
-    started = false, running = false, complete = false,
-  }
-end
-
--- Admission has a lower serial order so an admission and a subsequent node
--- action can compose in the same transactional world without changing v1's
--- established order.
 local AdmissionChange = StateMachine.isolated_select('lifetime.node.admission', function(state, p)
   if p.kind == 'prepare' then
-    local bs = boundary_state(state.boundary)
-    if bs.sealed or p.root._admitted then return Wait end
-    local records, members, descendant_admitted = p.records()
-    if descendant_admitted then return Wait end
-    local next_bs = copy_boundary(bs)
-    next_bs.count = (next_bs.count or 0) + #members
-    prepend_root(next_bs, p.root)
-    local next_state = copy_node_state(state); next_state.boundary = next_bs
-    return Ready.write(next_state, records, members)
+    if state.sealed or state.phase ~= 'live' then return Wait end
+    local next = copy_state(state)
+    prepend_child(next, p.child)
+    return Ready.write(next, true)
   elseif p.kind == 'item' then
-    if state.record ~= RECORD_ABSENT or p.node._admitted then return Wait end
-    local rec = copy_record(p.record)
-    rec.custodian = p.boundary
-    local bs = copy_boundary(state.boundary)
-    bs.closure_phase, bs.closure_reason, bs.closure_error = 'open', nil, nil
-    local next_state = copy_node_state(state); next_state.record, next_state.boundary = rec, bs
-    return Ready.write(next_state, true)
+    if state.phase ~= 'dormant' then return Wait end
+    local next = copy_state(state)
+    next.phase = 'live'
+    next.custodian = p.custodian
+    next.sealed = false
+    next.close_request = nil
+    next.closure_fault = nil
+    next.close_claim = nil
+    return Ready.write(next, true)
   end
   error('unknown Lifetime admission change ' .. tostring(p.kind), 0)
 end, 40)
 
 local NodeChange = StateMachine.isolated_select('lifetime.node.change', function(state, p)
   local kind = p.kind
-  if kind == 'move_root' then
-    local rec = state.record
-    if rec == RECORD_ABSENT or rec.custodian ~= p.from or rec.parent ~= nil or rec.phase ~= Phase.live then return Wait end
-    local next_rec = copy_record(rec); next_rec.custodian = p.to
-    local next_state = copy_node_state(state); next_state.record = next_rec
-    return Ready.write(next_state, copy_list(rec._members or { p.item }))
-  elseif kind == 'move_member' then
-    local rec = state.record
-    if rec == RECORD_ABSENT or rec.custodian ~= p.from or rec.phase ~= Phase.live then return Wait end
-    local next_rec = copy_record(rec); next_rec.custodian = p.to
-    local next_state = copy_node_state(state); next_state.record = next_rec
-    return Ready.write(next_state, true)
-  elseif kind == 'remove_root' then
-    if state.boundary == BOUNDARY_ABSENT then return Wait end
-    local bs = copy_boundary(state.boundary)
-    if not remove_root(bs, p.root) then return Wait end
-    bs.count = math.max((bs.count or p.count) - p.count, 0)
-    local next_state = copy_node_state(state); next_state.boundary = bs
-    return Ready.write(next_state, true)
-  elseif kind == 'add_root' then
-    local bs = boundary_state(state.boundary)
-    if bs.sealed then return Wait end
-    local next_bs = copy_boundary(bs)
-    next_bs.count = (next_bs.count or 0) + p.count; prepend_root(next_bs, p.root)
-    local next_state = copy_node_state(state); next_state.boundary = next_bs
-    return Ready.write(next_state, true)
-  elseif kind == 'acquire_root' then
-    local rec = state.record
-    if rec == RECORD_ABSENT or rec.custodian ~= p.boundary or rec.parent ~= nil or rec.phase ~= Phase.live then return Wait end
-    local members = copy_list(rec._members or { p.item })
-    local token = new_close_token(p.store, p.boundary, p.item, members, p.purpose)
-    local before, next_rec = copy_record(rec), copy_record(rec)
-    next_rec.phase, next_rec.close_token, next_rec.close_token_id = Phase.closing, token, token.id
-    next_rec.close_purpose, next_rec.close_reason = p.purpose, token.reason
-    local next_state = copy_node_state(state); next_state.record = next_rec
-    return Ready.write(next_state, token, before)
+  if kind == 'move_custody' then
+    if state.phase ~= 'live' or state.custodian ~= p.from or state.close_claim ~= nil then return Wait end
+    local next = copy_state(state)
+    next.custodian = p.to
+    return Ready.write(next, true)
+  elseif kind == 'remove_child' then
+    if p.for_move and state.phase ~= 'live' then return Wait end
+    local next = copy_state(state)
+    if not remove_child(next, p.child) then return Wait end
+    return Ready.write(next, true)
+  elseif kind == 'add_child' then
+    if state.sealed or state.phase ~= 'live' then return Wait end
+    local next = copy_state(state)
+    prepend_child(next, p.child)
+    return Ready.write(next, true)
+  elseif kind == 'claim_descendants' then
+    if state.phase == 'retired' then return Ready.same(p.already_retired) end
+    if state.close_claim ~= nil then
+      return Ready.same({ _fibers_value = true, _fibers_close_delegated = true, authority = state.close_claim })
+    end
+    if state.phase ~= 'live' and state.phase ~= 'closing' then return Wait end
+    local next = copy_state(state)
+    next.close_claim = p.authority
+    next.sealed = true
+    ensure_closing(next, p.reason)
+    return Ready.write(next, true)
+  elseif kind == 'release_descendants_claim' then
+    if state.close_claim ~= p.authority then return Wait end
+    local next = copy_state(state)
+    for i = 1, #(p.children or {}) do
+      if not remove_child(next, p.children[i]) then return Wait end
+    end
+    next.close_claim = nil
+    next.closure_fault = nil
+    return Ready.write(next, true)
+  elseif kind == 'restart_claim' then
+    if state.close_claim ~= p.authority or state.closure_fault ~= p.failure then return Wait end
+    local next = copy_state(state)
+    next.closure_fault = nil
+    return Ready.write(next, true)
+  elseif kind == 'fail_claim' then
+    if state.close_claim ~= p.authority then return Wait end
+    local next = copy_state(state)
+    next.closure_fault = p.failure
+    return Ready.write(next, true)
+  elseif kind == 'claim_subject' then
+    if state.phase == 'retired' then return Ready.same(p.already_retired) end
+    if state.close_claim ~= nil and p.delegate_existing then
+      return Ready.same({ _fibers_value = true, _fibers_close_delegated = true, authority = state.close_claim })
+    end
+    if (state.phase ~= 'live' and state.phase ~= 'closing')
+      or state.custodian ~= p.custodian or state.close_claim ~= nil then
+      return Wait
+    end
+    local before, next = custody_snapshot(p.item, state), copy_state(state)
+    next.close_claim = p.authority
+    ensure_closing(next, p.reason)
+    return Ready.write(next, before)
   elseif kind == 'acquire_member' then
-    local rec = state.record
-    if rec == RECORD_ABSENT or rec.custodian ~= p.boundary or rec.phase ~= Phase.live then return Wait end
-    local before, next_rec = copy_record(rec), copy_record(rec)
-    next_rec.phase, next_rec.close_token, next_rec.close_token_id = Phase.closing, p.token, p.token.id
-    next_rec.close_purpose, next_rec.close_reason = p.purpose, p.token.reason
-    local next_state = copy_node_state(state); next_state.record = next_rec
-    return Ready.write(next_state, before)
-  elseif kind == 'touch_boundary' then
-    local next_state = copy_node_state(state)
-    if state.boundary ~= BOUNDARY_ABSENT then next_state.boundary = copy_boundary(state.boundary) end
-    return Ready.write(next_state, true)
+    if (state.phase ~= 'live' and state.phase ~= 'closing')
+      or state.custodian ~= p.custodian or state.close_claim ~= nil then
+      return Wait
+    end
+    local before, next = custody_snapshot(p.item, state), copy_state(state)
+    next.close_claim = p.authority
+    ensure_closing(next, p.reason)
+    return Ready.write(next, before)
   elseif kind == 'discharge_member' then
-    local rec, bs = state.record, boundary_state(state.boundary)
-    if rec == RECORD_ABSENT or rec.custodian ~= p.boundary or rec.close_token ~= p.token then return Wait end
-    if rec.phase ~= Phase.closing and rec.phase ~= Phase.closure_failed then return Wait end
-    if (bs.count or 0) ~= 0 then return Wait end
-    local next_state = copy_node_state(state); next_state.record, next_state.boundary = RECORD_ABSENT, BOUNDARY_ABSENT
-    return Ready.write(next_state, true)
-  elseif kind == 'resume_member' then
-    local rec = state.record
-    if rec == RECORD_ABSENT or rec.custodian ~= p.boundary or rec.close_token ~= p.token then return Wait end
-    if rec.phase ~= Phase.closing and rec.phase ~= Phase.closure_failed then return Wait end
-    local next_rec = copy_record(rec)
-    next_rec.phase = Phase.closing
-    next_rec.closure_failed, next_rec.closure_error, next_rec.closure_error_message = nil, nil, nil
-    local bs = copy_boundary(state.boundary)
-    if bs.closure_phase ~= 'closed' then bs.closure_phase = 'closing' end
-    bs.closure_error = nil
-    local next_state = copy_node_state(state); next_state.record, next_state.boundary = next_rec, bs
-    return Ready.write(next_state, true)
+    if not is_owned(state) or state.custodian ~= p.custodian or state.close_claim ~= p.authority then return Wait end
+    local next = copy_state(state)
+    for i = 1, #(p.children or {}) do
+      if not remove_child(next, p.children[i]) then return Wait end
+    end
+    if #(next.children or {}) ~= 0 then return Wait end
+    next.phase = 'retired'
+    next.custodian = nil
+    next.sealed = true
+    next.children = {}
+    next.closure_fault = nil
+    next.close_claim = nil
+    if next.close_request == nil then next.close_request = { reason = p.reason, interrupt = false } end
+    return Ready.write(next, true)
+  elseif kind == 'restart_member' then
+    if not is_owned(state) or state.custodian ~= p.custodian or state.close_claim ~= p.authority then return Wait end
+    local next = copy_state(state)
+    next.closure_fault = nil
+    return Ready.write(next, true)
   elseif kind == 'fail_member' then
-    local rec, bs = state.record, boundary_state(state.boundary)
-    if rec == RECORD_ABSENT or rec.custodian ~= p.boundary or rec.close_token ~= p.token then return Wait end
-    if rec.phase ~= Phase.closing and rec.phase ~= Phase.closure_failed then return Wait end
-    local progress, retained = p.progress, (bs.count or 0) > 0
-    local next_rec = copy_record(rec)
-    next_rec.phase = Phase.closure_failed
-    next_rec.close_state = progress and progress.state or 'failed'
-    next_rec.close_request_state = progress and progress.request_state or nil
-    next_rec.close_force_state = progress and progress.force_state or nil
-    next_rec.close_request_error = progress and progress.request_error or nil
-    next_rec.close_force_error = progress and progress.force_error or nil
-    next_rec.closure_failed = retained or not progress or progress.close_state ~= 'succeeded'
-    next_rec.closure_error = progress and (progress.closure_error or progress.request_error or progress.force_error) or p.first_error
-    if retained and next_rec.closure_error == nil then next_rec.closure_error = 'closure retained unresolved descendants' end
-    next_rec.closure_error_message = next_rec.closure_error and tostring(next_rec.closure_error) or nil
-    local next_boundary
-    if progress and progress.close_state == 'succeeded' and not retained then
-      next_boundary = BOUNDARY_ABSENT
-    else
-      next_boundary = copy_boundary(bs)
-      next_boundary.closure_phase = 'closure_failed'
-      next_boundary.closure_error = next_rec.closure_error or p.first_error
-      next_boundary.closure_reason = p.token.reason
-    end
-    local next_state = copy_node_state(state); next_state.record, next_state.boundary = next_rec, next_boundary
-    return Ready.write(next_state, true)
+    if not is_owned(state) or state.custodian ~= p.custodian or state.close_claim ~= p.authority then return Wait end
+    local progress, retained = p.progress, #(state.children or {}) > 0
+    local fault = progress and (progress.closure_error or progress.request_error or progress.force_error) or p.first_error
+    if retained and fault == nil then fault = 'closure retained unresolved descendants' end
+    local next = copy_state(state)
+    next.phase = 'closing'
+    if next.close_request == nil then next.close_request = { reason = p.reason, interrupt = false } end
+    next.closure_fault = fault or p.first_error
+    return Ready.write(next, true)
+  elseif kind == 'request_cancel' then
+    if state.phase == 'retired' or state.phase == 'dormant' then return Wait end
+    local next = copy_state(state)
+    ensure_closing(next, p.reason)
+    local request = next.close_request or { reason = p.reason, interrupt = false }
+    local recorded_reason = request.interrupt_reason or request.reason or p.reason
+    if request.interrupt then return Ready.same(false, recorded_reason) end
+    request.interrupt = true
+    request.interrupt_reason = p.reason
+    next.close_request = request
+    return Ready.write(next, true, p.reason)
   elseif kind == 'seal' then
-    local bs = boundary_state(state.boundary)
-    if state.boundary == BOUNDARY_ABSENT or bs.sealed then return Wait end
-    local next_bs = copy_boundary(bs); next_bs.sealed = true
-    local next_state = copy_node_state(state); next_state.boundary = next_bs
-    return Ready.write(next_state, true)
-  elseif kind == 'phase' then
-    local bs = boundary_state(state.boundary)
-    if p.require_open and (state.boundary == BOUNDARY_ABSENT or bs.closure_phase == 'closed') then return Wait end
-    if p.require_empty and (bs.count or 0) ~= 0 then return Wait end
-    if p.ready and not p.ready(bs) then return Wait end
-    local before, next_bs = bs.closure_phase or 'dormant', copy_boundary(bs)
-    local changed = advance_closure(next_bs, p.phase, p.reason, p.err)
-    local result = p.result and p.result(before) or true
-    if p.phase == 'closed' and (next_bs.count or 0) == 0 then
-      local next_state = copy_node_state(state); next_state.boundary = BOUNDARY_ABSENT
-      return Ready.write(next_state, result, next_bs.closure_reason or p.reason, true)
-    end
-    if not changed then return Ready.same(result, bs.closure_reason or p.reason, false) end
-    local next_state = copy_node_state(state); next_state.boundary = next_bs
-    return Ready.write(next_state, result, next_bs.closure_reason or p.reason, false)
+    if state.phase == 'dormant' or state.phase == 'retired' or state.sealed then return Wait end
+    local next = copy_state(state)
+    next.sealed = true
+    return Ready.write(next, true)
+  elseif kind == 'request_close' then
+    if state.phase == 'dormant' or state.phase == 'retired' then return Wait end
+    local before, next = state.phase, copy_state(state)
+    local changed = ensure_closing(next, p.reason)
+    local first = before == 'live'
+    if not changed then return Ready.same(first, close_reason(state) or p.reason) end
+    return Ready.write(next, first, close_reason(next) or p.reason)
+  elseif kind == 'record_fault' then
+    if state.phase == 'dormant' or state.phase == 'retired' then return Wait end
+    local next = copy_state(state)
+    ensure_closing(next, p.reason)
+    local changed = next.closure_fault ~= p.err
+    next.closure_fault = p.err
+    if not changed then return Ready.same(true, close_reason(next) or p.reason) end
+    return Ready.write(next, true, close_reason(next) or p.reason)
   end
   error('unknown Lifetime node change ' .. tostring(kind), 0)
 end, 50)
@@ -414,15 +389,15 @@ end, 50)
 -- Store --------------------------------------------------------------------
 
 function Store.new(runtime)
-  return setmetatable({ runtime = runtime, _next_node = 0, _next_close_token = 0 }, Store)
+  return setmetatable({ runtime = runtime }, Store)
 end
 
 function Store:attach_node(node)
-  if type(node) ~= 'table' or node._fibers_lifetime ~= true then error('LifetimeStore expects a Lifetime node', 2) end
-  if node._runtime and node._runtime ~= self.runtime then error('Lifetime already belongs to another Runtime', 2) end
-  if node._fibers_id == nil then
-    self._next_node = self._next_node + 1
-    node._fibers_id = 'lifetime-' .. tostring(self._next_node)
+  if type(node) ~= 'table' or node._fibers_lifetime ~= true then
+    error('LifetimeStore expects a Lifetime node', 2)
+  end
+  if node._runtime and node._runtime ~= self.runtime then
+    error('Lifetime already belongs to another Runtime', 2)
   end
   if not node._lifetime_location then
     node._lifetime_location = Facility.location(node, {
@@ -432,235 +407,415 @@ function Store:attach_node(node)
   return node
 end
 
-function Store:activate_boundary(node)
-  node = node_of(node); self:attach_node(node)
+function Store:_bootstrap_root(node)
+  node = node_of(node)
+  self:attach_node(node)
   local state = node._lifetime_location.value
-  if state.boundary == BOUNDARY_ABSENT then
-    local bs = new_boundary(); bs.closure_phase = 'open'
-    state.boundary = bs
-  elseif state.boundary.closure_phase == 'dormant' then
-    state.boundary.closure_phase = 'open'
-  end
+  if state.phase == 'dormant' then state.phase = 'live' end
   return node
 end
 
-function Store:admit_op(view, root)
-  root = node_of(root)
-  if not root then error('LifetimeStore:admit_op expects a Lifetime', 2) end
-  local boundary = boundary_of(view)
-  self:attach_node(boundary); self:attach_node(root)
-  local function current_records() return root:_record_map() end
-  return machine_op(self, boundary, AdmissionChange, { kind = 'prepare', root = root, records = current_records })
-    :and_then(Op.guard(function(records, members)
-      local operations = {}
-      for i = 1, #members do
-        local item = members[i]; self:attach_node(item)
-        local rec = copy_record(records[item])
-        if item == root then rec._members = copy_list(members) end
-        operations[i] = machine_once(self, item, AdmissionChange, { kind = 'item', node = item, boundary = boundary, record = rec })
-      end
-      return Op.each(operations)
-        :and_then(Op.emit(commit_effect(self, 'admitted', members)))
-        :map(function() return view_of(root) end)
-    end))
+-- Runtime bootstrap only: attach a top-level Scope beneath the distinguished
+-- Runtime root before user execution begins. Ordinary application admission is
+-- always transactional through admit_op.
+function Store:_bootstrap_admit(parent, child)
+  parent, child = node_of(parent), node_of(child)
+  self:attach_node(parent)
+  self:attach_node(child)
+  local parent_state, child_state = parent._lifetime_location.value, child._lifetime_location.value
+  if parent_state.phase ~= 'live' or parent_state.sealed then
+    error('Runtime root cannot admit a bootstrap Lifetime', 2)
+  end
+  if child_state.phase ~= 'dormant' then
+    if child_state.custodian == parent then return child end
+    error('bootstrap Lifetime is not dormant', 2)
+  end
+  prepend_child(parent_state, child)
+  child_state.phase = 'live'
+  child_state.custodian = parent
+  child:_bind_runtime_committed(self.runtime)
+  if child._on_admitted then child:_on_admitted() end
+  if child._activate_committed then child:_activate_committed(self.runtime) end
+  return child
+end
+
+local function admit_one_op(store, custodian, node)
+  store:attach_node(custodian)
+  store:attach_node(node)
+  return machine_op(store, custodian, AdmissionChange, { kind = 'prepare', child = node })
+    :and_then(machine_once(store, node, AdmissionChange, { kind = 'item', node = node, custodian = custodian }))
+    :and_then(Op.emit(admission_effect(store, node)))
+    :map(function() return view_of(node) end)
+end
+
+local function admit_tree_op(store, custodian, node)
+  local children = node:_construction_children_snapshot()
+  local op = admit_one_op(store, custodian, node)
+  for i = #children, 1, -1 do
+    op = op:and_then(admit_tree_op(store, node, children[i]))
+  end
+  return op:map(function() return view_of(node) end)
+end
+
+function Store:admit_op(view, subject)
+  subject = node_of(subject)
+  if not subject then error('LifetimeStore:admit_op expects a Lifetime', 2) end
+  local store, custodian = self, custodian_of(view)
+  return Op.guard(function() return admit_tree_op(store, custodian, subject) end)
 end
 
 function Store:move_op(view, item, target_view)
   item = node_of(item)
-  local from_boundary, to_boundary = boundary_of(view), boundary_of(target_view)
-  self:attach_node(from_boundary); self:attach_node(to_boundary); self:attach_node(item)
-  if from_boundary == to_boundary then
-    return machine_op(self, item, NodeQuery, { kind = 'root', boundary = from_boundary })
-      :and_then(Op.guard(function(root_rec)
-        local members = copy_list(root_rec._members or { item })
-        local operations = {}
-        for i = 1, #members do operations[i] = machine_op(self, members[i], NodeQuery, { kind = 'live_member', boundary = from_boundary }) end
-        return Op.each(operations):map(function() return view_of(item) end)
-      end))
+  local from_custodian, to_custodian = custodian_of(view), custodian_of(target_view)
+  self:attach_node(from_custodian)
+  self:attach_node(to_custodian)
+  self:attach_node(item)
+  if from_custodian == to_custodian then
+    return machine_op(self, item, NodeQuery, { kind = 'owned_by', custodian = from_custodian, item = item })
+      :map(function() return view_of(item) end)
   end
-  return machine_op(self, item, NodeChange, { kind = 'move_root', item = item, from = from_boundary, to = to_boundary })
-    :and_then(Op.guard(function(members)
-      local operations = {
-        machine_op(self, from_boundary, NodeChange, { kind = 'remove_root', root = item, count = #members }),
-        machine_op(self, to_boundary, NodeChange, { kind = 'add_root', root = item, count = #members }),
-      }
-      for i = 2, #members do
-        operations[#operations + 1] = machine_op(self, members[i], NodeChange, { kind = 'move_member', from = from_boundary, to = to_boundary })
-      end
-      return Op.each(operations):map(function() return view_of(item) end)
-    end))
+  return machine_op(self, item, NodeChange, { kind = 'move_custody', item = item, from = from_custodian, to = to_custodian })
+    :and_then(Op.each({
+      machine_op(self, from_custodian, NodeChange, { kind = 'remove_child', child = item, for_move = true }),
+      machine_op(self, to_custodian, NodeChange, { kind = 'add_child', child = item }),
+    }))
+    :map(function() return view_of(item) end)
 end
 
-function Store:_acquire_close_token_op(view, item, purpose)
-  item = node_of(item)
-  local boundary = boundary_of(view)
-  return machine_op(self, item, NodeChange, { kind = 'acquire_root',
-    store = self, item = item, boundary = boundary, purpose = purpose,
-  }):and_then(Op.guard(function(token, root_before)
-    local members = token.members
-    local operations = { machine_op(self, boundary, NodeChange, { kind = 'touch_boundary' }) }
-    for i = 2, #members do
-      operations[#operations + 1] = machine_op(self, members[i], NodeChange, { kind = 'acquire_member',
-        boundary = boundary, token = token, purpose = purpose,
-      })
-    end
-    return Op.each(operations):map(function(rows)
-      local records = {}
-      local root_row = copy_record(root_before); root_row.node, root_row.item = item, view_of(item); records[1] = root_row
-      for i = 2, #members do
-        local rec = copy_record(row1(rows, i))
-        rec.node, rec.item = members[i], view_of(members[i])
-        records[i] = rec
+local function claim_tree_op(store, custodian, child, authority, reason)
+  return machine_op(store, child, NodeChange, {
+    kind = 'acquire_member', item = child, custodian = custodian,
+    authority = authority, reason = reason,
+  }):and_then(Op.guard(function(snapshot)
+    return store:children_op(child):and_then(Op.guard(function(children)
+      local branches = {}
+      for i = 1, #children do
+        branches[i] = claim_tree_op(store, child, node_of(children[i]), authority, reason)
       end
-      token.records = records
-      return token
+      local descendants = #branches > 0 and Op.each(branches) or Op.always({})
+      return descendants:map(function(rows)
+        local claimed = {}
+        if #branches > 0 then
+          for i = 1, #branches do claimed[i] = rows[i][1] end
+        end
+        snapshot.children = claimed
+        return snapshot
+      end)
+    end))
+  end))
+end
+
+local function claim_children_op(store, custodian, authority, reason)
+  return store:children_op(custodian):and_then(Op.guard(function(children)
+    local branches = {}
+    for i = 1, #children do
+      branches[i] = claim_tree_op(store, custodian, node_of(children[i]), authority, reason)
+    end
+    if #branches == 0 then return Op.always({}) end
+    return Op.each(branches):map(function(rows)
+      local trees = {}
+      for i = 1, #branches do trees[i] = rows[i][1] end
+      return trees
     end)
   end))
 end
 
-local function containment_op(store, token)
-  local operations = {}
-  for i = 1, #(token.members or {}) do
-    operations[i] = machine_op(store, token.members[i], NodeQuery, {
-      kind = 'token_containment', boundary = token.boundary, token = token,
-    })
-  end
-  return Op.each(operations):map(function(rows)
-    local blockers = {}
-    for i = 1, #(token.records or {}) do
-      local count, err = rows[i][1], rows[i][2]
-      if (count or 0) > 0 then
-        local node = token.records[i].node
-        blockers[#blockers + 1] = { node = node, item = view_of(node), count = count, error = err }
-      end
-    end
-    return blockers
-  end)
+local function walk_claim_tree(entry, fn)
+  fn(entry)
+  for i = 1, #(entry.children or {}) do walk_claim_tree(entry.children[i], fn) end
 end
 
-local function progress_map(details)
-  local out = {}
-  for i = 1, #(details.progress or {}) do
-    local row = details.progress[i]; out[row.node or node_of(row.item)] = row
+local function claim_entries(claim)
+  local entries = {}
+  local trees = claim.mode == 'subtree' and { claim.tree } or (claim.trees or {})
+  for i = 1, #trees do
+    walk_claim_tree(trees[i], function(entry) entries[#entries + 1] = entry end)
   end
-  return out
+  return entries
 end
 
-function Store:_resolve_close_token_op(token, kind, details)
-  details = details or {}
-  if not is_close_token(token) or not token.boundary or not token.root then return Op.never() end
-  local boundary, members = token.boundary, token.members or {}
-  return containment_op(self, token):and_then(Op.guard(function(blockers)
-    if kind == 'discharge' then
-      if #blockers > 0 then return Op.always(false, blockers) end
-      local operations = { machine_op(self, boundary, NodeChange, { kind = 'remove_root', root = token.root, count = #members }) }
-      for i = 1, #members do
-        operations[#operations + 1] = machine_op(self, members[i], NodeChange, { kind = 'discharge_member',
-          boundary = boundary, token = token,
-        })
-      end
-      return Op.each(operations)
-        :and_then(Op.emit(commit_effect(self, 'retired', members, token.reason)))
-        :map(function() return true, view_of(token.root) end)
-    elseif kind == 'resume' then
-      local operations = { machine_op(self, boundary, NodeChange, { kind = 'touch_boundary' }) }
-      for i = 1, #members do
-        operations[#operations + 1] = machine_op(self, members[i], NodeChange, { kind = 'resume_member', boundary = boundary, token = token })
-      end
-      return Op.each(operations):map(function() return view_of(token.root) end)
-    elseif kind == 'fail' then
-      local retained = {}; for i = 1, #blockers do retained[blockers[i].node] = true end
-      local by_item = progress_map(details)
-      local first_error = details.error or (details.failures and details.failures[1] and details.failures[1].error)
-      local operations = { machine_op(self, boundary, NodeChange, { kind = 'touch_boundary' }) }
-      for i = 1, #members do
-        local node, progress = members[i], by_item[members[i]]
-        operations[#operations + 1] = machine_op(self, node, NodeChange, { kind = 'fail_member',
-          boundary = boundary, token = token, progress = progress, first_error = first_error,
-          retained = retained[node] == true,
-        })
-      end
-      return Op.each(operations):map(function() return view_of(token.root) end)
+local function close_claim(mode, custodian, subject, authority, tree_or_trees, purpose, reason)
+  local claim = {
+    _fibers_close_claim = true,
+    _fibers_value = true,
+    mode = mode,
+    authority = authority,
+    custodian = custodian,
+    subject = subject,
+    purpose = purpose,
+    reason = reason,
+  }
+  if mode == 'subtree' then claim.tree = tree_or_trees else claim.trees = tree_or_trees end
+  local member_set = {}
+  local entries = claim_entries(claim)
+  for i = 1, #entries do member_set[entries[i].node] = true end
+  claim.member_set = member_set
+  return claim
+end
+
+local function find_existing_claim_op(store, custodian)
+  return store:children_op(custodian):and_then(Op.guard(function(children)
+    local function scan(i)
+      if i > #children then return Op.always(nil) end
+      local child = node_of(children[i])
+      return machine_op(store, child, NodeQuery, { kind = 'close_claim' }):and_then(Op.guard(function(authority, fault)
+        -- Only a retained failed claim delegates recovery authority. An active
+        -- process is ordinary concurrent progress: an overlapping claim waits
+        -- transactionally for it to discharge, then retries against fresh custody.
+        if authority ~= nil and fault ~= nil then
+          return Op.always({ node = child, authority = authority, fault = fault })
+        end
+        return find_existing_claim_op(store, child):and_then(Op.guard(function(found)
+          return found and Op.always(found) or scan(i + 1)
+        end))
+      end))
     end
-    error('unknown internal close-token resolution ' .. tostring(kind), 0)
+    return scan(1)
   end))
 end
 
-local function phase_op(store, value, phase, reason, err, ready, result, require_empty)
-  local node = node_of(value)
-  return machine_op(store, node, NodeChange, { kind = 'phase',
-    phase = phase, reason = reason, err = err, ready = ready, result = result,
-    require_empty = require_empty, require_open = phase ~= 'closed',
-  }):and_then(Op.guard(function(first, recorded_reason, retired)
-    if retired then
-      return Op.emit(commit_effect(store, 'retired', { node }, recorded_reason))
-        :map(function() return first, recorded_reason end)
+function Store:_acquire_close_claim_op(view, item, purpose)
+  item = node_of(item)
+  local custodian, store = custodian_of(view), self
+  local authority = { _fibers_close_authority = true }
+  local reason = type(purpose) == 'table' and purpose.reason or nil
+  local retired = { _fibers_value = true, _fibers_already_retired = true, item = view_of(item) }
+
+  return machine_op(self, item, NodeChange, {
+    kind = 'claim_subject', item = item, custodian = custodian,
+    authority = authority, reason = reason, already_retired = retired,
+    delegate_existing = type(purpose) == 'table' and purpose.delegate_existing == true,
+  }):and_then(Op.guard(function(snapshot)
+    if type(snapshot) == 'table' and (snapshot._fibers_already_retired or snapshot._fibers_close_delegated) then
+      return Op.always(snapshot)
     end
-    return Op.always(first, recorded_reason)
-  end)):or_else(Op.always(false, reason))
+    return claim_children_op(store, item, authority, reason):map(function(children)
+      snapshot.children = children
+      return close_claim('subtree', custodian, item, authority, snapshot, purpose, reason)
+    end)
+  end))
+end
+
+-- Claim every current descendant of a Scope without claiming or retiring the
+-- Scope itself. Any overlapping in-flight/failed descendant claim delegates the
+-- structural responsibility to the existing process rather than competing.
+function Store:_acquire_descendants_claim_op(view, purpose)
+  local custodian, store = custodian_of(view), self
+  local authority = { _fibers_close_authority = true }
+  local reason = type(purpose) == 'table' and purpose.reason or nil
+  local retired = { _fibers_value = true, _fibers_already_retired = true, item = view_of(custodian) }
+
+  return find_existing_claim_op(store, custodian):and_then(Op.guard(function(retained)
+    if retained then
+      return Op.always({ _fibers_value = true, _fibers_close_delegated = true, retained = retained })
+    end
+    return machine_op(self, custodian, NodeChange, {
+      kind = 'claim_descendants', authority = authority,
+      reason = reason, already_retired = retired,
+    })
+  end)):and_then(Op.guard(function(acquired)
+    if type(acquired) == 'table' and (acquired._fibers_close_delegated or acquired._fibers_already_retired) then
+      return Op.always(acquired)
+    end
+    return claim_children_op(store, custodian, authority, reason):map(function(trees)
+      return close_claim('descendants', custodian, custodian, authority, trees, purpose, reason)
+    end)
+  end))
+end
+
+local function containment_op(store, claim)
+  local entries = claim_entries(claim)
+  local operations = {}
+  for i = 1, #entries do
+    local entry = entries[i]
+    local containment = machine_op(store, entry.node, NodeQuery, {
+      kind = 'claim_containment', custodian = entry.custodian,
+      authority = claim.authority, claim = claim,
+    })
+    local scope_role = entry.node:_scope_role(false)
+    local scope_result = scope_role and scope_role.result
+    if scope_result then
+      containment = containment:and_then(Op.guard(function(count, err)
+        return scope_result:success_op():map(function(settlement)
+          return count, err, settlement
+        end)
+      end))
+    end
+    operations[i] = containment
+  end
+  if #operations == 0 then return Op.always({}, {}) end
+  return Op.each(operations):map(function(rows)
+    local blockers, settlements = {}, {}
+    for i = 1, #entries do
+      local count, err, settlement = rows[i][1], rows[i][2], rows[i][3]
+      local node = entries[i].node
+      if settlement ~= nil then settlements[node] = settlement end
+      if (count or 0) > 0 then
+        blockers[#blockers + 1] = { node = node, item = view_of(node), count = count, error = err }
+      end
+    end
+    return blockers, settlements
+  end)
+end
+
+local function children_by_custodian(claim)
+  local children = {}
+  local entries = claim_entries(claim)
+  for i = 1, #entries do
+    local entry = entries[i]
+    if claim.mode == 'descendants' or entry.node ~= claim.subject then
+      local list = children[entry.custodian] or {}
+      list[#list + 1] = entry.node
+      children[entry.custodian] = list
+    end
+  end
+  return children, entries
+end
+
+local function claim_host(claim)
+  return claim.mode == 'descendants' and claim.custodian or claim.subject
+end
+
+function Store:_restart_close_claim_op(claim, failure)
+  if not is_close_claim(claim) then return Op.never() end
+  local entries = claim_entries(claim)
+  local operations = {
+    machine_op(self, claim_host(claim), NodeChange, {
+      kind = 'restart_claim', authority = claim.authority, failure = failure,
+    }),
+  }
+  -- Failure details attached to individual Lifetimes are diagnostic mirrors of
+  -- the retained claim. Clear them in the same restart transaction.
+  for i = 1, #entries do
+    local entry = entries[i]
+    if entry.node ~= claim_host(claim) then
+      operations[#operations + 1] = machine_op(self, entry.node, NodeChange, {
+        kind = 'restart_member', custodian = entry.custodian, authority = claim.authority,
+      })
+    end
+  end
+  return Op.each(operations):map(function() return claim end)
+end
+
+function Store:_fail_close_claim_op(claim, failure)
+  if not is_close_claim(claim) then return Op.never() end
+  local entries = claim_entries(claim)
+  local progress = {}
+  local process = type(failure) == 'table' and failure._process
+  for i = 1, #((process and process._progress) or {}) do
+    local row = process._progress[i]
+    progress[row.node] = row
+  end
+  local operations = {
+    machine_op(self, claim_host(claim), NodeChange, {
+      kind = 'fail_claim', authority = claim.authority, failure = failure,
+    }),
+  }
+  for i = 1, #entries do
+    local entry = entries[i]
+    if entry.node ~= claim_host(claim) then
+      operations[#operations + 1] = machine_op(self, entry.node, NodeChange, {
+        kind = 'fail_member', custodian = entry.custodian, authority = claim.authority,
+        reason = claim.reason, progress = progress[entry.node], first_error = failure and failure.error,
+      })
+    end
+  end
+  return Op.each(operations):map(function() return claim end)
+end
+
+function Store:_discharge_close_claim_op(claim)
+  if not is_close_claim(claim) or not claim.custodian or not claim.subject then return Op.never() end
+  local custodian = claim.custodian
+  return containment_op(self, claim):and_then(Op.guard(function(blockers, settlements)
+    if #blockers > 0 then return Op.always(false, blockers) end
+    local children, entries = children_by_custodian(claim)
+    local top_children = children[claim.subject] or {}
+    local operations
+    if claim.mode == 'descendants' then
+      operations = { machine_op(self, custodian, NodeChange, {
+        kind = 'release_descendants_claim', authority = claim.authority, children = top_children,
+      }) }
+    else
+      operations = { machine_op(self, custodian, NodeChange, { kind = 'remove_child', child = claim.subject }) }
+    end
+    for i = 1, #entries do
+      local entry = entries[i]
+      operations[#operations + 1] = machine_op(self, entry.node, NodeChange, {
+        kind = 'discharge_member', custodian = entry.custodian,
+        authority = claim.authority, reason = claim.reason, children = children[entry.node],
+      })
+    end
+    local outcome_ops = {}
+    for i = 1, #entries do
+      local node = entries[i].node
+      local settlement = settlements and settlements[node] or nil
+      if settlement ~= nil and node._outcome and node._outcome:_is_pending() then
+        outcome_ops[#outcome_ops + 1] = node:_publish_outcome_op(settlement)
+      end
+    end
+    local publish = #outcome_ops > 0 and Op.each(outcome_ops) or Op.always(true)
+    return Op.each(operations)
+      :and_then(publish)
+      :map(function() return true, view_of(claim.subject) end)
+  end))
+end
+
+
+function Store:request_cancel_op(value, reason)
+  return machine_op(self, node_of(value), NodeChange, { kind = 'request_cancel', reason = reason })
+    :or_else(Op.always(false, reason))
+end
+
+function Store:cancel_requested_op(value)
+  return machine_op(self, node_of(value), NodeQuery, { kind = 'cancel_requested' })
+end
+
+function Store:close_requested_op(value)
+  return machine_op(self, node_of(value), NodeQuery, { kind = 'close_requested' })
+end
+
+function Store:closed_op(value)
+  return machine_op(self, node_of(value), NodeQuery, { kind = 'closed' })
+end
+
+function Store:_close_requested(value)
+  local node = node_of(value)
+  if not node then return false end
+  self:attach_node(node)
+  local state = node._lifetime_location.value
+  return state.close_request ~= nil or state.phase == 'retired', close_reason(state)
 end
 
 function Store:request_close_op(value, reason)
-  return phase_op(self, value, 'close_requested', reason, nil,
-    function(bs) return bs.closure_phase ~= 'closed' and bs.closure_phase ~= 'closure_failed' end,
-    function(before) return before ~= 'close_requested' and before ~= 'closing' end)
+  return machine_op(self, node_of(value), NodeChange, { kind = 'request_close', reason = reason })
+    :or_else(Op.always(false, reason))
 end
 
-function Store:mark_closing_op(value, reason)
-  return phase_op(self, value, 'closing', reason)
-end
-
-function Store:mark_closure_failed_op(value, err, reason)
-  return phase_op(self, value, 'closure_failed', reason, err)
-end
-
-function Store:mark_closed_op(value, reason)
-  return phase_op(self, value, 'closed', reason, nil,
-    function(bs) return bs.closure_phase ~= 'closed' end, nil, true)
+function Store:record_closure_fault_op(value, err, reason)
+  return machine_op(self, node_of(value), NodeChange, { kind = 'record_fault', reason = reason, err = err })
+    :or_else(Op.always(false, reason))
 end
 
 function Store:seal_op(view)
-  return machine_op(self, boundary_of(view), NodeChange, { kind = 'seal' })
-end
-
-function Store:changed_op(view, version)
-  local node = boundary_of(view)
-  self:attach_node(node)
-  local location = node._lifetime_location
-  local spec = rawget(location, '_lifetime_changed_spec')
-  if not spec then
-    spec = Facility.version_wait(location, node)
-    rawset(location, '_lifetime_changed_spec', spec)
-  end
-  return Facility.bind(spec, version):map(function(_, current_version)
-    return current_version
-  end)
+  return machine_op(self, custodian_of(view), NodeChange, { kind = 'seal' })
 end
 
 function Store:has_custody_op(view, item)
   local node = node_of(item)
-  return machine_op(self, node, NodeQuery, { kind = 'has_custody', boundary = boundary_of(view), item = node })
+  return machine_op(self, node, NodeQuery, { kind = 'has_custody', custodian = custodian_of(view), item = node })
 end
 
-function Store:record_op(view, item)
+function Store:custody_snapshot_op(view, item)
   local node = node_of(item)
-  return machine_op(self, node, NodeQuery, { kind = 'record', boundary = boundary_of(view), item = node })
+  return machine_op(self, node, NodeQuery, { kind = 'custody_snapshot', custodian = custodian_of(view), item = node })
 end
 
-function Store:roots_op(view)
-  return machine_op(self, boundary_of(view), NodeQuery, { kind = 'roots' })
+function Store:children_op(view)
+  return machine_op(self, custodian_of(view), NodeQuery, { kind = 'children' })
 end
 
-function Store:status_op(view)
-  local node = boundary_of(view)
-  self:attach_node(node)
-  local location = node._lifetime_location
-  local op = rawget(location, '_lifetime_status_op')
-  if not op then
-    op = Facility.op(Facility.read(location, STATUS_RESULT, node))
-    rawset(location, '_lifetime_status_op', op)
-  end
-  return op
+function Store:sealed_op(view)
+  return machine_op(self, custodian_of(view), NodeQuery, { kind = 'sealed' })
 end
 
 function Store:active_op(item)
@@ -671,39 +826,46 @@ end
 function Store:custody_can_op(view, item, right, opts)
   local node = node_of(item)
   return machine_op(self, node, NodeQuery, {
-    kind = 'authorise', boundary = boundary_of(view), item = node, right = right,
+    kind = 'authorise', custodian = custodian_of(view), item = node, right = right,
     allow_closing = opts and opts.allow_closing == true,
   })
 end
 
--- Direct internal observation is restricted to points where no transaction is
--- in flight (construction/outcome accounting and tests).
-function Store:_node_parts(value)
+
+function Store:_close_claim(value)
+  local node = node_of(value)
+  if not node then return nil end
+  self:attach_node(node)
+  return node._lifetime_location.value.close_claim
+end
+
+function Store:_custodian(value)
   local node = node_of(value)
   if not node then return nil end
   self:attach_node(node)
   local state = node._lifetime_location.value
-  local rec, boundary = state.record, state.boundary
-  if rec == RECORD_ABSENT then rec = nil end
-  if boundary == BOUNDARY_ABSENT then boundary = nil end
-  return node, rec, boundary
+  return is_owned(state) and state.custodian or nil
 end
 
-function Store:_custodian(value)
-  local _, rec = self:_node_parts(value)
-  return rec and rec.custodian or nil
+function Store:_phase(value)
+  local node = node_of(value)
+  if not node then return 'dormant' end
+  self:attach_node(node)
+  return node._lifetime_location.value.phase
 end
 
-function Store:_closure_phase(value)
-  local node, _, boundary = self:_node_parts(value)
-  return boundary and boundary.closure_phase or node and node._terminal_phase or 'dormant'
+function Store:_lifecycle(value)
+  local node = node_of(value)
+  if not node then return 'dormant', nil, nil end
+  self:attach_node(node)
+  local state = node._lifetime_location.value
+  return state.phase, close_reason(state), state.closure_fault
 end
 
-function Store:_roots(view)
-  local boundary = boundary_of(view)
-  local _, _, bs = self:_node_parts(boundary)
-  bs = boundary_state(bs)
-  return copy_list(bs.roots)
+function Store:_children(view)
+  local node = custodian_of(view)
+  self:attach_node(node)
+  return copy_list(node._lifetime_location.value.children)
 end
 
 return Store

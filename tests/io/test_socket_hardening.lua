@@ -68,12 +68,12 @@ do
       accepted = listener:accept()
       assert_eq(Lifetimes.state(accepted).custodian, handler:lifetime(), 'accepted Stream should move into handler scope')
       assert_truthy(
-        Lifetimes.state(accepted:reader()).custodian == handler:lifetime(),
-        'reader child should move with Stream subtree'
+        Lifetimes.state(accepted:reader()).custodian == Lifetime.of(accepted),
+        'reader child should remain owned by the moved Stream Lifetime'
       )
       assert_truthy(
-        Lifetimes.state(accepted:writer()).custodian == handler:lifetime(),
-        'writer child should move with Stream subtree'
+        Lifetimes.state(accepted:writer()).custodian == Lifetime.of(accepted),
+        'writer child should remain owned by the moved Stream Lifetime'
       )
     end)
 
@@ -118,10 +118,10 @@ do
     fibers.scope({ label = 'listener-origin' }, function(origin)
       listener = socket.listen_inet('127.0.0.1', 0, { label = 'moved-listener' })
       assert_eq(Lifetime.of(listener), listener:lifetime())
-      assert_eq(listener:lifetime()._has_body, false, 'Listener Lifetime should not carry a ceremonial driver body')
-      local listener_roots = Lifetimes.roots(origin)
-      assert_eq(#listener_roots, 1, "Listener should be the one root in its caller\'s custody")
-      assert_eq(listener_roots[1], listener)
+      assert_eq(listener:lifetime():_task(), nil, 'Listener Lifetime should not carry a ceremonial Task view')
+      local listener_children = Lifetimes.children(origin)
+      assert_eq(#listener_children, 1, "Listener should be the one root in its caller\'s custody")
+      assert_eq(listener_children[1], listener)
       fibers.perform(origin:move_op(listener, root))
       assert_eq(Lifetimes.state(listener).custodian, root:lifetime())
       assert_eq(Lifetimes.state(listener).custodian, root:lifetime(), 'Listener move should reparent one Lifetime root')
@@ -132,10 +132,10 @@ do
     fibers.scope({ label = 'dial-origin' }, function(origin)
       dial = socket.dial(socket.inet_address(address.host, address.port), { label = 'moved-dial' })
       assert_eq(Lifetime.of(dial), dial:lifetime())
-      assert_truthy(dial:lifetime()._has_body, 'Dial Lifetime should carry its running body')
-      local dial_roots = Lifetimes.roots(origin)
-      assert_eq(#dial_roots, 1, "Dial should be the one root in its caller\'s custody")
-      assert_eq(dial_roots[1], dial)
+      assert_truthy(dial:lifetime():_task() ~= nil, 'Dial Lifetime should expose its running Task view')
+      local dial_children = Lifetimes.children(origin)
+      assert_eq(#dial_children, 1, "Dial should be the one root in its caller\'s custody")
+      assert_eq(dial_children[1], dial)
       fibers.perform(origin:move_op(dial, root))
       assert_eq(Lifetimes.state(dial).custodian, root:lifetime())
       assert_eq(Lifetimes.state(dial).custodian, root:lifetime(), 'Dial move should reparent one Lifetime root')

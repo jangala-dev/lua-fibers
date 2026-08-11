@@ -1,18 +1,20 @@
--- Closure: how a Lifetime resolves and propagates consequences.
+-- Closure: local Lifetime shutdown protocols and Scope supervision policy.
 --
--- Closure has two orthogonal parts which form one contract:
+-- The two are deliberately separate:
 --
---   * local closure: request, finish and optional force operations;
---   * propagation: pure decisions for body, cancellation and child outcomes.
+--   * protocol: how one Lifetime discharges its own continuing consequence;
+--   * policy: how a Scope reacts to body, cancellation and child outcomes.
 --
--- The Runtime applies the contract. All externally visible changes remain Ops.
+-- `running`, `protocol`, `none` and `request_then_wait` construct local
+-- protocols. `nursery` and `supervisor` construct Scope policies. A Lifetime
+-- never stores a hybrid value containing both.
 
-local Engine = require('fibers.internal.lifetime.closure')
+local Driver = require('fibers.internal.lifetime.closure')
 local Contract = require('fibers.internal.contract')
 
 local Closure = {}
 
-local propagation_fields = {
+local POLICY_FIELDS = {
   'on_child_outcome',
   'on_cancel_requested',
   'on_body_result',
@@ -21,37 +23,36 @@ local propagation_fields = {
   'child_failure',
 }
 
-local propagation_callbacks = {
+local POLICY_CALLBACKS = {
   on_child_outcome = true,
   on_cancel_requested = true,
   on_body_result = true,
 }
 
-local propagation_allowed = {}
-for i = 1, #propagation_fields do propagation_allowed[propagation_fields[i]] = true end
-
-local propagation_booleans = {
+local POLICY_BOOLEANS = {
   permit_admission = true,
   permit_outward_move = true,
 }
 
-local function copy_propagation(target, source, label, strict)
+local POLICY_ALLOWED = { name = true }
+for i = 1, #POLICY_FIELDS do POLICY_ALLOWED[POLICY_FIELDS[i]] = true end
+
+local function copy_policy(target, source, label, strict)
+  target = target or {}
   if source == nil then return target end
   if type(source) ~= 'table' then
-    error((label or 'Closure propagation') .. ' must be a table', 3)
+    error((label or 'Closure policy') .. ' must be a table', 3)
   end
-  if strict then
-    Contract.options(source, propagation_allowed, label or 'Closure propagation', 3)
-  end
-  for i = 1, #propagation_fields do
-    local field = propagation_fields[i]
+  if strict then Contract.options(source, POLICY_ALLOWED, label or 'Closure policy', 3) end
+  for i = 1, #POLICY_FIELDS do
+    local field = POLICY_FIELDS[i]
     local value = source[field]
     if value ~= nil then
-      if propagation_callbacks[field] and type(value) ~= 'function' then
-        error((label or 'Closure propagation') .. ' ' .. field .. ' must be a function', 3)
+      if POLICY_CALLBACKS[field] and type(value) ~= 'function' then
+        error((label or 'Closure policy') .. ' ' .. field .. ' must be a function', 3)
       end
-      if propagation_booleans[field] and type(value) ~= 'boolean' then
-        error((label or 'Closure propagation') .. ' ' .. field .. ' must be a boolean', 3)
+      if POLICY_BOOLEANS[field] and type(value) ~= 'boolean' then
+        error((label or 'Closure policy') .. ' ' .. field .. ' must be a boolean', 3)
       end
       target[field] = value
     end
@@ -59,80 +60,74 @@ local function copy_propagation(target, source, label, strict)
   return target
 end
 
--- Return a propagation-only snapshot. Child Lifetimes inherit this projection,
--- never their parent's local request/finish/force operations.
-function Closure.propagation(contract)
-  return copy_propagation({}, contract, 'Closure propagation')
+function Closure.policy(value)
+  return copy_policy({}, value, 'Closure policy', true)
 end
 
--- Local closure constructors and failure/recovery operations are implemented by
--- the private engine but form part of this one public concept.
+-- Internal policy inheritance helper. Local shutdown is never inherited.
+function Closure._merge_policy(base, override)
+  local out = copy_policy({}, base, 'base Closure policy')
+  return copy_policy(out, override, 'Closure policy override')
+end
+
+-- Local protocol constructors and structural closure processes are implemented
+-- by the private driver. `start_close_op` remains transactional; completion is
+-- observed later through the returned CloseProcess.
 for _, name in ipairs({
   'protocol',
   'none',
   'request_then_wait',
   'require_ok',
-  'close_op',
+  'start_close_op',
+  'Process',
+  'is_process',
   'Failure',
   'is_failure',
 }) do
-  Closure[name] = Engine[name]
+  Closure[name] = Driver[name]
 end
 
--- A running closure waits for the body during normal completion and requests
--- cancellation during abnormal closure. Propagation decisions may be supplied
--- in the same table.
-function Closure.running(opts)
-  if opts == nil then return Engine.running() end
-  local allowed = { name = true }
-  for key in pairs(propagation_allowed) do allowed[key] = true end
-  opts = Contract.options(opts, allowed, 'Closure.running options', 2)
-  if opts.name ~= nil then Contract.non_empty_string(opts.name, 'Closure.running name', 2) end
-  local contract = copy_propagation(Engine.running(), opts, 'Closure.running options', false)
-  if opts.name ~= nil then contract.name = opts.name end
-  return contract
+-- A running local consequence is interrupted on abnormal closure and waited
+-- for during finish. Supervision policy belongs to Scope, not this protocol.
+function Closure.running(...)
+  if select('#', ...) ~= 0 then
+    error('Closure.running takes no policy; pass policy to Scope/spawn instead', 2)
+  end
+  return Driver.running()
 end
 
--- Compose domain-local shutdown with boundary propagation without mutating
--- either input. The local request/finish/force operations remain authoritative;
--- the second argument contributes only pure propagation and admission rules.
-function Closure.combine(local_contract, propagation)
-  local local_closure = Engine.protocol(local_contract, 'local closure')
-  return copy_propagation(local_closure, propagation, 'Closure.combine propagation', true)
-end
+local PolicyBase = {}
+PolicyBase.__index = PolicyBase
 
-local Boundary = {}
-
-function Boundary:on_cancel_requested(_parent, _state, reason)
+function PolicyBase:on_cancel_requested(_parent, _state, reason)
   return { seal = true, cancel_children = true, reason = reason }
 end
 
-function Boundary:on_body_result(_parent, _state, ok, primary)
+function PolicyBase:on_body_result(_parent, _state, ok, primary)
   return ok
     and { seal = true, cancel_children = false }
     or { seal = true, cancel_children = true, reason = primary }
 end
 
-local function boundary(kind, opts, default_name)
+local function policy_base(kind, opts)
   local allowed = { name = true, permit_outward_move = true, permit_admission = true }
   if kind == 'supervisor' then allowed.child_failure = true end
   opts = Contract.options(opts, allowed, 'Closure.' .. kind .. ' options', 3)
   if opts.name ~= nil then Contract.non_empty_string(opts.name, 'Closure.' .. kind .. ' name', 3) end
   Contract.optional_boolean(opts.permit_outward_move, 'Closure.' .. kind .. ' permit_outward_move', 3)
   Contract.optional_boolean(opts.permit_admission, 'Closure.' .. kind .. ' permit_admission', 3)
-  local contract = Closure.running()
-  contract.name = opts.name or default_name
-  contract.permit_outward_move = opts.permit_outward_move ~= false
-  contract.permit_admission = opts.permit_admission ~= false
-  return contract, opts
+  return setmetatable({
+    permit_outward_move = opts.permit_outward_move ~= false,
+    permit_admission = opts.permit_admission ~= false,
+  }, PolicyBase), opts
 end
 
-local Nursery = setmetatable({}, { __index = Boundary })
+local Nursery = setmetatable({}, { __index = PolicyBase })
 Nursery.__index = Nursery
 
 function Closure.nursery(opts)
-  local contract = boundary('nursery', opts, 'nursery')
-  return setmetatable(contract, Nursery)
+  local policy = policy_base('nursery', opts)
+  return setmetatable(policy, Nursery)
 end
 
 function Nursery:on_child_outcome(_parent, _state, _child, exit)
@@ -142,17 +137,17 @@ function Nursery:on_child_outcome(_parent, _state, _child, exit)
   return {}
 end
 
-local Supervisor = setmetatable({}, { __index = Boundary })
+local Supervisor = setmetatable({}, { __index = PolicyBase })
 Supervisor.__index = Supervisor
 
 function Closure.supervisor(opts)
-  local contract, options = boundary('supervisor', opts, 'supervisor')
+  local policy, options = policy_base('supervisor', opts)
   local mode = options.child_failure or 'fail_at_exit'
   if mode ~= 'fail_at_exit' and mode ~= 'collect' and mode ~= 'ignore' then
     error('supervisor child_failure must be fail_at_exit, collect, or ignore', 2)
   end
-  contract.child_failure = mode
-  return setmetatable(contract, Supervisor)
+  policy.child_failure = mode
+  return setmetatable(policy, Supervisor)
 end
 
 function Supervisor:on_child_outcome(_parent, _state, _child, exit)

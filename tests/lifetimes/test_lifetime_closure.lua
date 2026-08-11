@@ -60,7 +60,7 @@ do
   }
   eq(#log, #expected)
   for i = 1, #expected do eq(log[i], expected[i], 'closure order at ' .. i) end
-  eq(Lifetimes.state(root).closure_phase, 'closed')
+  eq(Lifetimes.state(root).phase, 'retired')
 end
 
 -- A failed closure retains completed progress and an exclusive recovery
@@ -74,8 +74,8 @@ do
   eq(result.ok, false)
   eq(result.reason, 'closure_failed')
   local failure = result.closure_failure
-  truthy(Closure.is_failure(failure), 'failure must retain recovery authority')
-  eq(failure._token, nil, 'the internal close token must not be exposed')
+  truthy(Closure.Failure.is(failure), 'failure must retain recovery authority')
+  eq(failure._token, nil, 'the internal close claim must not be exposed')
   local inspection = failure:inspect()
   eq(inspection.kind, 'closure_failure')
   truthy(#inspection.progress > 0, 'closure inspection should retain progress')
@@ -87,24 +87,37 @@ do
   local pair_result = fibers.run(function() return fibers.perform(pair) end)
   eq(pair_result, 'fallback', 'two recoveries cannot share one transactional authority')
 
+  local Cell = require('fibers.resource.cell')
   local recovery = failure:force_op()
   local duplicate = failure:force_op()
-  fibers.run(function() fibers.perform(recovery) end)
+  fibers.run(function()
+    local marker = Cell.new('failed')
+    local process = fibers.perform(recovery:and_then(Op.guard(function(p)
+      return marker:write_op('recovering'):map(function() return p end)
+    end)))
+    eq(fibers.perform(marker:read_op()), 'recovering', 'recovery remains transactionally sequenceable')
+    local ok, closed = fibers.perform(process:result_op())
+    eq(ok, true)
+    truthy(closed, 'successful recovery process should publish its structural subject')
+  end)
   local duplicate_ok = pcall(function()
     fibers.run(function() fibers.perform(duplicate) end)
   end)
   eq(duplicate_ok, false, 'a committed recovery must consume the old capability')
-  eq(pcall(function() failure:retry_op() end), false, 'a completed recovery must not be reusable')
+  local stale_ok = pcall(function()
+    fibers.run(function() fibers.perform(failure:retry_op()) end)
+  end)
+  eq(stale_ok, false, 'a completed recovery must not be reusable')
   good_count = 0
   for i = 1, #log do if log[i] == 'finish good' then good_count = good_count + 1 end end
   eq(good_count, 1, 'completed sibling must not finish twice')
-  eq(Lifetimes.state(root).closure_phase, 'closed')
+  eq(Lifetimes.state(root).phase, 'retired')
 end
 
--- Complete containment is enforced by the store. A running child whose own
--- boundary retains a failed descendant remains under the parent in
--- closure_failed state. Recovering the descendant and then the parent close
--- token retires the complete subtree without losing custody in between.
+-- Closure failure remains attached to the Lifetime whose local protocol failed.
+-- Ancestors remain CLOSING while that responsibility is unresolved, but do not
+-- manufacture a second containment-recovery capability. Recover the actual
+-- failure, then close the ancestor normally once its child set is empty.
 do
   local log, bad_opts = {}, { fail = true }
   local task, child_scope, bad
@@ -121,37 +134,41 @@ do
   eq(result.ok, false)
   eq(result.reason, 'child_failed')
   local task_state = Lifetimes.state(task:lifetime())
-  eq(task_state.closure_phase, 'closure_failed')
+  eq(task_state.phase, 'closing')
+  truthy(task_state.closure_fault ~= nil, 'ancestor records the unresolved closure fault')
   truthy(task_state.custodian ~= nil, 'failed child Lifetime must retain parent custody')
-  eq(Lifetimes.state(bad).closure_phase, 'closure_failed')
-  eq(#child_scope:_store():_roots(child_scope), 1)
+  local bad_state = Lifetimes.state(bad)
+  eq(bad_state.phase, 'closing')
+  truthy(bad_state.closure_fault ~= nil, 'the failing Lifetime records its closure fault')
+  eq(#child_scope:_store():_children(child_scope), 1)
 
-  local nested_failure, parent_failure
+  local nested_failure
   for i = 1, #(result.closure_failures or {}) do
     local f = result.closure_failures[i]
     if f.item == Lifetime.of(bad) then nested_failure = f end
-    if f.item == task:lifetime() then parent_failure = f end
   end
-  truthy(nested_failure, 'nested closure failure must remain recoverable')
-  truthy(parent_failure, 'parent containment failure must remain recoverable')
-  local parent_inspection = parent_failure:inspect()
-  local blocker = parent_inspection.failures[1] and parent_inspection.failures[1].blocker
-  truthy(blocker and blocker.count > 0, 'containment failure should retain the unresolved descendant count')
+  truthy(nested_failure, 'the actual closure failure must remain recoverable')
+  eq(#(result.closure_failures or {}), 1, 'containment must not duplicate recovery authority')
 
+  fibers.run(function()
+    local process = nested_failure:force()
+    local ok = process:result()
+    eq(ok, true)
+  end)
+  eq(Lifetimes.state(bad).phase, 'retired')
+  eq(#child_scope:_store():_children(child_scope), 0)
+  eq(Lifetimes.state(task:lifetime()).phase, 'closing')
 
-  fibers.run(function() nested_failure:force() end)
-  eq(Lifetimes.state(bad).closure_phase, 'closed')
-  eq(#child_scope:_store():_roots(child_scope), 0)
-  eq(Lifetimes.state(task:lifetime()).closure_phase, 'closure_failed')
-
-  fibers.run(function() parent_failure:retry() end)
+  fibers.run(function()
+    result.scope:close(task, 'nested-recovered')
+  end)
   task_state = Lifetimes.state(task:lifetime())
-  eq(task_state.closure_phase, 'closed')
+  eq(task_state.phase, 'retired')
   eq(task_state.custodian, nil)
 end
 
 -- Facility callbacks receive a bounded Closure context, never the exclusive
--- close token used by the engine.
+-- close claim used by the engine.
 do
   local observed
   local value = { name = 'closure-context' }
@@ -168,7 +185,7 @@ do
     fibers.perform(scope:admit_op(value))
   end)
   truthy(observed and observed.reason ~= nil, 'Closure context should include the reason')
-  eq(observed._fibers_close_token, nil, 'Closure callbacks must not receive the close token')
+  eq(observed._fibers_close_claim, nil, 'Closure callbacks must not receive the close claim')
   eq(observed.phase, 'close')
 end
 

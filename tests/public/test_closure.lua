@@ -128,7 +128,7 @@ do
   }
   local r = fibers.try_run(function()
     return 'custom-ok'
-  end, { closure = FibersClosure.running(closure) })
+  end, { closure = closure })
   assert_truthy(r.ok, tostring(r.report or r.reason))
   assert_eq(r:unpack(), 'custom-ok')
   assert_truthy(entered, 'custom Closure should receive the Lifetime body result')
@@ -167,8 +167,62 @@ do
   assert(not pcall(Closure.request_then_wait, function() return Op.always(true) end, function()
     return Op.always(true)
   end, 'not-options'))
-  assert(not pcall(Closure.running, { on_body_result = true }))
+  assert(not pcall(Closure.running, {}))
   assert(not pcall(Closure.nursery, 'not-options'))
+end
+
+
+-- Structural closure starts transactionally and remains sequenceable. A losing
+-- start candidate neither acquires custody authority nor starts its local
+-- protocol; after commit the returned CloseProcess is observed in a fresh
+-- transaction.
+do
+  local Cell = require('fibers.resource.cell')
+  local log = {}
+  local value = { name = 'transactional-close-start' }
+  Lifetime.define(value, { closure = Closure.protocol({
+    name = 'transactional-close-start',
+    finish_op = function()
+      log[#log + 1] = 'finish'
+      return Op.always(true)
+    end,
+  }) })
+
+  fibers.run(function(scope)
+    fibers.perform(scope:admit_op(value))
+    local start = scope:start_close_op(value, 'test')
+    local fallback = fibers.perform(start:and_then(Op.never()):or_else(Op.always('fallback')))
+    assert_eq(fallback, 'fallback')
+    assert_eq(#log, 0, 'defeated start_close_op must not run closure')
+
+    local marker = Cell.new('open')
+    local process = fibers.perform(scope:start_close_op(value, 'test')
+      :and_then(Op.guard(function(p)
+        assert_truthy(Closure.Process.is(p), 'start_close_op returns a CloseProcess transactionally')
+        return marker:write_op('closing'):map(function() return p end)
+      end)))
+    assert_eq(fibers.perform(marker:read_op()), 'closing')
+    local closed_marker = Cell.new('pending')
+    local closed = fibers.perform(process:success_op():and_then(
+      closed_marker:write_op('closed'):map(function() return value end)
+    ))
+    assert_eq(closed, value)
+    assert_eq(fibers.perform(closed_marker:read_op()), 'closed')
+    local ok, result = fibers.perform(process:result_op())
+    assert_eq(ok, true)
+    assert_eq(result, value)
+    assert_eq(#log, 1)
+  end)
+end
+
+-- The old structural close_op boundary does not exist in v1: initiation and
+-- completion are intentionally separate operations.
+do
+  local Scope = require('fibers.scope')
+  assert_eq(Scope.close_op, nil)
+  assert_eq(Closure.close_op, nil)
+  assert_eq(Closure.is_process, nil)
+  assert_eq(Closure.is_failure, nil)
 end
 
 print('tests/test_closure.lua: ok')

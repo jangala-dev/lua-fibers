@@ -170,60 +170,11 @@ function Effect.interrupt(token, reason)
   return Effect.of(InterruptKind, { token = token, reason = reason })
 end
 
-local SpawnKind
-local function spawn_key(payload)
-  return payload.id or payload.owner or payload.fn
-end
-
-SpawnKind = EffectKind.new({
-  name = 'spawn',
-  key = spawn_key,
-  merge = function()
-    return Effect.reject({ kind = 'effect_conflict', message = 'duplicate spawn effect' })
-  end,
-  prepare = function(rt, payload)
-    local owner = payload.owner
-    if owner ~= nil then
-      if type(owner) ~= 'table' or type(owner._take_spawn_body) ~= 'function' then
-        error('owned spawn effect requires a Task owner', 0)
-      end
-      local life = owner._lifetime
-      if type(life) ~= 'table' or type(life._body) ~= 'function' then
-        error('owned spawn effect requires a dormant task body', 0)
-      end
-      if life._runtime ~= nil and life._runtime ~= rt then
-        error('spawn Task belongs to another runtime', 0)
-      end
-    elseif type(payload.fn) ~= 'function' then
-      error('spawn effect requires a function or Task owner', 0)
-    end
-    return {
-      kind = SpawnKind,
-      key = spawn_key(payload),
-      payload = payload,
-      discharge = function(discharge_rt, entry, _log)
-        if not discharge_rt._spawn_committed then
-          error('runtime does not support committed spawn', 2)
-        end
-        local p = entry.payload
-        local fn = p.fn
-        if p.owner ~= nil then
-          fn = p.owner:_take_spawn_body(discharge_rt)
-        end
-        return discharge_rt:_spawn_committed(fn, p.scope, p.owner)
-      end,
-    }
-  end,
-})
-
-function Effect.spawn(fn, id, scope, owner)
-  local payload = { fn = fn, scope = scope, owner = owner }
-  payload.id = id or owner or payload
-  return Effect.of(SpawnKind, payload)
-end
+-- Task activation and structural-closure driver start are private Lifetime
+-- consequences, not public spawn Effects. Raw runtime spawning remains an
+-- embedding/kernel mechanism.
 
 Effect.InterruptKind = InterruptKind
-Effect.SpawnKind = SpawnKind
 Effect.EffectKind = EffectKind
 
 return Effect

@@ -578,15 +578,15 @@ host half-shutdown and retires the write reaction.
 `abort_write_op` discards retained output and retires without waiting for host
 writability.
 
-`close_op` is graceful user closure: it abandons reading, drains writing, closes
-the HostHandle and waits for completed Closure.
+`close_op` is graceful user closure: it abandons reading, drains writing and
+closes the HostHandle according to the Stream's local protocol.
 
-`abort_op` abandons both directions, discards queued output and waits for prompt
-completed Closure. Scope cancellation and failure Closure use the abortive
-form.
+`abort_op` abandons both directions and discards queued output for prompt local
+closure. Scope cancellation and failure Closure use the abortive form.
 
-`closed_op` observes completed direction retirement, HostHandle closure and any
-close error.
+`closed_op` observes completed direction shutdown, HostHandle closure and any
+local close error. Complete retirement of the Stream Lifetime and its custody
+descendants is observed separately through `Lifetime.of(stream):outcome_op()`.
 
 Custody movement uses the general Lifetime API. Stream provides no transfer
 aliases. Facilities needing halves under independent custody construct separate

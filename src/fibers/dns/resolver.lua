@@ -7,6 +7,7 @@
 
 local Op = require('fibers.op')
 local Runtime = require('fibers.runtime')
+local TaskExit = require('fibers.task').Exit
 local Sleep = require('fibers.sleep')
 local StateMachine = require('fibers.resource.machine')
 local Address = require('fibers.net.address')
@@ -1011,17 +1012,21 @@ function Resolver:_resolve_candidate(name, port, family, opts)
   end
   local tasks = perform(Op.named_each(task_entries))
 
-  local outcome_entries = {}
+  -- These child Tasks are part of this resolver Lifetime.  We need their
+  -- computation results here, not proof that their complete owned Lifetimes
+  -- have retired.  Waiting for outcome_op() while still owning them can form a
+  -- closure cycle if an ancestor claims this subtree for retirement.
+  local body_entries = {}
   for i = 1, #families do
     local family_name = families[i]
-    outcome_entries[family_name] = tasks[family_name]:outcome_op()
+    body_entries[family_name] = tasks[family_name]:body_result_op()
   end
-  local outcomes = perform(Op.named_each(outcome_entries))
+  local exits = perform(Op.named_each(body_entries))
 
   local addresses, errors, seen = {}, {}, {}
   for i = 1, #families do
     local family_name = families[i]
-    local values, err = outcomes[family_name]:raise()
+    local values, err = TaskExit.unwrap(exits[family_name])
     if values then
       for j = 1, #values do
         local address = family_name == 'inet6' and Address.ipv6(values[j], port) or Address.ipv4(values[j], port)

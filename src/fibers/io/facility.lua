@@ -45,9 +45,13 @@ local function driver_exit_error(exit)
   end
 end
 
--- Wait for the complete driver Lifetime. With a terminal operation, preserve the
--- facility's domain terminal result; without one, the driver's returned values
--- are themselves authoritative.
+-- Wait for the local driver computation, not for the complete Lifetime which
+-- owns it.  A resource driver is commonly the Task view of the very Lifetime
+-- whose local close protocol calls this helper; waiting for Task:outcome_op()
+-- there would make retirement depend on itself.  Descendant retirement is the
+-- closure driver's separate structural obligation.  With a terminal operation,
+-- preserve the facility's domain terminal result; without one, the driver's
+-- returned values are authoritative.
 function IO.closed_after_driver_op(task, terminal_op, opts)
   opts = Contract.options(opts, { require_returned = true }, 'closed_after_driver_op options', 2)
   Contract.optional_boolean(opts.require_returned, 'closed_after_driver_op require_returned', 2)
@@ -59,9 +63,7 @@ function IO.closed_after_driver_op(task, terminal_op, opts)
   end
   if task == nil then return terminal_op end
 
-  return task:outcome_op():and_then(Op.guard(function(outcome)
-    local report = type(outcome) == 'table' and outcome.report
-    local exit = type(report) == 'table' and report.body_exit
+  return task:body_result_op():and_then(Op.guard(function(exit)
     local err = opts.require_returned == true and driver_exit_error(exit) or nil
     if err ~= nil then return Op.always(nil, err) end
     if terminal_op ~= nil then return terminal_op end

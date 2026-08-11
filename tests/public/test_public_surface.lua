@@ -175,11 +175,11 @@ do
       'pulse', 'bind_to_close',
     } },
     { 'Lifetime', FibersLifetime, {
-      'define', 'new', 'inert', 'resource', 'task', 'of', 'is', 'require',
+      'define', 'new', 'of', 'is', 'require',
     } },
     { 'Closure', FibersClosure, {
-      'none', 'running', 'nursery', 'supervisor', 'protocol', 'propagation',
-      'combine', 'request_then_wait', 'require_ok', 'is_failure',
+      'none', 'running', 'nursery', 'supervisor', 'protocol', 'policy',
+      'request_then_wait', 'require_ok', 'start_close_op',
     } },
     { 'Grant', FibersGrant, { 'is', 'closed', 'closed_op', 'has_right' } },
     { 'Channel', FibersChannel, { 'new' } },
@@ -202,6 +202,11 @@ do
     assert_functions(surfaces[i][1], surfaces[i][2], surfaces[i][3])
   end
 
+  assert_eq(type(FibersClosure.Process), 'table', 'Closure.Process')
+  assert_eq(type(FibersClosure.Process.is), 'function', 'Closure.Process.is')
+  assert_eq(type(FibersClosure.Failure), 'table', 'Closure.Failure')
+  assert_eq(type(FibersClosure.Failure.is), 'function', 'Closure.Failure.is')
+
 
   assert_eq(FibersRoblox.Host, FibersRobloxHost, 'Roblox.Host')
   assert_eq(FibersRoblox.Subscription, FibersRobloxSubscription, 'Roblox.Subscription')
@@ -209,7 +214,7 @@ do
   local scope = FibersScope.new():label('public-scope-surface')
   assert_functions('Scope', scope, {
     'spawn_op', 'move_op', 'offer_op', 'accept_op', 'grant_op', 'can_op',
-    'has_custody_op',
+    'start_close_op', 'close', 'has_custody_op',
   })
 end
 

@@ -567,9 +567,11 @@ end
 
 local function live(handle, body)
   local lifetime = Lifetime.of(handle)
-  local phase = lifetime and (lifetime._runtime and lifetime._runtime:_lifetime_store():_closure_phase(lifetime)
-    or lifetime._terminal_phase)
-  if phase == 'closed' or phase == 'closure_failed' then return Op.always(nil, Errors.RETIRED) end
+  local phase, fault
+  if lifetime and lifetime._runtime then
+    phase, _, fault = lifetime._runtime:_lifetime_store():_lifecycle(lifetime)
+  end
+  if phase == 'retired' or fault ~= nil then return Op.always(nil, Errors.RETIRED) end
   return body()
 end
 

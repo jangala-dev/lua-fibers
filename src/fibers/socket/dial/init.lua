@@ -108,6 +108,10 @@ local function driver(dial, driver_scope)
     local failure, fatal = unexpected_error(dial, thrown)
     local failure_report = dial._strategy.terminal_report(dial, 'failed', failure, rt:now())
     publish_failure(dial, rt, failure, fatal, failure_report)
+    -- The lifecycle publication gives observers a deterministic domain result;
+    -- an unexpected adapter/strategy defect is also an execution failure of
+    -- the Dial Task and must remain visible to its custodian's supervision.
+    if fatal then error(failure, 0) end
     return
   end
 
@@ -211,6 +215,17 @@ function Dial:connect(target)
   target = target or IO.current_scope({}, 'Dial:connect')
   local connection, result = perform(result_with_report_op(self, target))
   local closed, close_err = self:closed()
+  if closed and self._driver then
+    -- Dial:closed() establishes the local protocol state. connect() has the
+    -- stronger documented contract that every losing private descendant has
+    -- retired before the winning connection escapes, so ask explicitly for
+    -- the complete Dial Lifetime here rather than making every local
+    -- closed_op circular with its own Lifetime.
+    local retired, retire_err = Protected.pcall(self._driver.await, self._driver)
+    if not retired then
+      closed, close_err = nil, retire_err
+    end
+  end
   if not closed then
     if connection and type(connection.abort) == 'function' then
       local cleanup = {}

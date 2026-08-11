@@ -403,8 +403,10 @@ claiming it moves the complete Stream subtree into the caller's scope. As with
 `accept_op`, pass an explicit target when a result option is intended for a
 different fiber or scope.
 `dial:result_op(fibers.current_scope())` returns either the transferred connection or its structured
-error. `dial:closed_op()` observes execution termination and completed custody
-disposition.
+error. `dial:closed_op()` observes the Dial's local execution and domain closure.
+`Lifetime.of(dial):outcome_op()` is the stronger observation that the complete
+Dial custody subtree has retired. Convenience operations which promise complete
+cleanup await that Lifetime outcome explicitly.
 
 Listener and Dial lifecycle state is explicit transactional state rather than a
 collection of completion flags and mutable booleans. The principal states are:
@@ -857,10 +859,11 @@ Fibers facility adopts them. Accepted descriptors pass directly into the
 accept-source queue; unclaimed offers remain accountable to that source and are
 closed during source retirement. Connected Streams remain in each Dial's
 private Scope until a caller commits their custody transfer. Listener and Dial
-Task, Scope and domain views share one Lifetime; no driver Task is a separate
-structural child of the public root. Resource Closure requests root shutdown
-before requesting its children, then joins and finishes those children before
-closing the root. Readiness and bounded-offer waits remain cancellable.
+Task, Scope and domain views share one Lifetime; no driver Task is a second
+lifecycle node hidden beneath the public resource. Private resources are actual
+custody descendants. A resource's local Closure protocol quiesces its own domain
+state; the Lifetime closure driver separately requests and retires descendants
+in structural order. Readiness and bounded-offer waits remain cancellable.
 
 The test-only `SimulatedHost` implements pipes, virtual sockets and resolver
 records. `ManualHost` itself provides only deterministic time, readiness and injected final host methods.

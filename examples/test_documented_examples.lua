@@ -124,14 +124,14 @@ fibers.run(function(source)
     runtime = source.runtime,
   }):label('documented-grant-worker')
   local resource = { label = 'documented-resource' }
-  FibersLifetime.inert(resource, { rights = { read = true } })
+  FibersLifetime.define(resource, { rights = { read = true } })
 
   fibers.perform(source:admit_op(resource))
   local grant = fibers.perform(source:grant_op(resource, worker, { 'read' }))
   local authorised = fibers.perform(worker:can_op(resource, 'read'))
   assert(authorised == resource)
 
-  fibers.perform(worker:close_op(grant, 'example complete'))
+  worker:close(grant, 'example complete')
   local after_close = fibers.perform(
     worker:can_op(resource, 'read'):map(function()
       return true
@@ -141,7 +141,7 @@ fibers.run(function(source)
 
   fibers.perform(source:move_op(resource, worker))
   assert(fibers.perform(worker:has_custody_op(resource)) == true)
-  fibers.perform(worker:close_op(resource, 'example complete'))
+  worker:close(resource, 'example complete')
 end)
 
 print('examples/test_documented_examples.lua: ok')

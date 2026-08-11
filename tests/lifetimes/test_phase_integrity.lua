@@ -36,7 +36,7 @@ do
   local first_runtime = Runtime.new({ quiet_deadlock = true })
   local first_scope = Scope.new():label('phase-admission-first')
   local value = { name = 'phase-admission-value' }
-  Lifetime.inert(value, { label = value.name })
+  Lifetime.define(value, { label = value.name })
   local node = value._lifetime
   local fallback
 
@@ -47,7 +47,7 @@ do
       :and_then(Op.never())
       :or_else(Op.always('fallback')))
     eq(node._runtime, nil, 'defeated admission must not bind a runtime')
-    eq(node._admitted, false, 'defeated admission must remain dormant')
+    eq(node._lifetime_location.value.phase, 'dormant', 'defeated admission must remain dormant')
   end):label('phase-admission-first-driver')
 
   local first_status = run_to_rest(first_runtime)
@@ -57,7 +57,7 @@ do
   local second_runtime = Runtime.new()
   local second_scope = Scope.new():label('phase-admission-second')
   local late_child = { name = 'phase-admission-late-child' }
-  Lifetime.inert(late_child, { label = late_child.name })
+  Lifetime.define(late_child, { label = late_child.name })
   second_runtime:spawn_raw(function()
     local admission = second_scope:admit_op(value)
     node:add_child(late_child)
@@ -65,11 +65,11 @@ do
       'a child added after construction remains unaffiliated before commit')
     eq(second_runtime:perform(admission), value)
     eq(node._runtime, second_runtime, 'committed admission binds the selected runtime')
-    eq(node._admitted, true, 'committed admission makes the Lifetime live')
+    eq(second_scope:_store():_phase(node), 'live', 'committed admission makes the Lifetime live')
     eq(late_child._lifetime._runtime, second_runtime,
       'admission reads the current dormant graph at performance')
-    eq(late_child._lifetime._admitted, true, 'late dormant child is admitted atomically')
-    second_runtime:perform(Closure.close_op(second_scope, value, 'phase-admission-done'))
+    eq(second_scope:_store():_phase(late_child._lifetime), 'live', 'late dormant child is admitted atomically')
+    second_scope:close(value, 'phase-admission-done')
   end):label('phase-admission-second-driver')
   local second_status = run_to_rest(second_runtime)
   truthy(second_status.tag == 'quiescent' or second_status.tag == 'idle')
@@ -97,7 +97,7 @@ do
     task = runtime:perform(spawn)
     returned = runtime:perform(task:await_op())
     eq(starts, 1, 'committed spawn starts exactly once')
-    runtime:perform(Closure.close_op(scope, task, 'phase-spawn-done'))
+    scope:close(task, 'phase-spawn-done')
   end):label('phase-spawn-driver')
 
   local status = run_to_rest(runtime)
@@ -107,30 +107,8 @@ do
   truthy(status.tag == 'quiescent' or status.tag == 'idle')
 end
 
--- A committed spawn effect takes its body exactly once during discharge.
-do
-  local runtime = Runtime.new()
-  local ran = 0
-  local take_calls = 0
-  local owner = { _lifetime = { _body = function() ran = ran + 1 end } }
-  function owner:_take_spawn_body(committed_runtime)
-    eq(committed_runtime, runtime)
-    take_calls = take_calls + 1
-    eq(take_calls, 1, 'spawn discharge must take the body exactly once')
-    local body = self._lifetime._body
-    self._lifetime._body = nil
-    return body
-  end
-
-  runtime:spawn_raw(function()
-    runtime:perform(Op.emit(Effect.spawn(nil, 'phase-owned-spawn', nil, owner)))
-  end):label('phase-owned-spawn-driver')
-  local status = run_to_rest(runtime)
-  eq(take_calls, 1, 'committed discharge takes the body')
-  eq(owner._lifetime._body, nil, 'committed discharge consumes the body')
-  eq(ran, 1, 'committed body runs once')
-  truthy(status.tag == 'quiescent' or status.tag == 'idle')
-end
+-- Admission itself now owns activation; there is no separate owned-spawn
+-- Effect path to test here.
 
 -- A losing cancellation option leaves both managed cancellation and ordinary
 -- closure bookkeeping untouched. The bookkeeping is updated only after commit.
@@ -141,20 +119,20 @@ do
 
   runtime:spawn_raw(function()
     local cancel_option = scope:request_cancel_op('lost-cancellation')
-    eq((LifetimeState.boundary(scope) or {}).closure_reason, nil,
+    eq(((LifetimeState.state(scope).close_request or {}).reason), nil,
       'constructing cancellation must not commit a Lifetime close reason')
-    eq(LifetimeState.closure_state(scope).closure, nil,
-      'constructing cancellation must not cache Closure state')
+    eq(LifetimeState.closure_state(scope), nil,
+      'constructing cancellation must not allocate supervision state')
     local losing = cancel_option
       :and_then(Op.never())
       :or_else(Op.always('fallback'))
     fallback = runtime:perform(losing)
-    eq((LifetimeState.boundary(scope) or {}).closure_reason, nil,
+    eq(((LifetimeState.state(scope).close_request or {}).reason), nil,
       'defeated cancellation must not commit a Lifetime close reason')
     eq(LifetimeState.interrupt(scope).raised, false, 'defeated cancellation must not raise the interrupt')
 
     committed = runtime:perform(scope:request_cancel_op('committed-cancellation'))
-    eq((LifetimeState.boundary(scope) or {}).closure_reason, 'committed-cancellation',
+    eq(((LifetimeState.state(scope).close_request or {}).reason), 'committed-cancellation',
       'committed cancellation records the Lifetime close reason post-commit')
   end):label('phase-cancel-driver')
 
@@ -181,7 +159,7 @@ do
     runtime:perform(task:outcome_op())
     local entry = LifetimeState.closure_state(parent).processed[task:lifetime()]
     child_exit = entry and entry.exit or nil
-    runtime:perform(Closure.close_op(parent, task, 'phase-cancel-child-retired'))
+    parent:close(task, 'phase-cancel-child-retired')
   end):label('phase-cancel-parent-driver')
 
   local status = run_to_rest(runtime)

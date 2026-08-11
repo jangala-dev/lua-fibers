@@ -181,12 +181,12 @@ do
   assert_eq(err.kind, 'phase_error', 'host arrival in prepare is a phase error')
 end
 
--- Internal close-token and unaccounted-release authority is not available to Scope users.
+-- Internal close-claim and unaccounted-release authority is not available to Scope users.
 do
   local scope = Scope.new():label('lifetime-surface')
   local item = { name = 'lifetime-surface-item' }
-  Lifetime.inert(item)
-  assert_eq(scope.claim_op, nil, 'close tokens should remain private')
+  Lifetime.define(item)
+  assert_eq(scope.claim_op, nil, 'close claims should remain private')
   assert_eq(scope.resolve_op, nil, 'Scope should not expose generic token resolution')
   assert_eq(scope.release_op, nil, 'Scope should not expose unaccounted release')
   assert_eq(Lifetime.of(item) ~= nil, true, 'ownable values should carry a Lifetime')

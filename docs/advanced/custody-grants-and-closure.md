@@ -94,12 +94,12 @@ Lifetime.define(sensor, {
 })
 ```
 
-A definition is one-shot. The Closure protocol and propagation policy are
+A definition is one-shot. The local Closure protocol and Scope policy are
 captured at definition time. Later mutation of the source Lua table does not
 change the admitted Lifetime. This defines when runtime configuration takes
 effect; it is not a general promise that Lua values are immutable.
 
-Structural children must already carry explicit Lifetimes:
+Construction children must already carry explicit Lifetimes:
 
 ```lua
 Lifetime.define(parent, {
@@ -129,7 +129,8 @@ scope:admit_op(resource)
 scope:move_op(resource, target_scope)
 scope:offer_op(resource, target_scope, terms)
 scope:accept_op(filter)
-scope:close_op(resource, reason)
+scope:start_close_op(resource, reason)
+scope:close(resource, reason)
 
 scope:has_custody_op(resource)
 ```
@@ -168,7 +169,7 @@ an unrelated offer or partially move custody.
 
 Holding a Lua reference does not imply custody. It also need not imply authority
 to use the resource. Custody is the unique responsibility relation stored in the
-Runtime-local Lifetime forest.
+Runtime-local Lifetime tree.
 
 ## 4. Grants
 
@@ -193,7 +194,7 @@ local stream, authority = fibers.perform(worker:can_op(stream, 'read'))
 Closing the Grant revokes the authority:
 
 ```lua
-fibers.perform(worker:close_op(grant, 'revoked'))
+worker:close(grant, 'revoked')
 ```
 
 A Grant closes automatically when its holding Scope closes.
@@ -252,31 +253,36 @@ that exactly one parent is responsible for Closure.
 
 ## 5. Closure
 
-Closure is the only public termination contract. It includes:
-
-- local shutdown of the node;
-- propagation from body, cancellation and child outcomes;
-- ordered closure of descendants;
-- retry and force after incomplete closure.
-
-A Lifetime has one monotonic Closure phase:
+The Lifetime lifecycle is deliberately smaller than the machinery used to
+perform shutdown. A Lifetime has four semantic phases:
 
 ```text
 dormant
-  ↓
-open
-  ↓
-close_requested
-  ↓
+  │ admit
+  ▼
+live
+  │ request close or cancel
+  ▼
 closing
-  ├──→ closed
-  └──→ closure_failed
-          ├── retry
-          └── force
+  │ local consequence and descendants discharged
+  ▼
+retired
 ```
 
-Natural body completion, explicit cancellation and custodian-driven shutdown all
-converge on this state machine.
+A Closure fault is data retained while the Lifetime remains `closing`; it is not
+a fifth lifecycle phase. Retry and force continue the unresolved closure
+obligation rather than restoring or replacing lifecycle state.
+
+Two independent inputs govern how a closing Lifetime is handled:
+
+- its **local Closure protocol**, which discharges that Lifetime's own continuing
+  consequence;
+- its Scope **policy**, which decides how that Scope reacts to body, cancellation
+  and child outcomes.
+
+The structural closure driver separately orders descendant closure. Natural body
+completion, explicit cancellation and custodian-driven shutdown all converge on
+the same `closing` responsibility.
 
 ### Local Closure protocol
 
@@ -304,8 +310,7 @@ Closure.protocol({
 ```
 
 Callbacks receive a bounded Closure context containing the root, reason,
-purpose and current phase. They never receive the engine's exclusive internal
-close token.
+purpose and current phase. They never receive the private transactional CloseClaim.
 
 The common two-phase form is:
 
@@ -317,9 +322,12 @@ Closure.request_then_wait(request_fn, finished_fn, {
 })
 ```
 
-A passive value may use only `finish_op`. A running Lifetime normally uses the
-standard running Closure, which requests cancellation during abnormal shutdown
-and waits for the complete body outcome.
+A passive value may use only `finish_op`. A Task-backed Lifetime normally uses
+the standard running protocol, which requests cancellation during abnormal
+shutdown and waits for `Task:body_result_op()`. A lexical Scope waits for its
+staged Scope settlement instead. Neither protocol waits for the Lifetime's own
+terminal outcome: that outcome is published only when custody retirement
+actually commits.
 
 ### Structural order
 
@@ -351,11 +359,11 @@ shutdown can propagate. Finishing travels from children to parents so that
 parent infrastructure remains available while descendants quiesce.
 
 Siblings request in declaration order and finish in reverse declaration order.
-Independent roots close in reverse admission order.
+Sibling children close in reverse admission order.
 
-### Propagation
+### Scope policy
 
-Child failure behaviour is part of Closure rather than a separate policy system.
+Child failure behaviour is a boundary policy, separate from the local shutdown protocol.
 The built-in forms are:
 
 ```lua
@@ -369,10 +377,11 @@ A nursery propagates a failed child to the boundary and requests closure of the
 remaining work. A supervisor records child outcomes according to its configured
 mode without necessarily closing siblings.
 
-Custom propagation is pure:
+Custom policy is pure and is supplied as Scope policy, not as part of a local
+shutdown protocol:
 
 ```lua
-local propagation = {
+local policy = Closure.policy({
   on_child_outcome = function(_self, parent, state, child, outcome)
     if outcome.tag == 'failed' then
       return {
@@ -384,24 +393,61 @@ local propagation = {
     end
     return {}
   end,
-}
+})
 
-local closure = Closure.running(propagation)
+local scope = Scope.new({ closure = policy })
 ```
 
-Domain-local shutdown and propagation compose without either replacing the
-other:
+A resource Lifetime independently carries its local shutdown protocol, for
+example `Closure.running()` or `Closure.protocol({...})`. Child Scope views
+inherit only Scope policy. They never inherit their parent Lifetime's local
+`request_op`, `finish_op` or `force_op`.
+
+## 6. Transactional closure initiation, failure and recovery
+
+Structural closure has a deliberate two-transaction shape. Initiation remains
+inside the ordinary Option algebra:
 
 ```lua
-local closure = Closure.combine(local_resource_closure, propagation)
+local process = fibers.perform(
+  scope:start_close_op(resource, 'shutdown')
+    :and_then(registry:write_op('closing'))
+)
 ```
 
-Children inherit only the propagation projection. They never inherit their
-parent's local `request_op`, `finish_op` or `force_op`.
+`start_close_op` transactionally acquires the CloseClaim and emits the committed
+start of an internal closure driver. If the complete candidate loses a
+`choice`, `or_else`, `each` or later `and_then`, neither the claim nor the start
+consequence commits. The returned `Closure.Process` is therefore an ordinary
+transactional result; there is no post-commit `wrap` boundary in structural
+closure initiation.
 
-## 6. Closure failure and recovery
+Completion is causally later and is observed in a fresh transaction:
 
-External closure is not transactional. Some descendants may finish before a
+```lua
+local ok, result = fibers.perform(process:result_op())
+if not ok then
+  local failure = result
+  print(failure:inspect().message)
+end
+```
+
+This second transaction can itself be composed:
+
+```lua
+fibers.perform(
+  process:success_op()
+    :and_then(registry:write_op('closed'))
+)
+```
+
+For ordinary procedural use, `scope:close(resource, reason)` performs the start
+and result observations and raises a retained `Closure.Failure` if closure does
+not complete.
+
+### Closure failure
+
+External closure is not one transaction. Some descendants may finish before a
 later descendant fails. Fibers therefore retains irreversible progress rather
 than pretending the subtree became live again.
 
@@ -415,23 +461,38 @@ end)
 local failure = result.closure_failure
 if failure then
   local report = failure:inspect()
-
-  -- Continue ordinary Closure from retained progress.
-  failure:retry()
-
-  -- Or apply the optional force phase.
-  -- failure:force()
 end
 ```
 
-The failure contains diagnostics and one opaque recovery capability. It does not
-expose the engine's close token, generic restoration or arbitrary discharge.
-Retry or force consumes that capability only when its operation commits. A
-failed recovery issues one new failure capability; a successful recovery cannot
-be repeated. Completed descendants are skipped during retry.
+The failure contains diagnostics and one linear recovery capability. It does
+not expose the private CloseClaim, generic restoration or arbitrary discharge.
+
+### Retry or force
+
+Recovery is also a transactional initiation:
+
+```lua
+local process = fibers.perform(
+  failure:retry_op()
+    :and_then(metrics:increment_op('closure-retries'))
+)
+local ok, result = fibers.perform(process:result_op())
+```
+
+or, where the resource contract supports escalation:
+
+```lua
+local process = fibers.perform(failure:force_op())
+local ok, result = fibers.perform(process:result_op())
+```
+
+The recovery capability is a one-shot Counter. Only one committed recovery
+world can consume it, including under `together`. A failed recovery publishes a
+new `Closure.Failure` with fresh recovery authority; a successful recovery
+releases the retained CloseClaim. Completed descendants are skipped on retry.
 
 A failed Closure remains custody truth: the parent is still accountable for the
-unresolved consequence until retry or force reaches `closed`.
+unresolved consequence until a recovery process permits retirement.
 
 ## 7. Body result, domain result and Lifetime outcome
 
@@ -445,7 +506,7 @@ domain result
   what the resource means, for example process exit or connection failure
 
 Lifetime outcome
-  whether all continuing consequences closed correctly
+  whether the complete continuing consequence retired successfully
 ```
 
 A Process may exit before its Streams and host handles close. A Dial may report a
@@ -491,8 +552,8 @@ Grants over it.
 
 ### Monotonic Closure
 
-A Lifetime moves forwards through its Closure phases. Failed Closure retains
-progress and responsibility.
+A Lifetime moves forwards through `dormant`, `live`, `closing` and `retired`. A
+Closure fault leaves it `closing`, retaining progress and responsibility.
 
 ### Ordered Closure
 
@@ -500,11 +561,11 @@ Requests run parent-first; finishing runs child-first.
 
 ### Complete containment
 
-A Lifetime cannot reach `closed` while it retains unresolved descendants.
+A Lifetime cannot reach `retired` while it retains unresolved descendants.
 
 ### Runtime locality
 
-A live Lifetime belongs to one Runtime-local forest and cannot cross Runtime
+A live Lifetime belongs to one Runtime-local tree and cannot cross Runtime
 stores.
 
 ## 10. Summary

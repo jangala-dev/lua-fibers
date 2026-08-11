@@ -40,8 +40,9 @@ The caller receives a `Task`. The running body receives a `Scope`. They are two
 capabilities over the same Lifetime, not two linked lifecycle records.
 
 A Scope contains no independent custody tree or cancellation state. A Task
-contains no independent completion record. These facts belong to the Runtime's
-Lifetime forest.
+adds only execution-specific state, including its body-result Completion; its
+custody, close intent and terminal outcome belong to the same underlying
+Lifetime.
 
 This lets one system account for:
 
@@ -64,18 +65,29 @@ live under exactly one custodian
    │
    ├── move ──► live under another custodian
    │
-   └── close ─► retired
+   └── request close
+           ▼
+        closing
+           │ responsibility discharged
+           ▼
+        retired
 ```
 
 The practical laws are:
 
 1. A dormant Lifetime has not entered Runtime responsibility.
-2. Admission places the complete dormant subtree under one custodian.
-3. Every live Lifetime has exactly one custodial parent.
-4. Movement changes that parent atomically.
+2. Admission makes a dormant construction tree real as an actual custody tree:
+   its root is admitted under the chosen custodian and each descendant remains
+   owned by its parent.
+3. Every live or closing Lifetime has exactly one custodial parent, except the
+   Runtime root.
+4. Movement changes one Lifetime's custodial parent atomically; its descendants
+   remain beneath it.
 5. Grants add authority without changing custody.
-6. Closure removes responsibility only after the complete subtree resolves.
-7. Failed Closure retains both completed progress and unresolved responsibility.
+6. A close request moves a live Lifetime to `closing`; retirement occurs only
+   after its local consequence and every descendant have been discharged.
+7. A Closure fault is retained while the Lifetime remains `closing`; failure
+   never manufactures retirement.
 
 Holding a Lua reference does not create custody or extend a Lifetime.
 
@@ -129,7 +141,7 @@ Use a nested scope when a group of tasks or resources should:
 - share one lifetime boundary;
 - close together;
 - apply one child-failure policy;
-- move as one structural subtree;
+- move as one custody subtree;
 - produce one boundary report.
 
 Returning a Lua reference from a nested scope does not move custody. A resource
@@ -227,15 +239,15 @@ construct dormant Task
         ↓
 transactionally admit its Lifetime
         ↓
-commit the spawn effect
+commit admission
         ↓
-make the body runnable
+activate the Task body
 ```
 
 A losing `spawn_op` branch:
 
 - does not start the body;
-- does not bind the Lifetime into the Runtime forest;
+- does not bind the Lifetime into the Runtime custody tree;
 - creates no responsibility which later needs cancellation.
 
 ### Receive work and admit its handler
@@ -390,7 +402,7 @@ The supported policies include:
 A supervisor is not an unstructured escape hatch. Retained work remains under
 custody and must reach Closure.
 
-Custom propagation policies and local resource Closure protocols are covered in
+Custom Scope policies and local resource Closure protocols are covered in
 [Custody, Grants and Closure](../advanced/custody-grants-and-closure.md).
 
 ## 8. Cancellation as a composable transition
@@ -521,7 +533,8 @@ scope:admit_op(value)
 scope:move_op(value, target)
 scope:offer_op(value, target, terms)
 scope:accept_op(filter)
-scope:close_op(value, reason)
+scope:start_close_op(value, reason)
+scope:close(value, reason)
 ```
 
 A focused transactional custody predicate is available when a protocol genuinely needs it:
@@ -530,7 +543,7 @@ A focused transactional custody predicate is available when a protocol genuinely
 scope:has_custody_op(value)
 ```
 
-Fibers deliberately does not expose generic children, subtree or custody snapshots. Responsibility changes should normally be expressed by `admit_op`, `move_op`, `offer_op`, `accept_op`, `grant_op`, `can_op` and `close_op`, rather than observed through a parallel topology API.
+Fibers deliberately does not expose generic children, subtree or custody snapshots. Responsibility changes should normally be expressed by `admit_op`, `move_op`, `offer_op`, `accept_op`, `grant_op`, `can_op` and `start_close_op`, rather than observed through a parallel topology API.
 
 ### Dormant resources
 
@@ -554,9 +567,10 @@ The advanced construction API is described in
 fibers.perform(source:move_op(stream, destination))
 ```
 
-Movement changes the custodian of the complete structural subtree in one
-committed world. There is no visible interval in which both Scopes, or neither
-Scope, are responsible.
+Movement atomically changes the parent Lifetime's custodian. Its descendants
+remain owned beneath it, so responsibility for the complete custody subtree
+follows that one transition. There is no visible interval in which both Scopes,
+or neither Scope, are responsible for the moved root.
 
 ### Move responsibility with application state
 
@@ -595,8 +609,9 @@ fibers.perform(Op.each({
 
 Both independent resources move together.
 
-If the resources are structural children of one parent Lifetime, moving the
-parent moves the complete subtree with one `move_op`.
+If the resources are custody descendants of one parent Lifetime, moving the
+parent changes only that parent's custodian; the descendants remain beneath it,
+so the complete subtree moves as a consequence of the one `move_op`.
 
 ### Adopt a running task
 
@@ -871,20 +886,25 @@ reach a terminal state.
 
 ```text
 dormant
-  ↓
-open
-  ↓
-close_requested
-  ↓
+  │ admit
+  ▼
+live
+  │ request close or cancel
+  ▼
 closing
-  ├──→ closed
-  └──→ closure_failed
-          ├── retry
-          └── force
+  │ local consequence and descendants discharged
+  ▼
+retired
 ```
 
 Natural body completion, cancellation and custodian-driven shutdown converge on
-this protocol.
+this lifecycle. Cancellation is not another state machine: it records close
+intent with interruption requested, and the committed consequence interrupts the
+local activity where one exists.
+
+A failure while closing is recorded as a Closure fault while the Lifetime stays
+`closing`. Retry or force acts on the retained closure obligation; neither is a
+fifth lifecycle phase.
 
 The practical guarantees are:
 
@@ -895,39 +915,79 @@ The practical guarantees are:
 - completed partial work is retained;
 - cleanup failure remains represented rather than being silently discarded.
 
-### Closing a child
+### Starting structural closure
+
+Structural closure deliberately has two transactions. The first transaction
+claims responsibility and arranges the committed start of the closure driver:
 
 ```lua
-local result = fibers.perform(
-  scope:close_op(resource, 'no longer needed')
+local process = fibers.perform(
+  scope:start_close_op(resource, 'no longer needed')
 )
 ```
 
-`close_op` transactionally selects and acquires the authority to begin Closure.
-The external Closure protocol then runs after commitment because closing a
-socket, process or file cannot generally be rolled back.
+`start_close_op` is a normal transactional Option. It may be extended with
+`map`, `and_then`, `each`, `together` or `or_else`:
 
-This is an important boundary:
+```lua
+local process = fibers.perform(
+  scope:start_close_op(resource, 'shutdown')
+    :and_then(registry:write_op('closing'))
+    :and_then(events:put_op('resource-closing'))
+)
+```
 
-> Selection of which Closure begins is transactional. External Closure progress
-> is not rollbackable.
+The CloseClaim, registry update, event and committed start consequence are one
+possible world. If that complete world loses, none of them commits and no
+closure driver starts.
 
-Because `close_op` crosses a post-commit `wrap`, another `map` or `and_then`
-cannot be appended to it. Further work is a new transaction performed after the
-close returns.
+The start consequence is an `emit`, not a `wrap`. Effect discharge only
+schedules the already-accounted internal driver; it does not run resource
+cleanup or perform further Options inside the effect phase.
+
+### Observing completion
+
+Closure progress occurs after the initiation transaction commits. Observe it in
+a fresh transaction:
+
+```lua
+local ok, result = fibers.perform(process:result_op())
+if not ok then
+  error(result, 0) -- Closure.Failure
+end
+```
+
+That observation is itself an ordinary Option and can be transactionally
+sequenced:
+
+```lua
+fibers.perform(
+  process:success_op()
+    :and_then(registry:write_op('closed'))
+    :and_then(events:put_op('resource-closed'))
+)
+```
+
+This is the important causal boundary: **starting closure is transactional;
+completion is a later transactional fact**. Completion cannot participate in
+the transaction whose commit caused closure to begin.
+
+For ordinary sequential code, `scope:close(resource, reason)` performs both
+stages and raises a retained `Closure.Failure` if the process fails.
 
 ### Close selection
 
-A close can still participate as an alternative:
+Because initiation remains transactional, competing starts compose naturally:
 
 ```lua
-local result = fibers.perform(Op.choice(
-  scope:close_op(primary, 'shutdown'),
-  scope:close_op(secondary, 'shutdown')
+local process = fibers.perform(Op.choice(
+  scope:start_close_op(primary, 'shutdown'),
+  scope:start_close_op(secondary, 'shutdown')
 ))
 ```
 
-Only the selected close begins. Once selected, its external progress is retained.
+Only the selected complete world emits a start consequence. Once it commits,
+external closure progress is not rollbackable.
 
 ### Structural order
 
@@ -959,7 +1019,7 @@ parent infrastructure children may need during quiescence.
 
 External Closure may make irreversible progress before a later descendant fails.
 Fibers retains the truth rather than pretending the subtree returned to its
-original open state.
+original live state.
 
 A checked boundary may expose a `Closure.Failure`:
 
@@ -979,29 +1039,36 @@ The failure retains:
 
 - completed progress;
 - unresolved nodes;
-- the failure phase;
-- structural blockers;
+- the failed closure step;
+- custody blockers;
 - current custody;
 - an exclusive recovery capability.
 
 ### Retry or force
 
+Recovery initiation is transactional in exactly the same way as initial
+closure:
+
 ```lua
-local recovered = fibers.perform(failure:retry_op())
+local process = fibers.perform(
+  failure:retry_op()
+    :and_then(metrics:increment_op('closure-retries'))
+)
+local ok, result = fibers.perform(process:result_op())
 ```
 
 or, where the resource contract supports escalation:
 
 ```lua
-local recovered = fibers.perform(failure:force_op())
+local process = fibers.perform(failure:force_op())
+local ok, result = fibers.perform(process:result_op())
 ```
 
-The recovery authority is linear. Only one committed recovery action can claim
-it. Two lanes cannot both retry or force the same failure.
-
-Recovery operations themselves cross into post-commit Closure work. They may be
-selected or preferred, but should be treated as the beginning of irreversible
-recovery rather than as ordinary rollbackable state transitions.
+The recovery authority is a one-shot Counter. Only one committed recovery world
+can claim it; two `together` lanes cannot both retry or force the same failure.
+A failed recovery publishes a new Failure with fresh authority. The retry/force
+Option itself remains transactionally sequenceable because the committed driver
+start is carried by `emit`, not `wrap`.
 
 ### Primary and secondary failures
 
@@ -1087,9 +1154,14 @@ remain speculative and replayable.
 
 ### `wrap`
 
-Continue ordinary application or Closure work after commitment. `await_op`,
-`close_op` and recovery operations use this boundary where their effects cannot
-remain provisional.
+Continue a particular participant after commitment. `wrap` is intentionally a
+post-commit result boundary, so its result cannot feed back into transactional
+`map` or `and_then`.
+
+Structural Closure does **not** use `wrap`. `start_close_op`, `retry_op` and
+`force_op` carry their committed driver start with `emit`, so their returned
+`Closure.Process` remains a transactional value. Each process attempt publishes its result through an ordinary Completion and is observed
+later through `success_op`, `failure_op` or `result_op`.
 
 ## 17. Common patterns
 
@@ -1156,9 +1228,9 @@ capability prevents competing recovery attempts.
 
 ## 19. Boundaries and qualifications
 
-### Process-local forest
+### Process-local tree
 
-A Lifetime belongs to one Runtime-local forest. It cannot move between Runtime
+A Lifetime belongs to one Runtime-local tree. It cannot move between Runtime
 instances or processes.
 
 Distributed ownership requires a higher-level protocol.
@@ -1183,11 +1255,12 @@ which checks them. Version 1 does not impose one universal rights ontology.
 Only changes represented by Fibers facilities participate in rollback and
 commitment.
 
-### Closure is intentionally asymmetric
+### Closure crosses a real causal boundary
 
-Admission, movement, Grant issuance and cancellation request are provisional
-managed transitions. External Closure, once selected, cannot generally be
-rolled back.
+Admission, movement, Grant issuance, cancellation request and closure initiation
+are provisional managed actions. When a closure-start world commits, its emitted
+consequence starts external progress which cannot generally be rolled back. The
+result of that progress is therefore observed in a later transaction.
 
 ## 20. Practical rules
 
@@ -1200,9 +1273,10 @@ rolled back.
 7. Use negotiated offer and acceptance when the receiver must participate.
 8. Use Grants for authority without responsibility transfer.
 9. Compose authority checks with the protected action.
-10. Treat `close_op` and recovery as post-commit irreversible boundaries.
-11. Retain and resolve Closure failures rather than suppressing them.
-12. Keep cancellation masks and suspension-free regions small and explicit.
+10. Compose `start_close_op` or recovery initiation transactionally with the state changes that justify them.
+11. Observe Closure completion through the returned `Closure.Process` in a later transaction.
+12. Retain and resolve Closure failures rather than suppressing them.
+13. Keep cancellation masks and suspension-free regions small and explicit.
 
 The deeper rule is:
 

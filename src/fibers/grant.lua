@@ -17,7 +17,7 @@ Grant.__index = Grant
 -- be authoritative for rights, subjects or transfer terms. Store the snapshot
 -- behind an unforgeable local table key on the Grant itself. A global weak-key
 -- registry would leak on Lua 5.1 when its value can reach the Grant through the
--- Runtime-local Lifetime forest (Lua 5.1 has no ephemeron semantics).
+-- Runtime-local Lifetime tree (Lua 5.1 has no ephemeron semantics).
 local PRIVATE_STATE = {}
 
 local function state(grant, level)
