@@ -611,7 +611,7 @@ add('lifetime', 'admit custody close', 500, function(n)
       Lifetime.define(resource)
       local admitted = fibers.perform(scope:admit_op(resource))
       local has_custody = fibers.perform(scope:has_custody_op(resource))
-      local closed = scope:close(resource, 'benchmark')
+      local closed = scope:retire(resource, 'benchmark')
       if admitted == resource and has_custody == true and closed == resource then
         ok_count = ok_count + 1
       end
@@ -662,10 +662,11 @@ add('scope', 'custody offer', 30, function(n)
     local r = fibers.try_run(function(root)
       local rt = fibers.current_runtime()
       local request =
-        Scope.new( { runtime = rt, parent = root, closure = root.closure }):label('bench-request-' .. tostring(i))
+        Scope.new({ runtime = rt, parent = root }):label('bench-request-' .. tostring(i))
       local supervisor =
-        Scope.new( { runtime = rt, parent = root, closure = root.closure }):label('bench-supervisor-' .. tostring(i))
+        Scope.new({ runtime = rt, parent = root }):label('bench-supervisor-' .. tostring(i))
       local resume = Rendezvous.new():label('bench-resume-' .. tostring(i))
+      fibers.perform(root:admit_op(supervisor:lifetime()))
       local task
       request:run(function(req)
         task = fibers.perform(req:spawn_op(function()
