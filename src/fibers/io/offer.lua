@@ -144,7 +144,7 @@ function Offer:terminal_op()
   end)
 end
 
-function Offer:close_op(reason)
+function Offer:request_close_op(reason)
   return self._entry:retire_op(reason or 'offer source closed', 'discard')
 end
 

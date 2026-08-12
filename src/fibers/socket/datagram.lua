@@ -77,7 +77,8 @@ local function terminal_error(state, action)
 end
 
 local function close_socket_handle(socket, rt, state, reason)
-  if not state.handle then return end
+  if socket._handle_closed or not state.handle then return end
+  socket._handle_closed = true
   local ok, close_err = IO.safe_close('datagram', state.handle, reason, {
     domain = 'datagram',
     action = 'close',
@@ -90,6 +91,12 @@ function Datagram:local_address_op()
   return self._lifecycle:address_op()
 end
 
+function Datagram:ready_op()
+  return self._lifecycle:start_result_op():map(function(handle, err)
+    if not handle then return nil, err end
+    return self
+  end)
+end
 
 function Datagram:send_to_op(data, address)
   if type(data) ~= 'string' then
@@ -150,7 +157,7 @@ function Datagram:receive_from_op(opts)
   end))
 end
 
-function Datagram:close_op(reason)
+function Datagram:request_close_op(reason)
   reason = reason or 'datagram socket closed'
   return self._lifecycle
     :request_stop_op(reason)
@@ -160,25 +167,28 @@ function Datagram:close_op(reason)
       end
       return Op.always(first, state)
     end))
-    :wrap(function(first, state)
-      if first then close_socket_handle(self, Runtime.current(), state, reason) end
-      return true
-    end)
+    :map(function(first, state) return true, first, state end)
 end
 
 function Datagram:closed_op()
   return IO.closed_after_driver_op(self._driver)
 end
 
+function Datagram:close(reason)
+  local requested, request_err = perform(self:request_close_op(reason))
+  if not requested then return nil, request_err end
+  return perform(self:closed_op())
+end
+
 local function close_from_driver(socket, rt, reason, err, fatal)
-  local first, state = IO.masked_perform(rt, socket._lifecycle:request_stop_op(reason, err, fatal))
+  local _, state = IO.masked_perform(rt, socket._lifecycle:request_stop_op(reason, err, fatal))
   local pending_error = err
     or IOError.closed('datagram', 'send_to', {
       reason = reason,
       address = Lifecycle.address(socket),
     })
   IO.masked_perform(rt, fail_send_op(socket, nil, pending_error))
-  if first then close_socket_handle(socket, rt, state, reason) end
+  close_socket_handle(socket, rt, state, reason)
   local _, terminal = IO.masked_perform(rt, socket._lifecycle:stopped_op(reason, err, fatal))
   return Lifecycle.close_result(terminal)
 end
@@ -267,15 +277,33 @@ local function next_driver_event(socket, handle, pending)
   return terminal:or_else(send)
 end
 
-local function driver(socket, driver_scope)
+local function driver(socket, driver_scope, opts, address)
   local rt = Runtime.current()
-  local ok, driver_err = Protected.pcall(function()
-    local handle, start_err = perform(socket._lifecycle:start_result_op())
-    if not handle then
-      if start_err then IO.masked_perform(rt, fail_send_op(socket, nil, start_err)) end
-      return
-    end
+  local activated, active, activation_err = Protected.pcall(Activation.create, socket, {
+    host = opts.host,
+    host_method = 'create_datagram',
+    options = { label = opts.label, reuse_address = opts.reuse_address },
+    lifecycle = socket._lifecycle,
+    close = close_handle,
+    domain = 'datagram',
+    action = 'open',
+    role = 'datagram',
+    address = address,
+    closed_reason = 'datagram lifecycle no longer accepts activation',
+    closed_message = 'datagram closed before activation',
+  })
+  if not activated then
+    local failure = IOError.is(active) and active or IO.protocol_error('datagram', 'open', active, { address = address })
+    IO.masked_perform(rt, fail_send_op(socket, nil, failure))
+    return nil, failure
+  end
+  if not active then
+    if activation_err then IO.masked_perform(rt, fail_send_op(socket, nil, activation_err)) end
+    return nil, activation_err
+  end
 
+  local handle = Lifecycle.handle(socket)
+  local ok, driver_err = Protected.pcall(function()
     perform(socket._packets:open_op(driver_scope))
     local pending
     while true do
@@ -318,16 +346,16 @@ local UDP_OPTIONS = {
   reuse_address = Contract.boolean,
 }
 
-function Module.udp_op(address, opts)
-  opts = Contract.options(opts, UDP_OPTIONS, 'socket.udp_op options', 2)
-  address = Address.validate(address, 'socket.udp_op')
+function Module.submit_udp_op(address, opts)
+  opts = Contract.options(opts, UDP_OPTIONS, 'socket.submit_udp_op options', 2)
+  address = Address.validate(address, 'socket.submit_udp_op')
   if address.kind ~= 'inet4' and address.kind ~= 'inet6' then
-    error('socket.udp_op currently supports IPv4 and IPv6 local addresses', 2)
+    error('socket.submit_udp_op currently supports IPv4 and IPv6 local addresses', 2)
   end
   local receive_capacity = opts.receive_capacity or 64
   local send_capacity = opts.send_capacity or 64
   local max_datagram_size = opts.max_datagram_size or 65535
-  local scope = IO.current_scope(opts, 'socket.udp_op')
+  local scope = IO.current_scope(opts, 'socket.submit_udp_op')
   local socket = Label.attach(Label.identity(setmetatable({
     kind = 'datagram_socket',
     _address = address,
@@ -342,36 +370,35 @@ function Module.udp_op(address, opts)
   end
   socket._packets = packet_source(socket, receive_capacity)
 
-  return scope:_drive_op( socket, {
+  return scope:_drive_op(socket, {
     label = Label.get(socket),
     role = 'datagram_socket',
     closure = IO._closeable_closure(socket, {
-      name = 'datagram_socket', reason = 'scope closure', finish_result = 'datagram closure failed',
+      name = 'datagram_socket', reason = 'scope closure', request = 'request_close_op',
+      finish_result = 'datagram closure failed',
     }),
-    run = function(driver_scope) return driver(socket, driver_scope) end,
-  }):wrap(function()
-    return Activation.create(socket, {
-      host = opts.host,
-      host_method = 'create_datagram',
-      options = { label = opts.label, reuse_address = opts.reuse_address },
-      lifecycle = socket._lifecycle,
-      close = close_handle,
-      domain = 'datagram',
-      action = 'open',
-      role = 'datagram',
-      address = address,
-      closed_reason = 'datagram lifecycle no longer accepts activation',
-      closed_message = 'datagram closed before activation',
-    })
-  end)
+    run = function(driver_scope) return driver(socket, driver_scope, opts, address) end,
+  })
+end
+
+function Module.udp(address, opts)
+  local socket, err = perform(Module.submit_udp_op(address, opts))
+  if not socket then return nil, err end
+  local ready, ready_err = socket:ready()
+  if not ready then
+    socket:closed()
+    return nil, ready_err
+  end
+  return socket
 end
 
 
 
 
 
-
 Module.DatagramSocket = Datagram
-Direct.install(Datagram, { 'local_address', 'send_to', 'receive_from', 'flush', 'close', 'closed' })
+Direct.install(Datagram, {
+  'ready', 'local_address', 'send_to', 'receive_from', 'flush', 'request_close', 'closed',
+})
 
 return Module

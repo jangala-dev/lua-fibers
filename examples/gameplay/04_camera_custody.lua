@@ -33,7 +33,7 @@ local result = fibers.try_run(function()
 
   fibers.perform(gameplay_end:reader():read_line_op():and_then(Op.guard(function(message)
     if message ~= 'RELEASE_CAMERA' then
-      return gameplay_end:close_op('unexpected camera protocol')
+      return gameplay_end:request_close_op('unexpected camera protocol')
     end
 
     return camera_mode

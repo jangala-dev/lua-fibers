@@ -20,6 +20,7 @@ local process = require('fibers.process')
 local Cell = require('fibers.resource.cell')
 local socket = require('fibers.socket')
 local Stream = require('fibers.stream')
+local Task = require('fibers.task')
 local perform = require('fibers.perform')
 
 local fibers = require('fibers')
@@ -54,6 +55,14 @@ local function assert_twins(value, names, label)
   end
 end
 
+local function assert_no_op_twins(value, names, label)
+  for i = 1, #names do
+    local name = names[i]
+    assert_eq(value[name .. '_op'], nil, (label or 'value') .. ':' .. name .. '_op must not exist')
+    assert_eq(type(value[name]), 'function', (label or 'value') .. ':' .. name .. ' causal procedure')
+  end
+end
+
 assert_eq(fibers.perform, perform, 'contextual prelude exposes the shared perform function')
 
 -- Selected public operations have direct performing conveniences with the same
@@ -82,29 +91,41 @@ do
     'read_exactly',
     'read_until',
     'read_line',
-    'read_all',
     'write',
     'write_some',
     'flush',
     'shutdown_read',
     'shutdown_write',
     'abort_write',
-    'close',
-    'abort',
+    'request_close',
+    'request_abort',
     'closed',
   }, 'stream')
-  assert_twins(file, { 'pipe', 'tmpfile' }, 'file')
+  assert_twins(file, { 'submit_pipe', 'submit_tmpfile' }, 'file')
   assert_twins(process.command('true'), { 'launch' }, 'command')
   assert_twins(socket, {
-    'listen',
-    'listen_inet',
-    'listen_unix',
-    'udp',
+    'submit_listen',
+    'submit_listen_inet',
+    'submit_listen_unix',
+    'submit_udp',
     'dial',
   }, 'socket')
   assert_twins(Stream, { 'merge_lines' }, 'stream module')
   assert_twins(Sleep, { 'sleep', 'sleep_until' }, 'Sleep')
 
+  -- Causal procedures deliberately do not expose a misleading same-stem `_op`.
+  assert_twins(a, { 'read_all', 'write_all' }, 'stream')
+  assert_no_op_twins(a, { 'close', 'abort' }, 'stream')
+  assert_no_op_twins(file, {
+    'pipe', 'open', 'tmpfile', 'read_all', 'write_all', 'rename', 'unlink', 'mkdir', 'mkdir_p',
+  }, 'file')
+  assert_twins(file.RegularFile, { 'read_exactly', 'read_all', 'write_all' }, 'regular file')
+  assert_no_op_twins(file.RegularFile, { 'seek', 'flush', 'rename', 'sync', 'close' }, 'regular file')
+  assert_no_op_twins(socket, {
+    'listen', 'listen_ipv4', 'listen_ipv6', 'listen_inet', 'listen_unix',
+    'udp', 'udp_ipv4', 'udp_ipv6',
+  }, 'socket')
+  assert_no_op_twins(Task, { 'await' }, 'task')
 
   assert_twins(Counter.new(), {
     'read', 'adjust', 'add', 'bump', 'give', 'take',
@@ -119,11 +140,11 @@ do
   local flow = Flow.new()
   assert_twins(flow, { 'abort', 'closed' }, 'flow')
   assert_twins(flow:inlet(), {
-    'write', 'write_some', 'reserve_some', 'flush', 'close', 'closed', 'fail',
+    'write', 'write_all', 'write_some', 'reserve_some', 'flush', 'close', 'closed', 'fail',
   }, 'flow inlet')
   assert_twins(flow:outlet(), {
-    'read_some', 'read_exactly', 'peek_exactly', 'read_until', 'read_line',
-    'read_all', 'drop', 'splice_to', 'lease_some', 'close', 'closed', 'fail',
+    'read_some', 'read_exactly', 'peek_exactly', 'read_until', 'read_line', 'read_all',
+    'drop', 'splice_to', 'lease_some', 'close', 'closed', 'fail',
   }, 'flow outlet')
   assert_twins(Grant, { 'retired' }, 'grant')
   assert_twins(Closure.Failure, { 'retry', 'force' }, 'closure failure')
@@ -153,7 +174,7 @@ do
     assert_eq(inbox:get(), 'hello')
     assert_eq(sender:await(), nil)
 
-    assert_twins(sender, { 'await', 'request_cancel' }, 'task')
+    assert_twins(sender, { 'request_cancel' }, 'task')
 
     local state = Cell.new('idle'):label('state')
     assert_eq(state:read(), 'idle')
@@ -209,13 +230,15 @@ do
     reader:close('done')
 
     local listener = assert(socket.listen_inet('127.0.0.1', 0, { label = 'direct-listener' }))
-    assert_twins(listener, { 'local_address', 'accept', 'close', 'closed' }, 'listener')
+    assert_twins(listener, { 'ready', 'local_address', 'accept', 'request_close', 'closed' }, 'listener')
+    assert_no_op_twins(listener, { 'close' }, 'listener')
     local address = listener:local_address()
     local client_task = fibers.spawn(function()
       local dial = assert(socket.dial(socket.inet_address(address.host, address.port), {
         label = 'direct-client',
       }))
-      assert_twins(dial, { 'result', 'report', 'close', 'closed' }, 'dial')
+      assert_twins(dial, { 'result', 'report', 'request_close', 'closed' }, 'dial')
+      assert_no_op_twins(dial, { 'close' }, 'dial')
       local client = assert(dial:result())
       client:write('ping\n')
       assert_eq(client:read_line(), 'pong')
@@ -233,7 +256,8 @@ do
 
     local datagram_a = assert(socket.udp_ipv4('127.0.0.1', 0))
     local datagram_b = assert(socket.udp_ipv4('127.0.0.1', 0))
-    assert_twins(datagram_a, { 'local_address', 'send_to', 'receive_from', 'flush', 'close', 'closed' }, 'datagram')
+    assert_twins(datagram_a, { 'ready', 'local_address', 'send_to', 'receive_from', 'flush', 'request_close', 'closed' }, 'datagram')
+    assert_no_op_twins(datagram_a, { 'close' }, 'datagram')
     datagram_a:send_to('packet', datagram_b:local_address())
     datagram_a:flush()
     assert_eq(assert(datagram_b:receive_from()).data, 'packet')
@@ -259,12 +283,13 @@ do
       'launch_failed',
       'launch_result',
       'result',
-      'signal',
-      'terminate',
-      'kill',
+      'submit_signal',
+      'submit_terminate',
+      'submit_kill',
       'request_close',
       'closed',
     }, 'process')
+    assert_no_op_twins(child, { 'signal', 'terminate', 'kill', 'communicate', 'close' }, 'process')
     local captured = assert(child:communicate({ stdout_limit = 16, stderr_limit = 16 }))
     assert_eq(captured.status.code, 0)
     assert_truthy(child:close())

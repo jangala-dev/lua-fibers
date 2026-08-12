@@ -476,7 +476,7 @@ do
         { scope = owner, read = true, write = true, label = 'reactor-retirement-stream' }
       )
     )
-    rt:perform(stream:abort_op('finished'))
+    rt:perform(stream:request_abort_op('finished')); rt:perform(stream:closed_op())
     closed = rt:perform(stream:closed_op())
   end):label('root')
   drive_until(rt, function()
@@ -521,8 +521,8 @@ do
   assert_nil(writer:reader())
   assert_eq(rt.host_reactor:_registration_count(), 2)
   rt:spawn_raw(function()
-    rt:perform(reader:abort_op('test complete'))
-    rt:perform(writer:abort_op('test complete'))
+    rt:perform(reader:request_abort_op('test complete')); rt:perform(reader:closed_op())
+    rt:perform(writer:request_abort_op('test complete')); rt:perform(writer:closed_op())
   end):label('close-directional')
   drive_until(rt, function()
     return rt.host_reactor:_registration_count() == 0
@@ -563,7 +563,7 @@ do
   assert_eq(ok, false)
   assert_truthy(tostring(err):find('not writable', 1, true))
   rt:spawn_raw(function()
-    rt:perform(reader:abort_op('test complete'))
+    rt:perform(reader:request_abort_op('test complete')); rt:perform(reader:closed_op())
   end):label('close')
   drive_until(rt, function()
     return rt.host_reactor:_registration_count() == 0
@@ -588,7 +588,7 @@ do
       read = false,
       write = true,
     }))
-    rt:perform(stream:abort_op('done'))
+    rt:perform(stream:request_abort_op('done')); rt:perform(stream:closed_op())
     closed, close_err = rt:perform(stream:closed_op())
   end):label('root')
   drive_until(rt, function()
@@ -686,7 +686,7 @@ do
   assert_eq(stream._read_registration.key, 'direction-read-key')
   assert_eq(stream._write_registration.key, 'direction-write-key')
   rt:spawn_raw(function()
-    rt:perform(stream:close_op('done'))
+    rt:perform(stream:request_close_op('done')); rt:perform(stream:closed_op())
     rt:perform(stream:closed_op())
   end):label('direction-key-close')
   drive_until(rt, function()

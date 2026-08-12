@@ -42,7 +42,23 @@ local function dispose_handle(handle, primary, action, address)
   )
 end
 
-function Connection.from_host(rt, scope, handle, opts)
+function Connection.from_host_op(scope, handle, opts)
+  -- Address resolution is causal host work and must happen before this Option is
+  -- constructed.  A resolved Unix-domain endpoint may legitimately be unnamed,
+  -- so nil is a value here rather than evidence that resolution was skipped.
+  if opts.addresses_resolved ~= true then
+    error('Connection.from_host_op requires addresses to be resolved before construction', 2)
+  end
+  return IO.handle_stream_op(scope, handle, {
+    label = opts.label,
+    read = true,
+    write = true,
+    local_address = opts.local_address,
+    peer_address = opts.peer_address,
+  }, opts)
+end
+
+function Connection.open_from_host(rt, scope, handle, opts)
   local action = opts.action or 'open_connection'
   local addressed, local_address, peer_address = Protected.pcall(function()
     local local_value = opts.local_address
@@ -57,15 +73,15 @@ function Connection.from_host(rt, scope, handle, opts)
   end
 
   local opened, connection = Protected.pcall(function()
-    return IO.masked_perform(rt, IO.handle_stream_op(scope, handle, {
-      label = opts.label, read = true, write = true,
-    }, opts))
+    local resolved = IO.copy_table(opts)
+    resolved.local_address, resolved.peer_address = local_address, peer_address
+    resolved.addresses_resolved = true
+    return IO.masked_perform(rt, Connection.from_host_op(scope, handle, resolved))
   end)
   if not opened then
     local failure = IOError.normalise(connection, { domain = 'socket', action = action, address = opts.address })
     return dispose_handle(handle, failure, action, opts.address)
   end
-  connection:_set_addresses(local_address, peer_address)
   return connection
 end
 

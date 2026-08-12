@@ -155,18 +155,19 @@ function Task:body_result_op()
   return execution(self).body_result:success_op()
 end
 
--- `body_result_op` observes immediate execution. `await_op` waits for complete
--- Lifetime closure, including children and closure.
+-- `body_result_op` observes immediate execution. `outcome_op` observes complete
+-- Lifetime closure, including children and closure. `await` is the participant-
+-- level convenience which raises a failed structured Scope result; there is no
+-- `await_op` because raising after a later causal observation is not one Option.
 
 function Task:outcome_op()
   return self._lifetime:outcome_op()
 end
 
-function Task:await_op()
-  return self:outcome_op():wrap(function(result)
-    if ScopeResult.is(result) then return result:raise() end
-    return result
-  end)
+function Task:await()
+  local result = perform(self:outcome_op())
+  if ScopeResult.is(result) then return result:raise() end
+  return result
 end
 
 function Task:request_cancel_op(reason)
@@ -187,7 +188,7 @@ end
 
 
 
-Direct.install(Task, { 'await', 'request_cancel' })
+Direct.install(Task, { 'request_cancel' })
 
 Task.Exit = Exit
 return Task

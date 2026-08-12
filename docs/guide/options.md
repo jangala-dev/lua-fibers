@@ -24,9 +24,26 @@ Perform the description with:
 local value = fibers.perform(receive)
 ```
 
-The two forms have the same values, errors, cancellation and lifetime effects.
+The two forms have the same values, errors, cancellation and lifetime effects. When both names exist, this is a naming invariant: `foo(...)` means exactly `fibers.perform(foo_op(...))`, apart from ordinary argument/default handling.
 
-Use direct methods for ordinary sequential fiber code. Ask for an option when the action must be combined with another possible action.
+Not every operation which takes time is a causal procedure. An `_op` is appropriate
+when the caller's meaning can still be one commit against managed state, even if
+already-owned drivers or reactors must make progress before that world becomes
+available. For example, `read_exactly_op(n)` and bounded `read_all_op({ max = n })`
+may wait through many host reads, but no participant byte consumption occurs until
+the complete read fact commits.
+
+A procedure has no same-stem `_op` twin when *the caller's own meaning* necessarily
+requires one commit to cause later work before a second transactional fact can
+exist. A host-backed `close()` is the standard example: `request_close_op()` must
+commit before shutdown can run, and `closed_op()` observes its later completion.
+Likewise, host-backed `open()` may submit/admit an object and then wait for
+`ready_op()`. Giving either complete procedure a `close_op()` or `open_op()` would
+hide a real causal boundary.
+
+Use direct methods for ordinary sequential fiber code. Ask for an option when the
+action itself is one coherent transaction and must be combined with another
+possible action.
 
 ## `perform`
 

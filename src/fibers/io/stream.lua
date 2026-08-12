@@ -18,6 +18,7 @@ local OPEN_OPTIONS = {
   scope = true, label = true, read = true, write = true,
   read_capacity = true, write_capacity = true,
   read_chunk_size = true, write_chunk_size = true,
+  local_address = true, peer_address = true,
 }
 
 local function host_stream(label, opts)
@@ -77,12 +78,24 @@ function HostStream.open_op(handle, opts)
       error('Stream HostHandle requires ' .. capability .. ' capability', 3)
     end
   end
-  local runtime = Runtime.current()
+  -- Option elaboration may occur inside Op.guard, where there is deliberately no
+  -- participant Runtime.current().  A target Scope is already bound before it can
+  -- own a host Stream, so use that structural binding.  Creating the Runtime's
+  -- reactor remains a participant-side action; speculative elaboration may only
+  -- reuse the reactor which the surrounding host facility has already established.
+  local current = Runtime.current()
+  local runtime = current or (scope._lifetime and scope._lifetime._runtime)
   if not runtime then
-    error('Stream.open_op requires a current runtime', 3)
+    error('Stream.open_op requires a runtime-bound Scope', 3)
   end
   local label = opts.label or Label.describe(handle, handle._fibers_id or 'host-stream')
-  local reactor = Reactor.for_runtime(runtime)
+  local reactor = runtime.host_reactor
+  if not reactor then
+    if current ~= runtime then
+      error('Stream.open_op cannot create a host reactor during speculative elaboration', 3)
+    end
+    reactor = Reactor.for_runtime(runtime)
+  end
   local stream = host_stream(label, {
     handle = handle,
     read = opts.read,
@@ -90,6 +103,9 @@ function HostStream.open_op(handle, opts)
     read_capacity = opts.read_capacity,
     write_capacity = opts.write_capacity,
   })
+  if opts.local_address ~= nil or opts.peer_address ~= nil then
+    stream:_set_addresses(opts.local_address, opts.peer_address)
+  end
   local registrations, children = {}, {}
   attach_direction(stream, 'read', reactor, handle, opts.read_chunk_size or 4096, registrations, children)
   attach_direction(stream, 'write', reactor, handle, opts.write_chunk_size or 4096, registrations, children)

@@ -32,7 +32,7 @@ do
   local host = SimulatedHost.new({ sockets = true, auto_advance_time = false })
   fibers.run(function()
     local listener, listen_err =
-      fibers.perform(socket.listen_inet_op('127.0.0.1', 0, { label = 'echo-listener' }))
+      socket.listen_inet('127.0.0.1', 0, { label = 'echo-listener' })
     assert_truthy(listener, tostring(listen_err))
     local local_address = listener:local_address()
     assert_truthy(local_address.port ~= 0)
@@ -49,7 +49,7 @@ do
       assert_eq(fibers.perform(client:write_op('ping\n')), 5)
       local response, read_err = fibers.perform(client:read_line_op())
       assert_eq(response, 'pong', tostring(read_err))
-      assert_eq(fibers.perform(client:close_op('client complete')), true)
+      assert_eq(client:close('client complete'), true)
     end):label('socket-client')
 
     local server, accept_err = fibers.perform(listener:accept_op(fibers.current_scope()))
@@ -58,9 +58,9 @@ do
     assert_eq(request, 'ping', tostring(read_err))
     assert_eq(fibers.perform(server:write_op('pong\n')), 5)
     assert_eq(fibers.perform(server:flush_op()), true)
-    assert_eq(fibers.perform(server:close_op('server complete')), true)
-    fibers.perform(client_task:await_op())
-    assert_eq(fibers.perform(listener:close_op('test complete')), true)
+    assert_eq(server:close('server complete'), true)
+    client_task:await()
+    assert_eq(listener:close('test complete'), true)
     assert_eq(fibers.perform(listener:closed_op()), true)
   end, { host = host })
 end
@@ -85,7 +85,7 @@ do
     before = before + 1
   end
   fibers.run(function()
-    local result = fibers.perform(Op.always('winner'):or_else(socket.listen_inet_op('127.0.0.1', 8123)))
+    local result = fibers.perform(Op.always('winner'):or_else(socket.submit_listen_inet_op('127.0.0.1', 8123)))
     assert_eq(result, 'winner')
   end, { host = host })
   local after = 0
@@ -99,7 +99,7 @@ end
 do
   local listener, err
   fibers.run(function()
-    listener, err = fibers.perform(socket.listen_inet_op('127.0.0.1', 0))
+    listener, err = socket.listen_inet('127.0.0.1', 0)
   end, {
     host = PureHost.new({
       now = function()

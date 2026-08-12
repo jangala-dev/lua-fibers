@@ -456,23 +456,19 @@ local function manual_process(Fd)
   end
 
 
-  function Class:complete_op(status)
-    status = status or ProcessCore.exited(0)
-    return self.exit_completion:publish_success_op(status):wrap(function(ok, err)
-      if not ok then
-        return nil, err
-      end
-      self.status, self.reaped = status, true
-      for _, handle in pairs(self.child_endpoints or {}) do
-        if handle then
-          handle:close('manual process exit')
-        end
-      end
-      return true
-    end)
-  end
+  -- Process completion is a causal test-host procedure rather than one Option:
+  -- publishing exit is the commit point; host bookkeeping follows afterwards.
   function Class:complete(status)
-    return perform(self:complete_op(status))
+    status = status or ProcessCore.exited(0)
+    local ok, err = perform(self.exit_completion:publish_success_op(status))
+    if not ok then return nil, err end
+    self.status, self.reaped = status, true
+    for _, handle in pairs(self.child_endpoints or {}) do
+      if handle then
+        handle:close('manual process exit')
+      end
+    end
+    return true
   end
   function Class:start()
     if self.started then

@@ -290,6 +290,11 @@ local function pending_status(engine, refs, unknown)
     local values = refs[i] and refs[i][Proof.INTERESTS]
     for j = 1, #(values or {}) do interests[#interests + 1] = values[j] end
   end
+  local internally_progressed = Interest._service_internal(engine.runtime, interests)
+  if internally_progressed then
+    clear(refs)
+    return { tag = 'found', kind = 'internal', value = true }
+  end
   local waits = Interest.summarise(interests)
   clear(refs)
   if unknown then

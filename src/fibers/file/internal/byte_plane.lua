@@ -7,24 +7,19 @@
 local Op = require('fibers.op')
 local IOError = require('fibers.io.error')
 local FlowErrors = require('fibers.resource.flow.errors')
-local ByteProtocol = require('fibers.internal.byte_protocol')
 local perform = require('fibers.perform')
 
 local BytePlane = {}
 BytePlane.DEFAULT_CHUNK = 16 * 1024
 BytePlane.DEFAULT_MAX = 16 * 1024 * 1024
 
-function BytePlane.validate_read_limits(opts, level)
+function BytePlane.validate_read_max(opts, level)
   local max = opts and opts.max or BytePlane.DEFAULT_MAX
-  local chunk = opts and opts.chunk_size or BytePlane.DEFAULT_CHUNK
   level = (level or 1) + 1
-  if type(max) ~= 'number' or max < 0 or max ~= math.floor(max) then
-    error('file read max must be a non-negative integer', level)
+  if type(max) ~= 'number' or max < 0 or max ~= math.floor(max) or max == math.huge then
+    error('file read max must be a finite non-negative integer', level)
   end
-  if type(chunk) ~= 'number' or chunk < 1 or chunk ~= math.floor(chunk) then
-    error('file read chunk_size must be a positive integer', level)
-  end
-  return max, chunk
+  return max
 end
 
 local function count(value, label)
@@ -69,7 +64,14 @@ end
 
 function BytePlane.invalidate_read_op(file)
   if not file._read_flow then return Op.always(0) end
-  return file._read_flow:outlet():_discard_available_op():and_then(Op.guard(function(discarded)
+  return file._read_flow:outlet():_discard_available_op():and_then(Op.guard(function(discarded, discard_err)
+    -- Structural closure may retire the private Flow endpoint before a racing
+    -- file-close invalidation is elaborated.  At that point the Flow retains no
+    -- readable bytes for this file, so there is no rewind debt to record.
+    if discarded == nil and discard_err == FlowErrors.RETIRED then discarded = 0 end
+    if discarded == nil then
+      error('file read invalidation failed: ' .. tostring(discard_err), 0)
+    end
     return file._read_generation:bump_op()
       :and_then(file._rewind:add_op(discarded))
       :and_then(file._eof:write_op(false))
@@ -79,20 +81,6 @@ end
 
 local function eof_fallback(file, op)
   return op:or_else(file._eof:expect_op(true):map(function() return nil, FlowErrors.EOF end))
-end
-
-local function read_some_protocol(file, want)
-  local value, err = perform(file:read_op(want))
-  if value == '' then return nil, FlowErrors.EOF end
-  return value, err
-end
-
-local function peek_more_or_eof(file)
-  local buffered = file._read_flow:outlet():peek_exactly_op(1):map(function(byte, err)
-    return 'buffered', byte, err
-  end)
-  local at_eof = file._eof:expect_op(true):map(function() return 'eof' end)
-  return perform(buffered:or_else(at_eof))
 end
 
 local function write_parts(...)
@@ -127,10 +115,6 @@ function BytePlane.install(RegularFile)
     if n == 0 then return Op.always('') end
     local outlet, err = endpoint(self, 'read', 'read_exactly')
     if not outlet then return Op.always(nil, err) end
-    local capacity = self._read_flow._capacity
-    if capacity ~= math.huge and n > capacity then
-      return Op.always(nil, BytePlane.normalise_error(self, 'read_exactly', FlowErrors.CAPACITY))
-    end
     return self._eof:read_op():and_then(Op.guard(function(at_eof)
       local read = at_eof and outlet:_take_available_op(n) or outlet:read_exactly_op(n)
       return read:map(function(value, read_err)
@@ -143,32 +127,20 @@ function BytePlane.install(RegularFile)
     end))
   end
 
-  function RegularFile:read_exactly(n)
-    n = count(n, 'File:read_exactly')
-    if n == 0 then return '' end
-    local value, err, partial = ByteProtocol.read_exactly(
-      function(want) return read_some_protocol(self, want) end, n, FlowErrors.EOF)
-    if value ~= nil then return value end
-    if err ~= FlowErrors.EOF then return nil, err end
-    return nil, IOError.eof('file', 'read_exactly', {
-      path = self._path, expected = n, received = #(partial or ''),
-    })
-  end
-
   function RegularFile:read_line_op(keep)
     local outlet, err = endpoint(self, 'read', 'read_line')
     if not outlet then return Op.always(nil, err) end
-    local capacity = self._read_flow._capacity
-    local line = outlet:read_line_op({
-      keep_terminator = keep == true,
-      max = capacity == math.huge and BytePlane.DEFAULT_MAX or math.max(0, capacity - 1),
-    })
-    local preferred = line:map(function(value, read_err) return 'line', value, read_err end)
+    local maximum = BytePlane.DEFAULT_MAX
+    local line = outlet:read_line_op({ keep_terminator = keep == true, max = maximum })
+      :map(function(value, read_err) return 'line', value, read_err end)
     local at_eof = self._eof:expect_op(true)
-      :and_then(outlet:read_some_op(capacity):or_else(Op.always('')))
+      :and_then(outlet:_take_all_available_op(maximum))
       :map(function(value, read_err) return 'eof', value, read_err end)
-    return preferred:or_else(at_eof):map(function(source, value, read_err)
-      if source == 'eof' then return value ~= '' and value or nil end
+    return line:or_else(at_eof):map(function(source, value, read_err)
+      if source == 'eof' then
+        if value ~= nil then return value ~= '' and value or nil end
+        return nil, BytePlane.normalise_error(self, 'read_line', read_err)
+      end
       if value ~= nil then return value end
       if read_err == nil or read_err == FlowErrors.EOF then return nil end
       return nil, BytePlane.normalise_error(self, 'read_line', read_err)
@@ -176,35 +148,31 @@ function BytePlane.install(RegularFile)
   end
 
   function RegularFile:read_all_op(opts)
-    local maximum = BytePlane.validate_read_limits(opts, 2)
+    if opts and opts.chunk_size ~= nil then
+      error('File:read_all_op does not accept chunk_size; configure read_chunk_size when opening the file', 2)
+    end
+    local maximum = BytePlane.validate_read_max(opts, 2)
     local outlet, err = endpoint(self, 'read', 'read_all')
     if not outlet then return Op.always(nil, err) end
-    return self._eof:read_op():and_then(Op.guard(function(at_eof)
-      local read = at_eof and outlet:_take_all_available_op(maximum) or outlet:read_all_op({ max = maximum })
-      return read:map(function(value, read_err)
-        if value ~= nil then return value end
-        return nil, BytePlane.normalise_error(self, 'read_all', read_err)
-      end)
-    end))
-  end
 
-  function RegularFile:read_all(opts)
-    local maximum, chunk = BytePlane.validate_read_limits(opts, 2)
-    local value, err = ByteProtocol.read_all(
-      function(want) return read_some_protocol(self, want) end,
-      function()
-        local source, byte, read_err = peek_more_or_eof(self)
-        if source == 'eof' then return nil, FlowErrors.EOF end
-        return byte, read_err
-      end,
-      maximum, chunk, FlowErrors.EOF, FlowErrors.TOO_LARGE)
-    if value ~= nil then return value end
-    if err == FlowErrors.TOO_LARGE then
-      return nil, IOError.system('file', 'read_all', 'file exceeds configured maximum', 'EFBIG', nil, {
-        path = self._path, max = maximum,
-      })
-    end
-    return nil, BytePlane.normalise_error(self, 'read_all', err)
+    -- File EOF is a managed cursor fact rather than Flow input closure.  The
+    -- two positive terminal facts are therefore independent: max+1 buffered
+    -- bytes prove oversize, while EOF permits bounded consumption of everything
+    -- retained.  The max+1 branch also supplies the elastic-capacity demand.
+    local too_large = outlet:peek_exactly_op(maximum + 1):map(function(value, read_err)
+      if value ~= nil then return nil, FlowErrors.TOO_LARGE end
+      return nil, read_err
+    end)
+    local at_eof = self._eof:expect_op(true):and_then(outlet:_take_all_available_op(maximum))
+    return Op.choice(too_large, at_eof):map(function(value, read_err)
+      if value ~= nil then return value end
+      if read_err == FlowErrors.TOO_LARGE then
+        return nil, IOError.system('file', 'read_all', 'file exceeds configured maximum', 'EFBIG', nil, {
+          path = self._path, max = maximum,
+        })
+      end
+      return nil, BytePlane.normalise_error(self, 'read_all', read_err)
+    end)
   end
 
   function RegularFile:write_op(bytes)
@@ -212,8 +180,8 @@ function BytePlane.install(RegularFile)
     if bytes == '' then return Op.always(0) end
     local inlet, err = endpoint(self, 'write', 'write')
     if not inlet then return Op.always(nil, err) end
-    local capacity = self._write_flow._capacity
-    if capacity ~= math.huge and #bytes > capacity then
+    local limit = self._write_flow._write_limit
+    if limit ~= math.huge and #bytes > limit then
       return Op.always(nil, BytePlane.normalise_error(self, 'write', FlowErrors.CAPACITY))
     end
     return inlet:write_op(bytes):and_then(Op.guard(function(n, write_err)
@@ -238,19 +206,17 @@ function BytePlane.install(RegularFile)
     end))
   end
 
-  function RegularFile:write_all_op(bytes) return self:write_op(bytes) end
-
-  function RegularFile:write_all(bytes)
-    if type(bytes) ~= 'string' then error('File:write_all expects a string', 2) end
-    if bytes == '' then return 0 end
-    local capacity = self._write_flow and self._write_flow._capacity or 0
-    if capacity == 0 then
-      local _, err = endpoint(self, 'write', 'write_all')
-      if err then return nil, err end
-      return nil, BytePlane.normalise_error(self, 'write_all', FlowErrors.CAPACITY)
-    end
-    local chunk = capacity == math.huge and #bytes or capacity
-    return ByteProtocol.write_all(function(part) return perform(self:write_op(part)) end, bytes, chunk)
+  function RegularFile:write_all_op(bytes)
+    if type(bytes) ~= 'string' then error('File:write_all_op expects a string', 2) end
+    if bytes == '' then return Op.always(0) end
+    local inlet, err = endpoint(self, 'write', 'write_all')
+    if not inlet then return Op.always(nil, err) end
+    return inlet:write_all_op(bytes):and_then(Op.guard(function(n, write_err)
+      if n == nil then return Op.always(nil, BytePlane.normalise_error(self, 'write_all', write_err)) end
+      return BytePlane.invalidate_read_op(self)
+        :and_then(self._accepted:add_op(n))
+        :map(function() return n end)
+    end))
   end
 
   function RegularFile:write(...)

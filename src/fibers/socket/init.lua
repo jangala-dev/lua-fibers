@@ -55,35 +55,64 @@ local function numeric(address, label)
   return address
 end
 
-Socket.listen_op = Listener.listen_op
+Socket.submit_listen_op = Listener.submit_listen_op
+Socket.listen = Listener.listen
 
-function Socket.listen_ipv4_op(host, port, opts)
-  return Listener.listen_op(Address.ipv4(host, port), opts)
+function Socket.submit_listen_ipv4_op(host, port, opts)
+  return Listener.submit_listen_op(Address.ipv4(host, port), opts)
 end
 
-function Socket.listen_ipv6_op(host, port, opts)
-  return Listener.listen_op(Address.ipv6(host, port, address_options(opts)), operation_options(opts))
+function Socket.listen_ipv4(host, port, opts)
+  return Listener.listen(Address.ipv4(host, port), opts)
 end
 
-function Socket.listen_inet_op(host, port, opts)
-  return Listener.listen_op(
-    numeric(Address.inet(host, port, address_options(opts)), 'socket.listen_inet_op'),
+function Socket.submit_listen_ipv6_op(host, port, opts)
+  return Listener.submit_listen_op(Address.ipv6(host, port, address_options(opts)), operation_options(opts))
+end
+
+function Socket.listen_ipv6(host, port, opts)
+  return Listener.listen(Address.ipv6(host, port, address_options(opts)), operation_options(opts))
+end
+
+function Socket.submit_listen_inet_op(host, port, opts)
+  return Listener.submit_listen_op(
+    numeric(Address.inet(host, port, address_options(opts)), 'socket.submit_listen_inet_op'),
     operation_options(opts)
   )
 end
 
-function Socket.listen_unix_op(path, opts)
-  return Listener.listen_op(Address.unix(path), opts)
+function Socket.listen_inet(host, port, opts)
+  return Listener.listen(
+    numeric(Address.inet(host, port, address_options(opts)), 'socket.listen_inet'),
+    operation_options(opts)
+  )
 end
 
-Socket.udp_op = Datagram.udp_op
-
-function Socket.udp_ipv4_op(host, port, opts)
-  return Datagram.udp_op(Address.ipv4(host, port), opts)
+function Socket.submit_listen_unix_op(path, opts)
+  return Listener.submit_listen_op(Address.unix(path), opts)
 end
 
-function Socket.udp_ipv6_op(host, port, opts)
-  return Datagram.udp_op(Address.ipv6(host, port, address_options(opts)), operation_options(opts))
+function Socket.listen_unix(path, opts)
+  return Listener.listen(Address.unix(path), opts)
+end
+
+Socket.submit_udp_op = Datagram.submit_udp_op
+Socket.udp = Datagram.udp
+
+function Socket.submit_udp_ipv4_op(host, port, opts)
+  return Datagram.submit_udp_op(Address.ipv4(host, port), opts)
+end
+
+function Socket.udp_ipv4(host, port, opts)
+  return Datagram.udp(Address.ipv4(host, port), opts)
+end
+
+function Socket.submit_udp_ipv6_op(host, port, opts)
+  return Datagram.submit_udp_op(Address.ipv6(host, port, address_options(opts)), operation_options(opts))
+end
+
+function Socket.udp_ipv6(host, port, opts)
+  return Datagram.udp(Address.ipv6(host, port, address_options(opts)), operation_options(opts))
 end
 
 Socket.resolve_op = Resolver.resolve_op
@@ -106,14 +135,14 @@ end
 Socket.dial_op = Dial.dial_op
 
 Direct.install_static(Socket, {
-  'listen',
-  'listen_ipv4',
-  'listen_ipv6',
-  'listen_inet',
-  'listen_unix',
-  'udp',
-  'udp_ipv4',
-  'udp_ipv6',
+  'submit_listen',
+  'submit_listen_ipv4',
+  'submit_listen_ipv6',
+  'submit_listen_inet',
+  'submit_listen_unix',
+  'submit_udp',
+  'submit_udp_ipv4',
+  'submit_udp_ipv6',
   'resolve',
   'resolve_name',
   'dial',

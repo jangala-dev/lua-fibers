@@ -292,7 +292,7 @@ do
       return socket.ipv4_address('192.0.2.2', 80)
     end
 
-    local connection, err = Connection.from_host(
+    local connection, err = Connection.open_from_host(
       Runtime.current(),
       scope,
       handle,
@@ -325,7 +325,7 @@ do
     function handle:peer_address() return socket.ipv4_address('192.0.2.2', 80) end
 
     local connection
-    connection, returned_err = Connection.from_host(
+    connection, returned_err = Connection.open_from_host(
       Runtime.current(), scope, handle,
       { action = 'open_connection', address = socket.ipv4_address('192.0.2.1', 80) }
     )

@@ -32,7 +32,7 @@ losing_host.create_datagram = function(self, ...)
   return create(self, ...)
 end
 fibers.run(function()
-  local value = fibers.perform(Op.always('winner'):or_else(socket.udp_ipv4_op('127.0.0.1', 0)))
+  local value = fibers.perform(Op.always('winner'):or_else(socket.submit_udp_ipv4_op('127.0.0.1', 0)))
   assert_eq(value, 'winner')
 end, { host = losing_host })
 assert_eq(acquisitions, 0, 'losing datagram option must remain inert')

@@ -140,7 +140,7 @@ test('task bodies may perform while protected for result reporting', function()
     local task = fibers.perform(scope:spawn_op(function()
       return fibers.perform(FibersOp.always('task-ok'))
     end, { label = 'protected-task' }))
-    value = fibers.perform(task:await_op())
+    value = task:await()
   end).runtime_status
 
   eq(st.tag, 'found')

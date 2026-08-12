@@ -95,7 +95,7 @@ do
     eq(starts, 0, 'defeated spawn must not start or consume its body')
 
     task = runtime:perform(spawn)
-    returned = runtime:perform(task:await_op())
+    returned = runtime:perform(task:outcome_op()):raise()
     eq(starts, 1, 'committed spawn starts exactly once')
     scope:retire(task, 'phase-spawn-done')
   end):label('phase-spawn-driver')

@@ -273,7 +273,6 @@ local Sleep = require('fibers.sleep')
 ### `Task:lifetime() -> Lifetime`
 ### `Task:body_result_op() -> Op`
 ### `Task:outcome_op() -> Op`
-### `Task:await_op() -> Op`
 ### `Task:await() -> ...`
 ### `Task:request_cancel_op([reason]) -> Op`
 ### `Task:request_cancel([reason])`
@@ -548,8 +547,8 @@ local outlet = flow:outlet()
 
 ```lua
 inlet:write_op(value)
-inlet:write_some_op(value)
 inlet:write_all_op(value)
+inlet:write_some_op(value)
 inlet:reserve_some_op(n [, holder, meta])
 inlet:flush_op()
 inlet:close_op()
@@ -565,7 +564,7 @@ outlet:read_exactly_op(n)
 outlet:peek_exactly_op(n)
 outlet:read_until_op(separator [, opts])
 outlet:read_line_op([opts])
-outlet:read_all_op([opts])
+outlet:read_all_op(opts)
 outlet:drop_op(n)
 outlet:splice_to_op(inlet, n)
 outlet:lease_some_op(n [, holder, meta])
@@ -581,12 +580,19 @@ flow:abort_op()
 flow:closed_op()
 ```
 
-The `_op` byte methods each describe one transactional byte decision. On bounded
-Flows, impossible exact/admission requests return `Flow.Error.CAPACITY`; delimiter
-and whole-input operations return the same error if the committed buffer saturates
-before their atomic fact can be established. Direct `read_exactly`, `read_all` and
-`write_all` are procedural conveniences which may perform several byte decisions.
-Other listed public operations have ordinary direct twins.
+The `_op` byte methods each describe one transactional byte decision, and every
+listed operation has the ordinary direct twin which performs it. A finite Flow
+capacity is an initial working high-water mark rather than preallocated storage.
+Exact bounded reads (`read_exactly_op`, `peek_exactly_op`, delimiter reads and
+`read_all_op`) may ask the runtime to raise that high-water mark while they wait;
+no bytes are consumed until the read transaction commits. `read_all_op` requires a
+finite `opts.max` and grows far enough to distinguish EOF within the bound from
+`Flow.Error.TOO_LARGE` without consuming an oversized input. The finite constructor
+limit also remains the payload ceiling for ordinary `write_op`; adaptive storage
+growth does not silently widen that operation policy. `write_all_op` explicitly asks
+for elastic whole-payload admission and may transactionally enlarge the working
+high-water mark to the size of one known payload. Growth changes only the logical
+high-water mark: the Rope allocates storage for bytes actually retained.
 
 ## `fibers.stream`
 
@@ -609,20 +615,29 @@ stream:read_some_op(n)
 stream:read_exactly_op(n)
 stream:read_until_op(separator [, opts])
 stream:read_line_op([opts])
-stream:read_all_op([opts])
+stream:read_all_op(opts)
 stream:write_op(...)
-stream:write_some_op(bytes)
 stream:write_all_op(...)
+stream:write_some_op(bytes)
 stream:flush_op()
 stream:shutdown_read_op([reason])
 stream:shutdown_write_op([reason])
 stream:abort_write_op([reason])
-stream:close_op([reason])
-stream:abort_op([reason])
+stream:request_close_op([reason])
+stream:request_abort_op([reason])
 stream:closed_op()
+stream:close([reason])
+stream:abort([reason])
 ```
 
-The direct `read_exactly`, `read_all` and `write_all` methods are procedural conveniences over repeated bounded byte decisions; the corresponding `_op` methods remain one transaction. Other I/O operations have ordinary direct twins.
+`read_exactly`, bounded `read_all` and `write_all` are exact direct/Option pairs.
+Their Flow-backed Options may use elastic working capacity as described above while
+remaining one transaction. `write_op` is deliberately bounded by the Flow
+constructor's write-unit limit; `write_all_op` is the explicit elastic whole-write
+form. `request_close`/
+`request_close_op`, `request_abort`/`request_abort_op` and `closed`/`closed_op` are
+also exact pairs. `close()` and `abort()` are causal convenience protocols and
+therefore deliberately have no `_op` twin.
 
 ## `fibers.file`
 
@@ -631,18 +646,18 @@ Host-backed file operations require a compatible Runtime host.
 ### Static operations
 
 ```lua
-File.pipe_op([opts])
-File.open_op(path [, mode, opts])
-File.tmpfile_op([opts])
-File.read_all_op(path [, opts])
-File.write_all_op(path, bytes [, opts])
-File.rename_op(from, to [, opts])
-File.unlink_op(path [, opts])
-File.mkdir_op(path [, opts])
-File.mkdir_p_op(path [, opts])
+File.submit_pipe_op([opts])
+File.submit_open_op(path [, mode, opts])
+File.submit_tmpfile_op([opts])
+File.submit_read_all_op(path [, opts])
+File.submit_write_all_op(path, bytes [, opts])
+File.submit_rename_op(from, to [, opts])
+File.submit_unlink_op(path [, opts])
+File.submit_mkdir_op(path [, opts])
+File.submit_mkdir_p_op(path [, opts])
 ```
 
-Direct twins are `pipe`, `open`, `tmpfile`, `read_all`, `write_all`, `rename`, `unlink`, `mkdir` and `mkdir_p`.
+Each submission Option has an exact direct twin without `_op`, for example `File.submit_open()`. The higher-level `pipe`, `open`, `tmpfile`, `read_all`, `write_all`, `rename`, `unlink`, `mkdir` and `mkdir_p` methods are causal convenience procedures: they submit work and then observe its readiness or result, so they deliberately have no `_op` twin.
 
 Detached forms are typed by what has been admitted. Static path work such as `submit_read_all_op` returns a `File.Job`; `submit_open_op` returns the admitted `RegularFile`; RegularFile control submissions return a `File.Command`. Data-plane reads and writes have no Request layer: they transact directly on the file's Flow byte plane.
 
@@ -655,23 +670,32 @@ file:read_some_op(count)
 file:read_exactly_op(count)
 file:read_all_op([opts])
 file:write_op(bytes)
-file:write_some_op(bytes)
 file:write_all_op(bytes)
+file:write_some_op(bytes)
 file:read_line_op([keep])
-file:seek_op([whence, offset])
-file:flush_op()
-file:rename_op(path)
-file:sync_op([opts])
 file:submit_seek_op([whence, offset])
 file:submit_flush_op()
 file:submit_rename_op(path)
 file:submit_sync_op([opts])
-file:close_op([reason])
+file:request_close_op([reason])
 file:closed_op()
+file:close([reason])
 file:filename()
 ```
 
-`read_op`/`read_some_op`, `read_exactly_op`, `read_all_op`, `write_op`/`write_some_op` and `write_all_op` each describe one atomic Flow-backed byte decision. The direct `read_exactly`, `read_all` and `write_all` methods are shared procedural byte protocols and may cross the configured Flow capacity through repeated transactions. Other ordinary I/O operations have direct twins. Control submissions return a `File.Command`; `command:result_op()` observes the corresponding host-side barrier after admission.
+`read_op`/`read_some_op`, `read_exactly_op`, bounded `read_all_op`, `write_op`,
+`write_all_op` and `write_some_op` each describe one Flow-backed byte decision.
+`read_exactly`, `read_all` and `write_all` are their exact performing twins. The
+file driver continues to fill or drain the Flow while a whole-byte Option waits;
+elastic high-water growth allows a bounded exact fact to exceed the initial
+read-ahead/write capacity without splitting the participant transaction. A
+`read_all` maximum is finite (16 MiB by default for RegularFile convenience) and
+oversize failure does not consume the buffered file. Control submissions return a
+`File.Command`; `command:result_op()` observes the corresponding host-side barrier
+after admission. Direct `seek`, `flush`, `rename` and `sync` submit and then wait
+for that result, so they have no misleading `_op` twin. `request_close`/
+`request_close_op` and `closed`/`closed_op` are exact pairs; `close()` performs the
+complete causal close protocol.
 
 ## `fibers.process`
 
@@ -715,16 +739,19 @@ proc:stderr_op()
 proc:stderr()
 proc:launch_result_op()
 proc:result_op()
-proc:signal_op(signal [, target])
-proc:terminate_op()
-proc:kill_op()
+proc:submit_signal_op(signal [, target])
+proc:submit_terminate_op()
+proc:submit_kill_op()
 proc:request_close_op([reason])
 proc:closed_op()
+proc:signal(signal [, target])
+proc:terminate()
+proc:kill()
 proc:communicate([opts])
 proc:close([reason])
 ```
 
-The process PID and standard streams become available when launch commits. Their direct methods perform the corresponding focused Options; they are not immediate object-field reads.
+The process PID and standard streams become available when launch commits. Their direct methods perform the corresponding focused Options; they are not immediate object-field reads. Signal submissions return a request whose `result_op()` observes the supervisor-owned host action. The `signal`, `terminate` and `kill` conveniences submit and wait, so they deliberately have no `_op` twin.
 
 ### Helpers
 
@@ -742,14 +769,14 @@ Socket address values are provided through `fibers.net.address` and convenience 
 ### Listening
 
 ```lua
-Socket.listen_op(address [, opts])
-Socket.listen_ipv4_op(host, port [, opts])
-Socket.listen_ipv6_op(host, port [, opts])
-Socket.listen_inet_op(host, port [, opts])
-Socket.listen_unix_op(path [, opts])
+Socket.submit_listen_op(address [, opts])
+Socket.submit_listen_ipv4_op(host, port [, opts])
+Socket.submit_listen_ipv6_op(host, port [, opts])
+Socket.submit_listen_inet_op(host, port [, opts])
+Socket.submit_listen_unix_op(path [, opts])
 ```
 
-Direct twins omit `_op`.
+Exact direct twins omit `_op`. Submission admits and starts the Listener; `Socket.listen(...)` and its family-specific convenience forms additionally wait for Listener readiness and therefore have no `_op` twin.
 
 A Listener supports:
 
@@ -758,7 +785,8 @@ listener:accept_op([target_scope])
 listener:accept([target_scope])
 listener:local_address_op()
 listener:local_address()
-listener:close_op([reason])
+listener:request_close_op([reason])
+listener:request_close([reason])
 listener:closed_op()
 listener:close([reason])
 listener:closed()
@@ -788,7 +816,8 @@ dial:connected_op([target_scope])
 dial:failed_op()
 dial:result_op([target_scope])
 dial:report_op()
-dial:close_op([reason])
+dial:request_close_op([reason])
+dial:request_close([reason])
 dial:closed_op()
 dial:connect([target_scope])
 dial:result([target_scope])
@@ -797,10 +826,12 @@ dial:result([target_scope])
 ### Datagrams
 
 ```lua
-Socket.udp_op(address [, opts])
-Socket.udp_ipv4_op(host, port [, opts])
-Socket.udp_ipv6_op(host, port [, opts])
+Socket.submit_udp_op(address [, opts])
+Socket.submit_udp_ipv4_op(host, port [, opts])
+Socket.submit_udp_ipv6_op(host, port [, opts])
 ```
+
+Exact direct submission twins omit `_op`. `Socket.udp(...)` and its family-specific convenience forms submit the Datagram and then wait for readiness, so they have no `_op` twin.
 
 A Datagram supports:
 
@@ -808,13 +839,15 @@ A Datagram supports:
 udp:send_to_op(data, address)
 udp:receive_from_op([opts])
 udp:flush_op()
-udp:close_op([reason])
+udp:request_close_op([reason])
+udp:request_close([reason])
 udp:closed_op()
+udp:close([reason])
 udp:local_address_op()
 udp:local_address()
 ```
 
-Direct twins exist for local address, send, receive, flush, close and closed.
+Exact direct twins exist for readiness, local address, send, receive, flush, request-close and closed. `close()` is the complete causal close procedure and has no `_op` twin.
 
 ## `fibers.effect`
 

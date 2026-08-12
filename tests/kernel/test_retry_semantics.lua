@@ -100,7 +100,9 @@ do
   local got
   local st = fibers.try_run(function(scope)
     local task = fibers.perform(scope:spawn_op(function() return 'done' end, { label = 'absence-child' }))
-    got = fibers.perform(task:await_op():or_else(Op.always('fallback')))
+    got = fibers.perform(task:outcome_op():map(function(result)
+      return result.ok and result.values[1] or nil
+    end):or_else(Op.always('fallback')))
   end).runtime_status
   assert_status(st, 'found')
   assert_eq(got, 'done')

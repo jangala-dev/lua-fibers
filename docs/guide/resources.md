@@ -237,7 +237,7 @@ local inlet = flow:inlet()
 local outlet = flow:outlet()
 ```
 
-The capacity is the constructor argument; pass `nil` for an unbounded Flow. Capacity is semantic for atomic byte operations: a bounded Flow cannot establish an indivisible byte fact larger than the bytes it can retain. It is construction-time policy rather than a live-state observation. Attach optional diagnostic context separately with `:label(...)`.
+The constructor argument is the Flow's initial working capacity; pass `nil` for an unbounded Flow. Finite capacity is a high-water mark rather than preallocated storage. Whole bounded byte facts may raise it when that is necessary to remain one transaction. The Rope still allocates only for bytes actually retained. The same finite constructor value remains the payload ceiling for ordinary `write_op`, so administrative read growth does not silently change which bounded whole writes are valid. The current high-water mark is retained once grown; there is no eager shrink. Attach optional diagnostic context separately with `:label(...)`.
 
 A Flow has one stable producer endpoint, the `Inlet`, and one stable consumer
 endpoint, the `Outlet`:
@@ -252,8 +252,8 @@ The complete producer surface is:
 
 ```lua
 inlet:write_op(bytes)
-inlet:write_some_op(bytes)
 inlet:write_all_op(bytes)
+inlet:write_some_op(bytes)
 inlet:reserve_some_op(maximum, holder, meta)
 inlet:flush_op()
 inlet:close_op(reason)
@@ -262,11 +262,14 @@ inlet:fail_op(error)
 ```
 
 `write_op` accepts the complete string or waits. It returns the number of bytes
-accepted, or `nil, error`. On a bounded Flow, a string larger than the Flow capacity
-cannot be one atomic admission and returns `nil, Flow.Error.CAPACITY` without
-changing the Flow. `write_all_op` has the same one-transaction meaning; the direct
-`write_all(bytes)` convenience performs as many bounded `write_op` admissions as
-required.
+accepted, or `nil, error`. A string larger than the Flow's configured `write_op`
+unit limit returns `nil, Flow.Error.CAPACITY` without changing the Flow. `write_all_op` is the
+elastic whole-write form: because the complete finite payload is already known, its
+transaction may raise the high-water mark to the payload size and admit all bytes at
+once. It does **not** grow to absorb arbitrary existing backlog; if retained bytes
+leave insufficient room, it waits. This keeps repeated whole writes subject to
+backpressure rather than turning a finite Flow into an unbounded queue. `write_all`
+is exactly `perform(write_all_op(...))`.
 
 `write_some_op` accepts a non-empty prefix when capacity is available. It
 returns:
@@ -308,12 +311,25 @@ outlet:fail_op(error)
 `read_some_op` waits for at least one byte and returns no more than the requested
 maximum. At terminal EOF it returns `nil, Flow.Error.EOF`.
 
-`read_exactly_op` waits for the requested count as one transaction. If `count`
-exceeds a finite Flow capacity, success is structurally impossible and the Option
-returns `nil, Flow.Error.CAPACITY` immediately without consuming bytes. The direct
-`read_exactly(count)` convenience is procedural: it may perform several
-`read_some_op` decisions and therefore may read more than the Flow capacity. If EOF
-arrives first, both forms report:
+`read_exactly_op` waits for the requested count as one transaction. If the
+requested count exceeds the current working capacity, the pending exact read asks
+the runtime to raise that high-water mark; it still consumes nothing until all
+requested bytes are available and the transaction commits. `read_exactly(count)`
+is exactly `perform(read_exactly_op(count))`. This makes dependent protocol parsing
+composable without partial consumption:
+
+```lua
+local frame_op = outlet:read_exactly_op(2):and_then(Op.guard(function(header)
+  local length = decode_u16(header)
+  return outlet:read_exactly_op(length):map(function(body)
+    return { header = header, body = body }
+  end)
+end))
+```
+
+The header and body commit as one world. If the body is not yet available and
+another choice wins, neither read consumes bytes. If EOF arrives first, both
+forms report:
 
 ```text
 nil, Flow.Error.EOF, partial_bytes
@@ -329,11 +345,11 @@ outlet:read_until_op('\r\n\r\n', {
 ```
 
 `max` defaults to 8192. EOF before the separator returns `nil,
-Flow.Error.EOF, partial_bytes`. A bounded Flow may use a larger declared `max`: if
-the separator has not arrived and the committed buffer actually saturates before
-the operation can establish either success or the declared limit, the operation
-returns `nil, Flow.Error.CAPACITY` without consuming the buffered prefix. This
-prevents an impossible atomic wait from masquerading as ordinary suspension.
+Flow.Error.EOF, partial_bytes`. A finite Flow may use a declared `max` larger than
+its current working capacity. While the operation is pending the high-water mark
+may grow far enough to establish either the separator or the declared oversize
+condition. Crossing `max` returns `nil, Flow.Error.TOO_LARGE` without consuming the
+buffered prefix.
 
 Delimiter matching is incremental. Flow's persistent Rope retains a KMP search
 state for each active separator. The first search scans the retained bytes once;
@@ -355,24 +371,26 @@ outlet:read_line_op({
 A final unterminated line is returned normally. EOF with no retained bytes
 returns `nil, Flow.Error.EOF`.
 
-`read_all_op` requires an explicit bound:
+`read_all_op` requires an explicit finite bound:
 
 ```lua
 outlet:read_all_op({ max = 1024 * 1024 })
 ```
 
-Code which deliberately accepts unbounded input may pass `math.huge`. On a bounded
-Flow, `read_all_op` is still one atomic EOF fact: if the buffer saturates before EOF
-or `max + 1` bytes establish `TOO_LARGE`, it returns `Flow.Error.CAPACITY` without
-consuming. The direct `read_all({ max=..., chunk_size=... })` convenience instead
-consumes incrementally across repeated byte decisions and can therefore read a
-result much larger than the Flow capacity.
+The pending operation may raise the Flow high-water mark to `max + 1`. That extra
+byte is intentional: EOF at or below `max` commits the complete retained string;
+observing `max + 1` bytes commits `nil, Flow.Error.TOO_LARGE`. Neither a losing
+alternative nor an oversize result consumes a prefix. `math.huge` is rejected: a
+single transactional whole-input read must state the maximum memory/backpressure
+obligation it is prepared to create. `read_all(opts)` is exactly
+`perform(read_all_op(opts))`.
 
 `peek_exactly_op` waits until the requested prefix is available without
 consuming it. `drop_op` consumes exactly the requested count.
 
 `splice_to_op` moves exactly the requested count between Flows in one
-transactional composition.
+transactional composition. Its target side uses whole-write semantics, so a finite
+destination may raise its working high-water mark enough for that one payload.
 
 `close_op` means that the consumer has abandoned the Flow. Retained bytes are
 settled and future writes fail with `Flow.Error.BROKEN_PIPE`.
@@ -548,16 +566,17 @@ stream:read_line_op(opts)
 stream:read_all_op(opts)
 
 stream:write_op(bytes)
-stream:write_some_op(bytes)
 stream:write_all_op(bytes)
+stream:write_some_op(bytes)
 stream:flush_op()
 ```
 
 The `_op` methods delegate to one transactional decision on the configured Flow
-endpoints. The direct `read_exactly`, `read_all` and `write_all` conveniences are
-procedural byte protocols and may perform several such decisions when the requested
-result exceeds a finite Flow capacity. Facility authors use `reader()` and
-`writer()` when they need peeking, splicing or leases.
+endpoints. `read_exactly`, bounded `read_all` and `write_all` each have an exact
+same-stem `_op` twin and inherit Flow's elastic high-water rules. `write_op` remains
+the configured-limit-bounded whole-write statement; `write_all_op` is explicitly
+elastic for one known payload. Facility authors use `reader()` and `writer()` when
+they need peeking, splicing or leases.
 
 #### Stream closure
 
@@ -565,9 +584,12 @@ result exceeds a finite Flow capacity. Facility authors use `reader()` and
 stream:shutdown_read_op(reason)
 stream:shutdown_write_op(reason)
 stream:abort_write_op(reason)
-stream:close_op(reason)
-stream:abort_op(reason)
+stream:request_close_op(reason)
+stream:request_abort_op(reason)
 stream:closed_op()
+
+stream:close(reason)
+stream:abort(reason)
 ```
 
 `shutdown_read_op` abandons the read direction and retires its host reaction.
@@ -578,11 +600,14 @@ host half-shutdown and retires the write reaction.
 `abort_write_op` discards retained output and retires without waiting for host
 writability.
 
-`close_op` is graceful user closure: it abandons reading, drains writing and
-closes the HostHandle according to the Stream's local protocol.
+`request_close_op` transactionally initiates graceful closure: it abandons
+reading and requests draining write shutdown. `closed_op` observes completed
+local closure. The direct `close()` convenience performs the request, flushes the
+write direction where present, and then observes `closed_op()`.
 
-`abort_op` abandons both directions and discards queued output for prompt local
-closure. Scope cancellation and failure Closure use the abortive form.
+`request_abort_op` initiates abortive closure, abandoning both directions and
+discarding queued output. `abort()` requests it and then observes completion.
+Scope cancellation and failure Closure use the abortive request form.
 
 `closed_op` observes completed direction shutdown, HostHandle closure and any
 local close error. Complete retirement of the Stream Lifetime and its custody

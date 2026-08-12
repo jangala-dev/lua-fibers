@@ -116,7 +116,7 @@ local function mode_capabilities(mode)
   return parsed.read, parsed.write
 end
 
-local validate_read_limits = BytePlane.validate_read_limits
+local validate_read_max = BytePlane.validate_read_max
 
 local function validate_capacity(value, default, label)
   if value == nil then return default end
@@ -187,7 +187,7 @@ function RegularFile:filename()
 end
 
 function RegularFile:closed_op()
-  return IO.closed_after_driver_op(self._driver)
+  return IO.closed_after_driver_op(self._driver, nil, { require_returned = true })
 end
 
 BytePlane.install(RegularFile)
@@ -207,11 +207,10 @@ local function control_submission(file, kind, args, invalidate)
   end))
 end
 
-local function control_result(submission)
-  return submission:wrap(function(command, err)
-    if not command then return nil, err end
-    return command:result()
-  end)
+local function perform_control(submission)
+  local command, err = perform(submission)
+  if not command then return nil, err end
+  return command:result()
 end
 
 local function seek_args(whence, offset)
@@ -228,49 +227,62 @@ end
 function RegularFile:submit_seek_op(whence, offset)
   return control_submission(self, 'seek', seek_args(whence, offset), true)
 end
-function RegularFile:seek_op(whence, offset)
-  return control_result(self:submit_seek_op(whence, offset))
+function RegularFile:seek(whence, offset)
+  return perform_control(self:submit_seek_op(whence, offset))
 end
 function RegularFile:submit_flush_op()
   return control_submission(self, 'flush')
 end
-function RegularFile:flush_op()
-  return control_result(self:submit_flush_op())
+function RegularFile:flush()
+  return perform_control(self:submit_flush_op())
 end
 function RegularFile:submit_sync_op(opts)
   return control_submission(self, 'sync', { data_only = opts and opts.data_only == true })
 end
-function RegularFile:sync_op(opts)
-  return control_result(self:submit_sync_op(opts))
+function RegularFile:sync(opts)
+  return perform_control(self:submit_sync_op(opts))
 end
 function RegularFile:submit_rename_op(path)
   return control_submission(self, 'rename', { path = validate_path(path, 'submit_rename_op') })
 end
-function RegularFile:rename_op(path)
-  return control_result(self:submit_rename_op(validate_path(path, 'rename_op')))
+function RegularFile:rename(path)
+  return perform_control(self:submit_rename_op(validate_path(path, 'rename')))
 end
 
-function RegularFile:close_op(reason)
-  if self._lifetime:_close_requested() then return self:closed_op() end
-  local command = new_command('close', { reason = reason })
-  local close_ops = { invalidate = invalidate_read_op(self) }
-  if self._read_flow then
-    close_ops.read = self._read_flow:inlet():fail_op(file_closed_error(self, 'read', reason or 'file closing'))
-  end
-  if self._write_flow then
-    close_ops.write = self._write_flow:inlet():close_op(reason or 'file closing')
-  end
-  return Op.named_each(close_ops)
-    :and_then(self._accepted:read_op())
-    :and_then(Op.guard(function(target)
-      return self._control_tx:send_op({ command = command, target = target })
-        :and_then(self._control_tx:close_op(reason or 'file close requested'))
-    end))
-    :wrap(function()
-      local ok, err = command:result()
-      if not ok then return nil, err end
-      return self:closed()
-    end)
+function RegularFile:request_close_op(reason)
+  reason = reason or 'file closed'
+  local first = self._close_started:expect_op(false):and_then(self._close_started:write_op(true)):map(function()
+    return true
+  end)
+  local already = self._close_started:expect_op(true):map(function() return false end)
+  return first:or_else(already):and_then(Op.guard(function(first_request)
+    if not first_request then return Op.always(false, reason) end
+
+    local command = new_command('close', { reason = reason })
+    local close_ops = { invalidate = invalidate_read_op(self) }
+    if self._read_flow then
+      close_ops.read = self._read_flow:inlet():fail_op(file_closed_error(self, 'read', reason))
+    end
+    if self._write_flow then
+      close_ops.write = self._write_flow:inlet():close_op(reason)
+    end
+    return Op.named_each(close_ops)
+      :and_then(self._accepted:read_op())
+      :and_then(Op.guard(function(target)
+        return self._control_tx:send_op({ command = command, target = target }):and_then(Op.guard(function(sent, err)
+          if not sent then return Op.always(nil, err) end
+          return self._control_tx:close_op(reason):map(function()
+            return true, reason
+          end)
+        end))
+      end))
+  end))
+end
+
+function RegularFile:close(reason)
+  local requested, err = perform(self:request_close_op(reason))
+  if requested == nil then return nil, err end
+  return perform(self:closed_op())
 end
 
 local function rewind_backend(file, backend)
@@ -511,12 +523,13 @@ local function new_file_op(path, mode, opts, operation, temporary)
     _control_rx = control_rx,
     _read_flow = read_flow,
     _write_flow = write_flow,
-    _read_chunk_size = math.min(opts.read_chunk_size or opts.chunk_size or DEFAULT_CHUNK, read_capacity),
+    _read_chunk_size = opts.read_chunk_size or opts.chunk_size or DEFAULT_CHUNK,
     _write_chunk_size = opts.write_chunk_size or opts.chunk_size or DEFAULT_CHUNK,
     _read_generation = Counter.new(0),
     _rewind = Counter.new(0),
     _accepted = Counter.new(0),
     _eof = Cell.new(false),
+    _close_started = Cell.new(false),
     _ready_completion = Completion.new(),
     _provider_opts = opts,
     _temporary = temporary == true,
@@ -528,6 +541,7 @@ local function new_file_op(path, mode, opts, operation, temporary)
   Label.child(file._rewind, file, 'rewind')
   Label.child(file._accepted, file, 'accepted')
   Label.child(file._eof, file, 'eof')
+  Label.child(file._close_started, file, 'close_started')
   Label.child(file._ready_completion, file, 'ready')
 
   local children = {}
@@ -548,6 +562,7 @@ local function new_file_op(path, mode, opts, operation, temporary)
     closure = IO._closeable_closure(file, {
       name = 'regular_file',
       reason = 'file scope closure',
+      request = 'request_close_op',
       finish_result = function(ok, err)
         if not ok and file._backend ~= nil then error(err or 'file closure failed', 0) end
         return true
@@ -587,32 +602,34 @@ local function new_file_op(path, mode, opts, operation, temporary)
   })
 end
 
-local function ready_file(submission)
-  return submission:wrap(function(file, err)
-    if not file then return nil, err end
-    local ready, ready_err = file:ready()
-    if not ready then return nil, ready_err end
-    return file
-  end)
-end
-
 function File.submit_open_op(path, mode, opts)
   path, mode = validate_path(path, 'submit_open_op'), validate_mode(mode)
   return new_file_op(path, mode, opts, 'file.submit_open_op', false)
 end
-function File.open_op(path, mode, opts)
-  path, mode = validate_path(path, 'open_op'), validate_mode(mode)
-  return ready_file(new_file_op(path, mode, opts, 'file.open_op', false))
+function File.open(path, mode, opts)
+  path, mode = validate_path(path, 'open'), validate_mode(mode)
+  local file, err = perform(new_file_op(path, mode, opts, 'file.open', false))
+  if not file then return nil, err end
+  local ready, ready_err = file:ready()
+  if not ready then return nil, ready_err end
+  return file
 end
 function File.submit_tmpfile_op(opts)
   return new_file_op('', 'w+b', opts, 'file.submit_tmpfile_op', true)
 end
-function File.tmpfile_op(opts)
-  return ready_file(new_file_op('', 'w+b', opts, 'file.tmpfile_op', true))
+function File.tmpfile(opts)
+  local file, err = perform(new_file_op('', 'w+b', opts, 'file.tmpfile', true))
+  if not file then return nil, err end
+  local ready, ready_err = file:ready()
+  if not ready then return nil, ready_err end
+  return file
 end
 
 function Job:result_op()
-  return self._driver:await_op()
+  return self._driver:outcome_op():map(function(result)
+    if result.ok then return result:unpack() end
+    return nil, result.report or result.primary or result.reason
+  end)
 end
 
 local function path_job_op(action, fn, opts)
@@ -632,13 +649,10 @@ local function path_job_op(action, fn, opts)
   return submission
 end
 
-local function job_result(submission)
-  return submission:wrap(function(job, err)
-    if not job then
-      return nil, err
-    end
-    return job:result()
-  end)
+local function perform_job(submission)
+  local job, err = perform(submission)
+  if not job then return nil, err end
+  return job:result()
 end
 
 local function with_provider(opts, action, fn)
@@ -658,11 +672,14 @@ end
 
 local function read_all_job(path, opts, label)
   opts, path = IO.copy_table(opts), validate_path(path, label)
-  local max, chunk = validate_read_limits(opts, 3)
+  local max = validate_read_max({ max = opts.max }, 3)
+  if opts.chunk_size ~= nil then
+    validate_capacity(opts.chunk_size, nil, 'file read chunk_size')
+  end
   return path_job_op('read_all', function(job_opts)
-    local opened, err = perform(File.open_op(path, 'rb', child_file_opts(job_opts)))
+    local opened, err = File.open(path, 'rb', child_file_opts(job_opts))
     if not opened then return nil, err end
-    local value, read_err = opened:read_all({ max = max, chunk_size = chunk })
+    local value, read_err = opened:read_all({ max = max })
     local closed, close_err = opened:close('read complete')
     if value == nil then return nil, read_err end
     if not closed then return nil, close_err end
@@ -672,8 +689,8 @@ end
 function File.submit_read_all_op(path, opts)
   return read_all_job(path, opts, 'submit_read_all_op')
 end
-function File.read_all_op(path, opts)
-  return job_result(read_all_job(path, opts, 'read_all_op'))
+function File.read_all(path, opts)
+  return perform_job(read_all_job(path, opts, 'read_all'))
 end
 
 local function write_all_job(path, bytes, opts, label)
@@ -681,7 +698,7 @@ local function write_all_job(path, bytes, opts, label)
   if type(bytes) ~= 'string' then error('file.' .. label .. ' expects bytes', 3) end
   local mode = validate_mode(opts.mode or (opts.append and 'ab' or 'wb'))
   return path_job_op('write_all', function(job_opts)
-    local opened, err = perform(File.open_op(path, mode, child_file_opts(job_opts)))
+    local opened, err = File.open(path, mode, child_file_opts(job_opts))
     if not opened then return nil, err end
     local total, write_err = opened:write_all(bytes)
     if not total then
@@ -698,8 +715,8 @@ end
 function File.submit_write_all_op(path, bytes, opts)
   return write_all_job(path, bytes, opts, 'submit_write_all_op')
 end
-function File.write_all_op(path, bytes, opts)
-  return job_result(write_all_job(path, bytes, opts, 'write_all_op'))
+function File.write_all(path, bytes, opts)
+  return perform_job(write_all_job(path, bytes, opts, 'write_all'))
 end
 
 local function path_action(action, args, opts)
@@ -713,27 +730,23 @@ local function path_action(action, args, opts)
   end, opts)
 end
 
-local function path_action_result(action, args, opts)
-  return job_result(path_action(action, args, opts))
-end
-
 function File.submit_rename_op(from, to, opts)
   from, to = validate_path(from, 'submit_rename_op'), validate_path(to, 'submit_rename_op')
   return (path_action('rename', { from, to }, opts))
 end
-function File.rename_op(from, to, opts)
-  from, to = validate_path(from, 'rename_op'), validate_path(to, 'rename_op')
-  return path_action_result('rename', { from, to }, opts)
+function File.rename(from, to, opts)
+  from, to = validate_path(from, 'rename'), validate_path(to, 'rename')
+  return perform_job(path_action('rename', { from, to }, opts))
 end
 local function unary_path_action(action, path, opts, submit)
-  path = validate_path(path, (submit and 'submit_' or '') .. action .. '_op')
-  local fn = submit and path_action or path_action_result
-  return fn(action, { path }, opts)
+  path = validate_path(path, (submit and 'submit_' or '') .. action .. (submit and '_op' or ''))
+  if submit then return path_action(action, { path }, opts) end
+  return perform_job(path_action(action, { path }, opts))
 end
 function File.submit_unlink_op(path, opts) return unary_path_action('unlink', path, opts, true) end
-function File.unlink_op(path, opts) return unary_path_action('unlink', path, opts, false) end
+function File.unlink(path, opts) return unary_path_action('unlink', path, opts, false) end
 function File.submit_mkdir_op(path, opts) return unary_path_action('mkdir', path, opts, true) end
-function File.mkdir_op(path, opts) return unary_path_action('mkdir', path, opts, false) end
+function File.mkdir(path, opts) return unary_path_action('mkdir', path, opts, false) end
 local function mkdir_p_job(path, opts, label)
   path = validate_path(path, label)
   return path_job_op('mkdir_p', function(job_opts)
@@ -748,8 +761,8 @@ end
 function File.submit_mkdir_p_op(path, opts)
   return (mkdir_p_job(path, opts, 'submit_mkdir_p_op'))
 end
-function File.mkdir_p_op(path, opts)
-  return job_result(mkdir_p_job(path, opts, 'mkdir_p_op'))
+function File.mkdir_p(path, opts)
+  return perform_job(mkdir_p_job(path, opts, 'mkdir_p'))
 end
 
 
@@ -758,8 +771,15 @@ File.Command = Command
 File.Job = Job
 File.Error = IOError
 Direct.install(Command, { 'result' })
-Direct.install(RegularFile, { 'ready', 'read', 'read_some', 'write_some', 'read_line', 'seek', 'flush', 'rename', 'sync', 'close', 'closed' })
+Direct.install(RegularFile, {
+  'ready', 'read', 'read_some', 'read_exactly', 'read_all',
+  'write_all', 'write_some', 'read_line',
+  'submit_seek', 'submit_flush', 'submit_rename', 'submit_sync', 'request_close', 'closed',
+})
 Direct.install(Job, { 'result' })
-Direct.install_static(File, { 'open', 'tmpfile', 'read_all', 'write_all', 'rename', 'unlink', 'mkdir', 'mkdir_p' })
+Direct.install_static(File, {
+  'submit_open', 'submit_tmpfile', 'submit_read_all', 'submit_write_all',
+  'submit_rename', 'submit_unlink', 'submit_mkdir', 'submit_mkdir_p',
+})
 
 return File

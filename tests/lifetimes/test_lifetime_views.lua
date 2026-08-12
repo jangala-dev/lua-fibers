@@ -22,7 +22,7 @@ do
       body_scope = child
       return 42
     end, { label = 'shared-view' }))
-    value = fibers.perform(task:await_op())
+    value = task:await()
   end)
   truthy(Task.is(task))
   eq(value, 42)

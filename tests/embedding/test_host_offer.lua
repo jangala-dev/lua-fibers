@@ -50,7 +50,7 @@ do
     assert_eq(fibers.perform(source:next_op()), 1)
     Sleep.sleep(0.001)
     assert_eq(pulls, 2)
-    fibers.perform(source:close_op('test complete'))
+    fibers.perform(source:request_close_op('test complete'))
     assert(fibers.perform(source:closed_op()))
   end, { host = host })
 end
@@ -74,7 +74,7 @@ do
       return 'deadline'
     end)))
     assert_eq(result, 'deadline')
-    fibers.perform(source:close_op('deadline selected'))
+    fibers.perform(source:request_close_op('deadline selected'))
     assert(fibers.perform(source:closed_op()))
   end, { host = host })
 end
@@ -162,7 +162,7 @@ do
     })
     fibers.perform(source:open_op(scope))
     while State.event_queue_length(source._queue) < 2 do Sleep.sleep(0) end
-    fibers.perform(source:close_op('exercise disposal failures'))
+    fibers.perform(source:request_close_op('exercise disposal failures'))
 
     local terminal_ok
     terminal_ok, terminal_err = fibers.perform(source:terminal_op())

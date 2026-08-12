@@ -156,6 +156,34 @@ do
   assert_eq(Inspect.data(b:reader()._flow), '')
 end
 
+-- Exact reads compose into transactional protocol parsing. A dependent frame
+-- read may inspect its header speculatively; if the complete frame is not yet
+-- available and another choice commits, the header consumption rolls back.
+do
+  local a, b = Stream.memory_pair({ label = 'exact-frame', capacity = 16 })
+  local reader = b:reader()
+  local frame_op = reader:read_exactly_op(1):and_then(Op.guard(function(header)
+    local length = string.byte(header)
+    return reader:read_exactly_op(length):map(function(body)
+      return body
+    end)
+  end))
+  local chosen, body
+  local st = fibers.try_run(function()
+    fibers.perform(a:writer():write_op(string.char(3) .. 'ab'))
+    chosen = fibers.perform(Op.choice(Op.always('other'), frame_op:map(function()
+      return 'frame'
+    end)))
+    assert_eq(Inspect.data(reader._flow), string.char(3) .. 'ab',
+      'incomplete transactional frame must not consume its header')
+    fibers.perform(a:writer():write_op('c'))
+    body = fibers.perform(frame_op)
+  end).runtime_status
+  assert_status(st, 'found')
+  assert_eq(chosen, 'other')
+  assert_eq(body, 'abc')
+end
+
 -- EOF follows queued bytes after shutdown_write.
 do
   local a, b = Stream.memory_pair({ label = 'eof' })
@@ -435,7 +463,7 @@ do
   assert_eq(Inspect.data(b:reader()._flow), '')
 end
 
--- read_all_op enforces an explicit bound unless unlimited=true is requested;
+-- read_all_op enforces an explicit bound and rejects unbounded maxima;
 -- exceeding the bound reports too_large without consuming bytes.
 do
   local a, b = Stream.memory_pair({ label = 'read-all-limit' })
@@ -453,20 +481,17 @@ do
   local ok = pcall(function()
     b:reader():read_all_op()
   end)
-  assert_eq(ok, false, 'read_all_op should require opts.max or opts.unlimited = true')
+  assert_eq(ok, false, 'read_all_op should require opts.max')
 end
 
--- Unlimited read_all_op is explicit.
+-- read_all_op deliberately requires a finite bound so the runtime can grow
+-- capacity enough to distinguish a valid EOF result from oversized input.
 do
-  local a, b = Stream.memory_pair({ label = 'read-all-unlimited' })
-  local out
-  local st = fibers.try_run(function()
-    fibers.perform(a:writer():write_op('xyz'))
-    fibers.perform(a:shutdown_write_op())
-    out = fibers.perform(b:reader():read_all_op({ max = math.huge }))
-  end).runtime_status
-  assert_status(st, 'found')
-  assert_eq(out, 'xyz')
+  local _, b = Stream.memory_pair({ label = 'read-all-finite-bound' })
+  local ok = pcall(function()
+    b:reader():read_all_op({ max = math.huge })
+  end)
+  assert_eq(ok, false, 'read_all_op should reject an unbounded maximum')
 end
 
 -- Zero-length options and validation are explicit.
@@ -536,69 +561,65 @@ do
   assert(composed:writer() == write_flow:inlet())
 end
 
--- Bounded Streams distinguish one atomic byte decision from the procedural
--- direct convenience. The op cannot establish more bytes than fit in one Flow;
--- the direct method composes several honest decisions through the same buffer.
+-- read_exactly/read_exactly_op are an exact pair. Exact demand may grow the
+-- Flow's working high-water capacity; no prefix is consumed until the complete
+-- count is available in one transaction.
 do
-  local a, b = Stream.memory_pair({ label = 'bounded-exact-protocol', capacity = 2 })
-  local op_value, op_err, direct_value
-  local st = fibers.try_run(function()
-    op_value, op_err = fibers.perform(b:read_exactly_op(3))
-    local writer = fibers.spawn(function()
-      assert_eq(a:write_all('abcde'), 5)
-      assert_truthy(a:shutdown_write())
+  local a, b = Stream.memory_pair({ label = 'elastic-exact-protocol', capacity = 2 })
+  local op_value, direct_value
+  local st = fibers.try_run(function(scope)
+    scope:spawn(function()
+      fibers.perform(a:write_op('ab'))
+      fibers.perform(a:write_op('c'))
+      fibers.perform(a:write_all_op('def'))
     end)
-    direct_value = b:read_exactly(5)
-    writer:await()
+    op_value = fibers.perform(b:read_exactly_op(3))
+    direct_value = b:read_exactly(3)
   end).runtime_status
   assert_status(st, 'found')
-  assert_nil(op_value)
-  assert_eq(op_err, 'capacity')
-  assert_eq(direct_value, 'abcde')
+  assert_eq(op_value, 'abc')
+  assert_eq(direct_value, 'def')
+  assert_truthy(b:reader()._flow._capacity >= 3)
 end
 
--- read_all_op remains one atomic EOF fact and reports saturation without
--- consuming; read_all() is the bounded procedural convenience and can drain a
--- stream much larger than its Flow capacity.
+-- read_all/read_all_op are an exact pair. A finite max lets the pending Option
+-- grow the managed high-water capacity while retaining all bytes until EOF.
 do
-  local a, b = Stream.memory_pair({ label = 'bounded-read-all-protocol', capacity = 2 })
-  local atomic, atomic_err, preserved, all
-  local st = fibers.try_run(function()
-    fibers.perform(a:writer():write_op('ab'))
-    atomic, atomic_err = fibers.perform(b:read_all_op({ max = 16 }))
-    preserved = fibers.perform(b:reader():read_exactly_op(2))
-
-    local writer = fibers.spawn(function()
-      assert_eq(a:write_all('cdefgh'), 6)
+  local a, b = Stream.memory_pair({ label = 'elastic-read-all-protocol', capacity = 2 })
+  local all
+  local st = fibers.try_run(function(scope)
+    scope:spawn(function()
+      assert_eq(a:write('ab'), 2)
+      assert_eq(a:write('cd'), 2)
+      assert_eq(a:write('ef'), 2)
       assert_truthy(a:shutdown_write())
     end)
-    all = b:read_all({ max = 16, chunk_size = 2 })
-    writer:await()
+    all = b:read_all({ max = 16 })
   end).runtime_status
   assert_status(st, 'found')
-  assert_nil(atomic)
-  assert_eq(atomic_err, 'capacity')
-  assert_eq(preserved, 'ab')
-  assert_eq(all, 'cdefgh')
+  assert_eq(all, 'abcdef')
+  assert_truthy(b:reader()._flow._capacity >= 17)
 end
 
--- Atomic write-all is capacity bounded; the direct write_all procedure chunks
--- the same bytes through repeated transactional admissions.
+-- write_op remains bounded by the configured write-unit limit. write_all_op is
+-- the explicitly elastic whole-write statement: the complete supplied string is
+-- admitted in one transaction after enough room exists for it.
 do
-  local a, b = Stream.memory_pair({ label = 'bounded-write-all-protocol', capacity = 2 })
-  local atomic_n, atomic_err, received
-  local st = fibers.try_run(function()
-    atomic_n, atomic_err = fibers.perform(a:write_all_op('abc'))
-    local reader = fibers.spawn(function()
+  local a, b = Stream.memory_pair({ label = 'elastic-write-all-protocol', capacity = 2 })
+  local bounded_n, bounded_err, written, received
+  local st = fibers.try_run(function(scope)
+    bounded_n, bounded_err = fibers.perform(a:write_op('abc'))
+    scope:spawn(function()
       received = b:read_exactly(5)
     end)
-    assert_eq(a:write_all('abcde'), 5)
-    reader:await()
+    written = fibers.perform(a:write_all_op('abcde'))
   end).runtime_status
   assert_status(st, 'found')
-  assert_nil(atomic_n)
-  assert_eq(atomic_err, 'capacity')
+  assert_nil(bounded_n)
+  assert_eq(bounded_err, 'capacity')
+  assert_eq(written, 5)
   assert_eq(received, 'abcde')
+  assert_truthy(a:writer()._flow._capacity >= 5)
 end
 
 print('tests/test_stream_memory.lua: ok')

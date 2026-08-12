@@ -106,7 +106,7 @@ local function await_connect(dial, source, deadline)
   end)))
   if selected == false then
     local timeout = timeout_error(dial, deadline)
-    perform(source:close_op(timeout))
+    perform(source:request_close_op(timeout))
     local closed, close_err = perform(source:closed_op())
     if not closed then return nil, close_err end
     return nil, timeout
@@ -176,7 +176,7 @@ function Direct.run(dial, driver_scope, opts)
       peer_address = completed.peer,
       default_peer = dial._endpoint,
     })
-    local connection, connection_err = Connection.from_host(rt, driver_scope, handle, connection_opts)
+    local connection, connection_err = Connection.open_from_host(rt, driver_scope, handle, connection_opts)
     if not connection then error(connection_err, 0) end
 
     return connection, nil, Direct.terminal_report(dial, 'connected', nil, rt:now())

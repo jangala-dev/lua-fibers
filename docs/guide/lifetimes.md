@@ -163,12 +163,11 @@ The important Options are:
 ```lua
 task:body_result_op()
 task:outcome_op()
-task:await_op()
 task:request_cancel_op(reason)
 task:cancel_requested_op()
 ```
 
-Direct forms exist for `await` and `request_cancel`.
+`request_cancel` is the exact direct twin of `request_cancel_op`. `await()` is a causal convenience over the complete outcome and has no `_op` twin.
 
 ### Body result
 
@@ -215,18 +214,18 @@ local value = task:await()
 ```
 
 `await` waits for the complete outcome and raises structured failure where
-appropriate. `await_op()` is the composable selection form, but its return-or-
-raise behaviour happens after commitment.
+appropriate. It is deliberately a participant-level causal convenience rather
+than an Option.
 
 Use:
 
 - `body_result_op` for prompt execution observation;
 - `outcome_op` for transactional inspection of complete resolution;
-- `await_op` or `await` for ordinary post-commit continuation.
+- `await` for ordinary post-commit continuation which should raise failure.
 
-Because `await_op` contains a post-commit `wrap`, another `map` or `and_then`
-cannot be appended after it. Use `outcome_op` when the next action must belong
-to the same transaction.
+Because `outcome_op` remains an ordinary Option, `map`, `and_then`, `choice` and
+the other algebraic combinators may be applied to the complete structured
+outcome before commitment.
 
 ## 5. Transactional task admission
 

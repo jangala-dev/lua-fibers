@@ -83,7 +83,7 @@ function IO._closeable_closure(value, opts)
     name = true, reason = Contract.non_empty_string, request = Contract.non_empty_string,
     finish = Contract.non_empty_string, finish_result = true,
   }, '_closeable_closure options', 2)
-  local request = opts.request or 'close_op'
+  local request = opts.request or 'request_close_op'
   local finish = opts.finish or 'closed_op'
   local finish_result = opts.finish_result
   if type(finish_result) == 'string' then
@@ -127,6 +127,7 @@ function IO.handle_stream_op(scope, handle, opts, tuning)
   tuning = tuning or opts
   return Stream.open_op(handle, {
     scope = scope, label = opts.label, read = opts.read == true, write = opts.write == true,
+    local_address = opts.local_address, peer_address = opts.peer_address,
     read_capacity = tuning.read_capacity or tuning.capacity,
     write_capacity = tuning.write_capacity or tuning.capacity,
     read_chunk_size = tuning.read_chunk_size or tuning.chunk_size,

@@ -13,8 +13,7 @@ local Activation = require('fibers.socket.activation')
 local Lifecycle = require('fibers.socket.lifecycle')
 local Connection = require('fibers.socket.connection')
 local HostOffer = require('fibers.io.offer')
-local Lifetime = require('fibers.lifetime')
-local Scope = require('fibers.scope')
+local Protected = require('fibers.protected')
 local perform = require('fibers.perform')
 local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
@@ -43,7 +42,7 @@ local LISTEN_OPTIONS = {
 }
 
 local function validate_listen_options(opts)
-  return IO.copy_table(Contract.record(opts, LISTEN_OPTIONS, 'socket.listen_op options', 3))
+  return IO.copy_table(Contract.record(opts, LISTEN_OPTIONS, 'socket.listen options', 3))
 end
 
 local function host_listener_options(opts)
@@ -69,13 +68,18 @@ function Listener:local_address_op()
   return self._lifecycle:address_op()
 end
 
+function Listener:ready_op()
+  return self._lifecycle:start_result_op():map(function(handle, err)
+    if not handle then return nil, err end
+    return self
+  end)
+end
 
 local function accept_to_scope_op(listener, target_scope)
-  return listener._offers:result_op():wrap(function(offer, source_err)
-    if not offer then return nil, source_err end
+  return listener._offers:result_op():and_then(Op.guard(function(offer, source_err)
+    if not offer then return Op.always(nil, source_err) end
     local address = Lifecycle.address(listener)
-    return Connection.from_host(
-      Runtime.current(),
+    return Connection.from_host_op(
       target_scope,
       offer.handle,
       Connection.options(listener._options, {
@@ -84,40 +88,35 @@ local function accept_to_scope_op(listener, target_scope)
         address = address,
         local_address = address,
         peer_address = offer.peer,
+        addresses_resolved = true,
       })
     )
-  end)
+  end))
 end
 
 function Listener:accept_op(target)
   return accept_to_scope_op(self, IO.require_scope(target, 'Listener:accept_op target'))
 end
 
-function Listener:close_op(reason)
+function Listener:request_close_op(reason)
   reason = reason or 'listener closed'
-  return self._lifecycle:request_stop_op(reason):wrap(function(_, state)
-    if self._offers then
-      local requested, request_err = perform(self._offers:close_op(reason))
-      if not requested then return nil, request_err end
-      local source_closed, source_err = perform(self._offers:closed_op())
-      if not source_closed then return nil, source_err end
-      -- Closing the offer source discharges the listener's local domain
-      -- obligation.  Its Lifetime remains a child of the listener until the
-      -- structural closure driver retires the ownership subtree; doing that here
-      -- would compete with an enclosing close claim.
-    end
-    return true, state
-  end)
+  return self._lifecycle:request_stop_op(reason):and_then(Op.guard(function(first, state)
+    if not self._offers then return Op.always(true, first, state) end
+    return self._offers:request_close_op(reason):map(function(requested, err)
+      if not requested then return nil, err end
+      return true, first, state
+    end)
+  end))
 end
 
 function Listener:closed_op()
-  local terminal = self._lifecycle:terminal_op()
-  if not self._offers then return terminal:map(Lifecycle.close_result) end
-  local source_closed = self._offers:closed_op()
-  return source_closed:and_then(Op.guard(function(ok, source_err)
-    if not ok then return Op.always(nil, source_err) end
-    return terminal:map(Lifecycle.close_result)
-  end))
+  return IO.closed_after_driver_op(self._driver, self._lifecycle:terminal_op():map(Lifecycle.close_result))
+end
+
+function Listener:close(reason)
+  local requested, request_err = perform(self:request_close_op(reason))
+  if not requested then return nil, request_err end
+  return perform(self:closed_op())
 end
 
 local function retire_listener(listener, rt, source_state)
@@ -174,10 +173,52 @@ local function accepted_offers(listener, opts)
   })
 end
 
-function Module.listen_op(address, opts)
-  address = Address.validate(address, 'socket.listen_op')
+local function driver(listener, driver_scope, opts, address)
+  local activated, active, activation_err = Protected.pcall(Activation.create, listener, {
+    host = opts.host,
+    host_method = 'create_listener',
+    options = host_listener_options(opts),
+    lifecycle = listener._lifecycle,
+    close = close_socket,
+    domain = 'socket',
+    action = 'listen',
+    role = 'listener',
+    address = address,
+    closed_reason = 'listener lifecycle no longer accepts activation',
+    closed_message = 'listener closed before activation',
+  })
+  if not activated then
+    local failure = IOError.is(active) and active or IO.protocol_error('socket', 'listen', active, { address = address })
+    return nil, failure
+  end
+  if not active then return nil, activation_err end
+
+  listener._offers = accepted_offers(listener, opts)
+  local opened, open_err = perform(listener._offers:open_op(driver_scope))
+  if not opened then
+    local cleanup = {}
+    IOError.capture_cleanup(cleanup, 'socket', 'listener_start_cleanup', { address = address },
+      retire_listener, listener, Runtime.current(), {
+        kind = 'failed',
+        reason = 'listener offer source failed to open',
+        error = open_err,
+      })
+    return nil, IOError.with_cleanup(
+      open_err, 'socket', 'listen',
+      'listener start and cleanup both failed', cleanup, { address = address }
+    )
+  end
+
+  local source_closed, source_err = perform(listener._offers:closed_op())
+  if not source_closed then return nil, source_err end
+  local terminal = perform(listener._lifecycle:terminal_op())
+  return Lifecycle.close_result(terminal)
+end
+
+function Module.submit_listen_op(address, opts)
+  address = Address.validate(address, 'socket.submit_listen_op')
   opts = validate_listen_options(opts)
-  local scope = IO.current_scope(opts, 'socket.listen_op')
+  local scope = IO.current_scope(opts, 'socket.submit_listen_op')
   local listener = Label.attach(Label.identity(setmetatable({
     kind = 'socket_listener',
     _address = address,
@@ -186,48 +227,26 @@ function Module.listen_op(address, opts)
   }, Listener), 'listener'), opts.label)
   Label.child(listener._lifecycle, listener, 'lifecycle')
 
-  Lifetime.define(listener, {
-    label = opts.label,
+  return scope:_drive_op(listener, {
+    label = Label.get(listener),
     role = 'socket_listener',
     closure = IO._closeable_closure(listener, {
-      name = 'listener', reason = 'scope closure', finish_result = 'listener closure failed',
+      name = 'listener', reason = 'scope closure', request = 'request_close_op',
+      finish_result = 'listener closure failed',
     }),
+    run = function(driver_scope) return driver(listener, driver_scope, opts, address) end,
   })
-  local private_scope = Scope.for_lifetime(listener._lifetime)
+end
 
-  return scope:admit_op(listener):wrap(function()
-    local active, activation_err = Activation.create(listener, {
-      host = opts.host,
-      host_method = 'create_listener',
-      options = host_listener_options(opts),
-      lifecycle = listener._lifecycle,
-      close = close_socket,
-      domain = 'socket',
-      action = 'listen',
-      role = 'listener',
-      address = address,
-      closed_reason = 'listener lifecycle no longer accepts activation',
-      closed_message = 'listener closed before activation',
-    })
-    if not active then return nil, activation_err end
-
-    listener._offers = accepted_offers(listener, opts)
-    local opened, open_err = perform(listener._offers:open_op(private_scope))
-    if not opened then
-      local cleanup = {}
-      IOError.capture_cleanup(cleanup, 'socket', 'listener_start_cleanup', { address = address },
-        retire_listener, listener, Runtime.current(), {
-          kind = 'failed',
-          reason = 'listener offer source failed to open',
-          error = open_err,
-        })
-      return nil, IOError.with_cleanup(
-        open_err, 'socket', 'listen',
-        'listener start and cleanup both failed', cleanup, { address = address }
-      )
-    end
-    return listener
-  end)
+function Module.listen(address, opts)
+  local listener, err = perform(Module.submit_listen_op(address, opts))
+  if not listener then return nil, err end
+  local ready, ready_err = listener:ready()
+  if not ready then
+    listener:closed()
+    return nil, ready_err
+  end
+  return listener
 end
 
 function Listener:accept(target)
@@ -238,6 +257,6 @@ end
 
 
 Module.Listener = Listener
-Direct.install(Listener, { 'local_address', 'close', 'closed' })
+Direct.install(Listener, { 'ready', 'local_address', 'request_close', 'closed' })
 
 return Module

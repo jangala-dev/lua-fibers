@@ -34,7 +34,7 @@ local function negotiate_op(stream)
     return stream
       :writer()
       :write_op('BAD\n')
-      :and_then(stream:close_op('bad protocol'))
+      :and_then(stream:request_close_op('bad protocol'))
       :map(function()
         return nil, 'bad_protocol'
       end)

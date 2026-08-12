@@ -10,8 +10,8 @@ A facility normally:
 
 1. owns one or more supported resources;
 2. exposes methods ending in `_op` which construct composable options;
-3. mirrors its principal `_op` methods with plain direct methods which perform
-   those options;
+3. mirrors principal `_op` methods with plain direct methods only where the
+   plain method is exactly `perform(the_same_stem_op(...))`;
 4. keeps the option construction path inert and does not call `perform` inside an `_op` method;
 5. uses `each`, `together`, `choice`, sequencing and mapping to state its laws;
 6. leaves fiber and lifetime structure to callers unless custody is intrinsic to the facility.
@@ -55,11 +55,58 @@ queue:get()       perform the operation directly
 queue:get_op()    return the operation for composition
 ```
 
-The plain method should perform the corresponding `_op` method rather than
-duplicate its implementation. Plain methods may therefore suspend and commit
-transactional state. Methods which are genuinely immediate remain useful for
-local inspection and construction, but their names should not imply a stronger
-non-suspension rule for the whole plain-method surface.
+The plain method should perform the corresponding `_op` method rather than duplicate its implementation. This is a semantic naming contract, not merely a convenience convention: if `foo()` and `foo_op()` both exist, `foo()` must mean `perform(foo_op())`.
+
+The test is semantic rather than temporal. A facility may expose one Option even
+when becoming ready requires substantial already-owned background work, provided
+the participant action itself still has one commit point. Exact byte reads are a
+good example: a reactor may fill an elastic Flow over many host events while
+`read_exactly_op` remains pending; the participant consumes the complete prefix in
+one eventual transaction.
+
+A causal procedure which requires a participant commit to *start* work whose later
+result must then be observed should instead expose the stages separately. For
+example:
+
+```text
+request_close()       = perform(request_close_op())
+closed()              = perform(closed_op())
+close()               = request, settle, observe completion
+                        (no close_op unless that whole meaning is one Option)
+```
+
+The same reasoning gives host-backed construction `submit_open_op()`/`ready_op()`
+plus causal `open()`, rather than a misleading `open_op()`. Plain methods may
+therefore suspend and commit transactional state. Methods which are genuinely
+immediate remain useful for local inspection and construction, but their names
+should not imply a stronger non-suspension rule for the whole plain-method surface.
+
+## Post-commit work in reusable facilities
+
+`Op:wrap()` remains an application-facing participant continuation, but reusable Fibers facilities should normally keep it out of their implementation Options. A facility Option should remain algebraically composable until the transaction commits.
+
+When commitment must start later causal work, prefer this shape:
+
+```text
+transactional fact / admission
+        +
+    Op.emit(...)
+        |
+      commit
+        |
+        v
+wake or start Lifetime-owned driver
+        |
+        v
+fallible host/protocol work
+        |
+        v
+Completion / managed state / result_op
+```
+
+Effect discharge should normally be small and effectively infallible: bind, enqueue, wake, register or schedule already-accounted work. Ordinary host failures belong in a Lifetime-owned driver and should be published as managed results rather than turned into fatal Effect-discharge failures.
+
+Where a friendly procedure spans submission and later observation, expose the stages with distinct Option names and let the plain procedure compose them. Do not preserve a same-stem `_op` merely for symmetry.
 
 ## Completed closure for host-backed facilities
 

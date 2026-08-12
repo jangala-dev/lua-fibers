@@ -209,7 +209,7 @@ local HostHandles = require('tests.support.host_handles')
     rt:perform(stream:writer():write_op('hello'))
     flushed = rt:perform(stream:writer():flush_op())
     got = rt:perform(stream:reader():read_exactly_op(5))
-    rt:perform(stream:abort_op('test complete'))
+    rt:perform(stream:request_abort_op('test complete')); rt:perform(stream:closed_op())
   end):label(name .. ':flow')
 
   local st = External.drive(rt, { host = host, max_iterations = 200 })

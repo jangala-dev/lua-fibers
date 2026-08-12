@@ -9,12 +9,14 @@ local IOError = require('fibers.io.error')
 local Acquired = require('fibers.io.internal.acquired')
 local IO = require('fibers.io.facility')
 local Protected = require('fibers.protected')
-local Direct = require('fibers.internal.direct')
+local Closure = require('fibers.closure')
+local perform = require('fibers.perform')
 local Regular = require('fibers.file.regular')
 local Label = require('fibers.internal.label')
 local Contract = require('fibers.internal.contract')
 
 local File = {}
+local next_pipe_job = 0
 
 local PIPE_OPTIONS = {
   scope = true, host = true, label = true, capacity = true,
@@ -95,28 +97,45 @@ local function start_pipe(rt, scope, opts)
   return streams.read, streams.write
 end
 
-function File.pipe_op(opts)
-  opts = Contract.options(opts, PIPE_OPTIONS, 'file.pipe_op options', 2)
-  if opts.label ~= nil then Contract.non_empty_string(opts.label, 'file.pipe_op opts.label', 2) end
+function File.submit_pipe_op(opts)
+  opts = Contract.options(opts, PIPE_OPTIONS, 'file.submit_pipe_op options', 2)
+  if opts.label ~= nil then Contract.non_empty_string(opts.label, 'file.submit_pipe_op opts.label', 2) end
   for _, key in ipairs({ 'chunk_size', 'read_chunk_size', 'write_chunk_size' }) do
-    if opts[key] ~= nil then Contract.positive_integer(opts[key], 'file.pipe_op opts.' .. key, 2) end
+    if opts[key] ~= nil then Contract.positive_integer(opts[key], 'file.submit_pipe_op opts.' .. key, 2) end
   end
-  local scope = IO.current_scope(opts, 'file.pipe_op')
-  return Op.always(true):wrap(function()
-    local rt = Runtime.current()
-    if not rt then error('file.pipe_op committed without a current runtime', 2) end
-    return start_pipe(rt, scope, opts)
-  end)
+  local scope = IO.current_scope(opts, 'file.submit_pipe_op')
+  next_pipe_job = next_pipe_job + 1
+  local job = Label.attach(setmetatable({
+    _fibers_id = 'file-pipe-' .. tostring(next_pipe_job),
+  }, Regular.Job), opts.label and (opts.label .. ':job') or nil)
+  return scope:_drive_op(job, {
+    label = Label.get(job),
+    role = 'file_pipe_job',
+    closure = Closure.none(),
+    run = function()
+      local rt = Runtime.current()
+      if not rt then error('file pipe job started without a current runtime', 2) end
+      return start_pipe(rt, scope, opts)
+    end,
+  })
+end
+
+function File.submit_pipe(opts)
+  return perform(File.submit_pipe_op(opts))
+end
+
+function File.pipe(opts)
+  local job, err = perform(File.submit_pipe_op(opts))
+  if not job then return nil, nil, err end
+  return job:result()
 end
 
 File.Error, File.RegularFile, File.Command, File.Job = IOError, Regular.RegularFile, Regular.Command, Regular.Job
 for _, name in ipairs({
-  'submit_open_op', 'open_op', 'open', 'submit_tmpfile_op', 'tmpfile_op', 'tmpfile',
-  'submit_read_all_op', 'read_all_op', 'read_all', 'submit_write_all_op', 'write_all_op', 'write_all',
-  'submit_rename_op', 'rename_op', 'rename', 'submit_unlink_op', 'unlink_op', 'unlink',
-  'submit_mkdir_op', 'mkdir_op', 'mkdir', 'submit_mkdir_p_op', 'mkdir_p_op', 'mkdir_p',
+  'submit_open_op', 'submit_open', 'open', 'submit_tmpfile_op', 'submit_tmpfile', 'tmpfile',
+  'submit_read_all_op', 'submit_read_all', 'read_all', 'submit_write_all_op', 'submit_write_all', 'write_all',
+  'submit_rename_op', 'submit_rename', 'rename', 'submit_unlink_op', 'submit_unlink', 'unlink',
+  'submit_mkdir_op', 'submit_mkdir', 'mkdir', 'submit_mkdir_p_op', 'submit_mkdir_p', 'mkdir_p',
 }) do File[name] = Regular[name] end
-
-Direct.install_static(File, { 'pipe' })
 
 return File

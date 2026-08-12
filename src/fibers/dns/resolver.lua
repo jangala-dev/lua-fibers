@@ -572,13 +572,13 @@ end
 Resolver.classify_udp_packet = classify_udp_packet
 
 function Resolver:_udp_exchange(server, wire, id, name, qtype, timeout, opts)
-  local socket, open_err = perform(Datagram.udp_op(server_local_address(server), {
+  local socket, open_err = Datagram.udp(server_local_address(server), {
     host = opts.host or self.host,
     label = resolver_label(self) .. ':udp',
     receive_capacity = opts.receive_capacity or 16,
     send_capacity = opts.send_capacity or 4,
     max_datagram_size = opts.maximum_message_size or 65535,
-  }))
+  })
   if not socket then
     return nil, IOError.normalise(open_err, { domain = 'dns', action = 'udp_open', server = server })
   end

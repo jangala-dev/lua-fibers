@@ -188,7 +188,7 @@ function Dial:report_op()
   return self._lifecycle:report_op()
 end
 
-function Dial:close_op(reason)
+function Dial:request_close_op(reason)
   reason = reason or 'dial closed'
   return self._lifecycle:request_close_op(reason):and_then(Op.guard(function(first)
     if first and self._driver then
@@ -200,6 +200,12 @@ end
 
 function Dial:closed_op()
   return IO.closed_after_driver_op(self._driver, self._lifecycle:terminal_op():map(closed_result))
+end
+
+function Dial:close(reason)
+  local requested, request_err = perform(self:request_close_op(reason))
+  if not requested then return nil, request_err end
+  return perform(self:closed_op())
 end
 
 function Dial:result(target)
@@ -269,6 +275,6 @@ function Module.dial_op(endpoint, opts)
 end
 
 Module.Dial = Dial
-Direct.install(Dial, { 'report', 'close', 'closed' })
+Direct.install(Dial, { 'report', 'request_close', 'closed' })
 
 return Module

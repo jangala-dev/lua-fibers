@@ -150,16 +150,26 @@ do
     } },
     { 'Flow', FibersFlow, { 'new' } },
     { 'File', FibersFile, {
-      'open', 'open_op', 'tmpfile', 'tmpfile_op', 'pipe', 'pipe_op',
-      'read_all', 'read_all_op', 'write_all', 'write_all_op',
-      'mkdir', 'mkdir_op', 'mkdir_p', 'mkdir_p_op', 'rename', 'rename_op',
-      'unlink', 'unlink_op', 'submit_open_op', 'submit_read_all_op',
+      'submit_open', 'submit_open_op', 'open',
+      'submit_tmpfile', 'submit_tmpfile_op', 'tmpfile',
+      'submit_pipe', 'submit_pipe_op', 'pipe',
+      'submit_read_all', 'submit_read_all_op', 'read_all',
+      'submit_write_all', 'submit_write_all_op', 'write_all',
+      'submit_mkdir', 'submit_mkdir_op', 'mkdir',
+      'submit_mkdir_p', 'submit_mkdir_p_op', 'mkdir_p',
+      'submit_rename', 'submit_rename_op', 'rename',
+      'submit_unlink', 'submit_unlink_op', 'unlink',
     } },
     { 'Socket', FibersSocket, {
-      'listen', 'listen_op', 'listen_inet', 'listen_inet_op',
-      'listen_ipv4', 'listen_ipv4_op', 'listen_ipv6', 'listen_ipv6_op',
-      'listen_unix', 'listen_unix_op', 'dial', 'dial_op', 'connect',
-      'udp', 'udp_op', 'udp_ipv4', 'udp_ipv4_op', 'udp_ipv6', 'udp_ipv6_op',
+      'submit_listen', 'submit_listen_op', 'listen',
+      'submit_listen_inet', 'submit_listen_inet_op', 'listen_inet',
+      'submit_listen_ipv4', 'submit_listen_ipv4_op', 'listen_ipv4',
+      'submit_listen_ipv6', 'submit_listen_ipv6_op', 'listen_ipv6',
+      'submit_listen_unix', 'submit_listen_unix_op', 'listen_unix',
+      'dial', 'dial_op', 'connect',
+      'submit_udp', 'submit_udp_op', 'udp',
+      'submit_udp_ipv4', 'submit_udp_ipv4_op', 'udp_ipv4',
+      'submit_udp_ipv6', 'submit_udp_ipv6_op', 'udp_ipv6',
       'resolve', 'resolve_op', 'resolve_name', 'resolve_name_op', 'dns_resolver',
     } },
     { 'Process', FibersProcess, { 'command', 'shell', 'redirect', 'succeeded', 'describe_status' } },
@@ -369,7 +379,7 @@ do
     task = fibers.perform(scope:spawn_op(function()
       return captured and 7 or 0
     end, { label = 'child' }))
-    value = fibers.perform(task:await_op())
+    value = task:await()
   end).runtime_status
   assert_status(st, 'found')
   assert_truthy(FibersTask.is(task), 'spawn should return a Task capability')
@@ -400,7 +410,7 @@ do
       Sleep.sleep_op(1):map(function() return 'timeout' end)
     ))
 
-    joined = { value = fibers.perform(task:await_op()) }
+    joined = { value = task:await() }
   end).runtime_status
 
   assert_status(st, 'found')
@@ -416,7 +426,7 @@ do
       return 'x', nil, 'z'
     end, { label = 'multi-return-task' }))
     exit = fibers.perform(task:body_result_op())
-    a, b, c = fibers.perform(task:await_op())
+    a, b, c = task:await()
   end).runtime_status
   assert_status(st, 'found')
   assert_eq(exit.tag, 'returned')

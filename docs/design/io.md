@@ -114,8 +114,9 @@ that descendant retires.
 A Stream distinguishes requesting closure from observing completed closure.
 
 ```lua
-stream:close_op(reason)
+stream:request_close_op(reason)
 stream:closed_op()
+stream:close(reason) -- causal convenience: request, drain, observe closed
 ```
 
 A completed close means that:

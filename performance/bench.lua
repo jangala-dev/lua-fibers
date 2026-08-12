@@ -629,7 +629,7 @@ add('task', 'scope spawn await close', 80, function(n)
       local task = fibers.spawn(function()
         return i
       end, { label = 'bench-task-' .. tostring(i) })
-      sum = sum + fibers.perform(task:await_op())
+      sum = sum + task:await()
     end
   end)
   assert_truthy(r.ok, tostring(r.report or r.reason))
@@ -683,7 +683,7 @@ add('scope', 'custody offer', 30, function(n)
       end)
       supervisor:run(function()
         fibers.perform(resume:put_op('ok'))
-        assert_eq(fibers.perform(task:await_op()), 'ok')
+        assert_eq(task:await(), 'ok')
       end)
       ok = true
     end)

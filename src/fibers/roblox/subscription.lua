@@ -3,6 +3,9 @@
 local External = require('fibers.embed.external')
 local Runtime = require('fibers.runtime')
 local Op = require('fibers.op')
+local Cell = require('fibers.resource.cell')
+local Completion = require('fibers.resource.completion')
+local Protected = require('fibers.protected')
 local Lifetime = require('fibers.lifetime')
 local Label = require('fibers.internal.label')
 local Closure = require('fibers.closure')
@@ -58,15 +61,18 @@ local function require_host(runtime, opts)
 end
 
 local function closure_protocol(subscription)
-  return Closure.protocol({
-    name = 'roblox_subscription_disconnect',
-    finish_op = function()
-      return Op.always(true):wrap(function()
-        subscription:_disconnect()
-        return true
-      end)
+  return Closure.request_then_wait(
+    function(_ctx, _entry, reason)
+      return subscription:request_close_op(reason or 'subscription retired')
     end,
-  })
+    function()
+      return subscription:closed_op()
+    end,
+    {
+      name = 'roblox_subscription_disconnect',
+      finish_result = Closure.require_ok('Roblox subscription disconnect failed'),
+    }
+  )
 end
 
 local function delivery_for(self, packed)
@@ -130,6 +136,93 @@ function Subscription:_disconnect()
   return true
 end
 
+function Subscription:ready_op()
+  return self._ready:result_op():map(function(ok, err)
+    if not ok then return nil, err end
+    return self
+  end)
+end
+
+function Subscription:request_close_op(reason)
+  reason = reason or 'subscription retired'
+  local subscription = self
+  return self._lifetime:request_close_op(reason):and_then(
+    self._disconnect_state:read_op():and_then(Op.guard(function(state)
+      if subscription._closed or state.kind == 'succeeded' then
+        return subscription._disconnect_state:write_op({
+          kind = 'succeeded', version = state.version or 0, reason = reason,
+        }):map(function() return true, false end)
+      end
+      if state.kind == 'pending' then
+        return Op.always(true, false)
+      end
+      return subscription._disconnect_state:write_op({
+        kind = 'pending', version = (state.version or 0) + 1, reason = reason,
+      }):map(function() return true, true end)
+    end))
+  )
+end
+
+function Subscription:closed_op()
+  return self._disconnect_state:select_op(function(state)
+    if state.kind == 'succeeded' then return Op.always(true) end
+    if state.kind == 'failed' then return Op.always(nil, state.error) end
+  end)
+end
+
+function Subscription:close(reason)
+  local requested, request_err = perform(self:request_close_op(reason))
+  if not requested then return nil, request_err end
+  return perform(self:closed_op())
+end
+
+local function subscription_callback(subscription)
+  if subscription._mode == 'events' then
+    return function(...) subscription:_queue_events(...) end
+  end
+  if subscription._mode == 'latest' then
+    return function(...) subscription:_queue_latest(...) end
+  end
+  return function() subscription:_queue_pulse() end
+end
+
+local function publish_ready(subscription, ...)
+  return perform(subscription._ready:publish_success_op(...))
+end
+
+local function drive_subscription(subscription, signal)
+  local connected, connection_or_err = Protected.pcall(signal.Connect, signal, subscription_callback(subscription))
+  if not connected then
+    perform(subscription._disconnect_state:write_op({ kind = 'succeeded', version = 0, reason = 'connect failed' }))
+    perform(subscription._ready:publish_failure_op(connection_or_err))
+    return nil, connection_or_err
+  end
+  subscription._connection = connection_or_err
+  publish_ready(subscription, true)
+
+  while true do
+    local state = perform(subscription._disconnect_state:select_op(function(value)
+      if value.kind == 'pending' or value.kind == 'succeeded' then return Op.always(value) end
+    end))
+    if state.kind == 'succeeded' then return true end
+
+    local disconnected, result_or_err = Protected.pcall(subscription._disconnect, subscription)
+    if disconnected and result_or_err then
+      perform(subscription._disconnect_state:write_op({
+        kind = 'succeeded', version = state.version, reason = state.reason,
+      }))
+      return true
+    end
+
+    local err = disconnected and 'subscription disconnect failed' or result_or_err
+    perform(subscription._disconnect_state:write_op({
+      kind = 'failed', version = state.version, reason = state.reason, error = err,
+    }))
+    -- Remain alive. A Closure retry moves the managed state back to pending and
+    -- gives this driver another attempt without losing the live connection.
+  end
+end
+
 function Subscription.new(signal, opts)
   opts = Contract.options(opts, SUBSCRIPTION_OPTIONS, 'Roblox Subscription options', 2)
   if opts.label ~= nil then Contract.non_empty_string(opts.label, 'Roblox Subscription label', 2) end
@@ -153,6 +246,8 @@ function Subscription.new(signal, opts)
     _host = host,
     _resource = resource,
     _feed = feed,
+    _ready = Completion.new(),
+    _disconnect_state = Cell.new({ kind = 'idle', version = 0 }),
     _connection = nil,
     _closed = false,
     _latest = nil,
@@ -160,33 +255,23 @@ function Subscription.new(signal, opts)
     _pulse_version = 0,
   }, Subscription), opts.label)
   Label.child(resource, self, 'events')
+  Label.child(self._ready, self, 'ready')
+  Label.child(self._disconnect_state, self, 'disconnect')
 
-  Lifetime.define(self, {
+  scope:perform(scope:_drive_op(self, {
     label = Label.get(self),
     role = 'roblox_subscription',
     closure = closure_protocol(self),
-    meta = { mode = mode },
-  })
-  scope:perform(scope:admit_op(self))
+    run = function() return drive_subscription(self, signal) end,
+  }))
 
-  local callback
-  if mode == 'events' then
-    callback = function(...)
-      self:_queue_events(...)
-    end
-  elseif mode == 'latest' then
-    callback = function(...)
-      self:_queue_latest(...)
-    end
-  else
-    callback = function()
-      self:_queue_pulse()
-    end
+  local ready, ready_err = self:ready()
+  if not ready then
+    -- Connection never became externally live. Structural retirement still
+    -- removes the admitted Lifetime before the constructor reports failure.
+    self:retire('subscription connect failed')
+    error(ready_err, 0)
   end
-
-  -- Admission happens before connecting. If Connect fails, scope unwinding still
-  -- owns and retires the dormant subscription Lifetime; no unmanaged connection can leak.
-  self._connection = signal:Connect(callback)
   return self
 end
 
@@ -218,6 +303,6 @@ function Subscription:retire(reason)
   return result
 end
 
-Direct.install(Subscription, { 'next', 'retired' })
+Direct.install(Subscription, { 'next', 'ready', 'request_close', 'closed', 'retired' })
 
 return Subscription

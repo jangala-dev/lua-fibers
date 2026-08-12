@@ -68,7 +68,7 @@ do
   local audit = IOAudit.report(rt)
   assert_eq(audit.stats.stale_ready, 1, 'stale readiness should be observable')
   rt:spawn_raw(function()
-    rt:perform(stream:abort_op('test complete'))
+    rt:perform(stream:request_abort_op('test complete')); rt:perform(stream:closed_op())
   end):label('close')
   rt:run()
   IOAudit.assert_clean(rt, { label = 'stale readiness test' })

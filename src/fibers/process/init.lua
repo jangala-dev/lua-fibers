@@ -25,6 +25,7 @@ local perform = require('fibers.perform')
 local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
 local Cell = require('fibers.resource.cell')
+local Mailbox = require('fibers.mailbox')
 
 local ENDPOINTS = { 'stdin', 'stdout', 'stderr' }
 local OUTPUTS = { 'stdout', 'stderr' }
@@ -114,38 +115,61 @@ local function process_not_running(proc, action, state)
   })
 end
 
-function Process:signal_op(signal, target)
-  target = target or self._command._spec.shutdown.target or 'process'
-  return self._state:read_op():and_then(Op.guard(function(state)
-    if state.kind ~= 'running' and state.kind ~= 'closing' then
-      return Op.always(nil, process_not_running(self, 'signal', state))
-    end
-    return Op.always(true):wrap(function()
-      local handle = self._host_process
-      if not handle or type(handle.signal) ~= 'function' then
-        return nil, IOError.unsupported('host', 'process_signal', { pid = self._pid })
-      end
-      local ok, err = handle:signal(signal, target)
-      if not ok then
-        return nil,
-          IOError.normalise(err, {
-            domain = 'process',
-            action = 'signal',
-            pid = self._pid,
-            signal = signal,
-            target = target,
-          })
-      end
-      return true
-    end)
-  end))
+local SignalRequest = {}
+SignalRequest.__index = SignalRequest
+
+function SignalRequest:result_op()
+  return self._completion:result_op()
 end
 
-function Process:terminate_op()
-  return self:signal_op(self._command._spec.shutdown.signal)
+function Process:submit_signal_op(signal, target)
+  target = target or self._command._spec.shutdown.target or 'process'
+  local proc = self
+  return Op.guard(function()
+    local request = setmetatable({
+      kind = 'process_signal_request',
+      signal = signal,
+      target = target,
+      _completion = Completion.new(),
+    }, SignalRequest)
+    Label.child(request._completion, request, 'result')
+
+    return proc._state:read_op():and_then(Op.guard(function(state)
+      if state.kind ~= 'running' and state.kind ~= 'closing' then
+        return Op.always(nil, process_not_running(proc, 'signal', state))
+      end
+      return proc._control_tx:send_op(request):map(function(sent, err)
+        if not sent then return nil, err end
+        return request
+      end)
+    end))
+  end)
 end
-function Process:kill_op()
-  return self:signal_op(self._command._spec.shutdown.kill_signal)
+
+function Process:submit_terminate_op()
+  return self:submit_signal_op(self._command._spec.shutdown.signal)
+end
+
+function Process:submit_kill_op()
+  return self:submit_signal_op(self._command._spec.shutdown.kill_signal)
+end
+
+local function await_signal_submission(proc, submission)
+  local request, err = perform(submission)
+  if not request then return nil, err end
+  return request:result()
+end
+
+function Process:signal(signal, target)
+  return await_signal_submission(self, self:submit_signal_op(signal, target))
+end
+
+function Process:terminate()
+  return await_signal_submission(self, self:submit_terminate_op())
+end
+
+function Process:kill()
+  return await_signal_submission(self, self:submit_kill_op())
 end
 
 function Process:communicate(opts)
@@ -328,10 +352,68 @@ local function publish_exit(rt, proc, status)
   IO.masked_perform(rt, proc._exit_completion:publish_success_op(status))
 end
 
-local function wait_exit_until(proc, deadline)
-  return perform(proc._host_process:exit_op():or_else(Sleep.sleep_until_op(deadline):map(function()
-    return nil, 'timeout'
-  end)))
+local function publish_signal_result(rt, request, ok, err)
+  if ok then
+    IO.masked_perform(rt, request._completion:publish_success_op(true))
+  else
+    IO.masked_perform(rt, request._completion:publish_failure_op(err))
+  end
+end
+
+local function service_signal_request(rt, proc, request)
+  local handle = proc._host_process
+  if not handle or type(handle.signal) ~= 'function' then
+    local err = IOError.unsupported('host', 'process_signal', { pid = proc._pid })
+    publish_signal_result(rt, request, false, err)
+    return nil, err
+  end
+
+  local called, ok, err = Protected.pcall(handle.signal, handle, request.signal, request.target)
+  if not called then
+    err = IOError.protocol('process', 'signal', 'host process signal raised', {
+      pid = proc._pid, signal = request.signal, target = request.target, cause = ok,
+    })
+    publish_signal_result(rt, request, false, err)
+    return nil, err
+  end
+  if not ok then
+    err = IOError.normalise(err, {
+      domain = 'process', action = 'signal', pid = proc._pid,
+      signal = request.signal, target = request.target,
+    })
+    publish_signal_result(rt, request, false, err)
+    return nil, err
+  end
+
+  publish_signal_result(rt, request, true)
+  return true
+end
+
+local function running_event_op(proc, deadline, include_close)
+  local alternatives = {
+    exit = proc._host_process:exit_op(),
+    signal = proc._control_rx:recv_op(),
+  }
+  if include_close then
+    alternatives.close = proc._lifetime:close_requested_op()
+  end
+  if deadline ~= nil then
+    alternatives.timeout = Sleep.sleep_until_op(deadline):map(function() return true end)
+  end
+  return Op.named_choice(alternatives)
+end
+
+local function wait_exit_until(proc, rt, deadline)
+  while true do
+    local event, value, err = perform(running_event_op(proc, deadline))
+    if event == 'exit' then return value, err end
+    if event == 'timeout' then return nil, 'timeout' end
+    if event == 'signal' then
+      if value ~= nil then service_signal_request(rt, proc, value) end
+    end
+    -- A close event is already in force while this helper is used; keep waiting
+    -- for exit while still servicing explicitly submitted signal requests.
+  end
 end
 
 local function finish_close(proc, reason)
@@ -497,17 +579,19 @@ local function supervise(proc, driver_scope, opts, acquired)
 
   local status, close_error
   local close_requested = proc._lifetime:_close_requested()
-  if not close_requested then
-    local event, value, err = perform(Op.named_choice({
-      exit = proc._host_process:exit_op(),
-      close = proc._lifetime:close_requested_op(),
-    }))
+  while not close_requested and not status do
+    local event, value, err = perform(running_event_op(proc, nil, true))
     if event == 'exit' then
       status = value
       if not status then
         IO.masked_perform(rt, proc._exit_completion:publish_failure_op(err))
       end
+    elseif event == 'signal' then
+      if value ~= nil then service_signal_request(rt, proc, value) end
+    elseif event == 'close' then
+      close_requested = true
     end
+    close_requested = close_requested or proc._lifetime:_close_requested()
   end
 
   close_requested = proc._lifetime:_close_requested()
@@ -528,10 +612,10 @@ local function supervise(proc, driver_scope, opts, acquired)
     end
     local deadline = rt:now() + spec.shutdown.grace
     local exit_err
-    status, exit_err = wait_exit_until(proc, deadline)
+    status, exit_err = wait_exit_until(proc, rt, deadline)
     if not status and exit_err == 'timeout' then
       host_process:signal(spec.shutdown.kill_signal, spec.shutdown.target)
-      status, exit_err = perform(proc._host_process:exit_op())
+      status, exit_err = wait_exit_until(proc, rt, nil)
     end
     if not status then
       IO.masked_perform(rt, proc._exit_completion:publish_failure_op(exit_err))
@@ -608,11 +692,14 @@ function Command:launch_op(opts)
   -- attempt. The guard is speculative and pure: no host action occurs until the
   -- Process root and its private custody have committed and its Task view starts.
   return Op.guard(function()
+    local control_tx, control_rx = Mailbox.new(0)
     local proc = Label.attach(Label.identity(setmetatable({
       kind = 'process',
       _command = command,
       _state = Cell._trusted({ kind = 'created' }),
       _exit_completion = Completion.new(),
+      _control_tx = control_tx,
+      _control_rx = control_rx,
       _communicating = false,
       _host_process = nil,
       _streams = {},
@@ -621,6 +708,7 @@ function Command:launch_op(opts)
     }, Process), 'process'), opts.label)
     Label.child(proc._state, proc, 'state')
     Label.child(proc._exit_completion, proc, 'exit')
+    control_tx:label(process_label(proc) .. ':control')
     local admitted = parent_scope:_drive_op(proc, {
       label = opts.label,
       role = 'process',
@@ -679,6 +767,7 @@ Module.Process = Process
 Module.Error = IOError
 
 Direct.install(Command, { 'launch' })
-Direct.install(Process, { 'pid', 'stdin', 'stdout', 'stderr', 'launch_succeeded', 'launch_failed', 'launch_result', 'result', 'signal', 'terminate', 'kill', 'request_close', 'closed' })
+Direct.install(SignalRequest, { 'result' })
+Direct.install(Process, { 'pid', 'stdin', 'stdout', 'stderr', 'launch_succeeded', 'launch_failed', 'launch_result', 'result', 'submit_signal', 'submit_terminate', 'submit_kill', 'request_close', 'closed' })
 
 return Module

@@ -8,7 +8,7 @@ local Op = require('fibers.op')
 local Flow = require('fibers.resource.flow')
 local Lifetime = require('fibers.lifetime')
 local Closure = require('fibers.closure')
-local Runtime = require('fibers.runtime')
+local perform = require('fibers.perform')
 local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
 local Contract = require('fibers.internal.contract')
@@ -118,9 +118,6 @@ end
 forward_ops('read', { 'read_some', 'read_exactly', 'read_until', 'read_line', 'read_all' })
 forward_ops('write', { 'write_some', 'flush' })
 
-function Duplex:read_exactly(n) return endpoint(self, 'read'):read_exactly(n) end
-function Duplex:read_all(opts) return endpoint(self, 'read'):read_all(opts) end
-
 local function write_bytes(...)
   local count = select('#', ...)
   if count == 0 then return '' end
@@ -135,7 +132,6 @@ end
 
 function Duplex:write_op(...) return endpoint(self, 'write'):write_op(write_bytes(...)) end
 function Duplex:write_all_op(...) return endpoint(self, 'write'):write_all_op(write_bytes(...)) end
-function Duplex:write_all(...) return endpoint(self, 'write'):write_all(write_bytes(...)) end
 
 
 local function flow_of(value)
@@ -179,30 +175,12 @@ local function close_request(self, reason, abort_write)
   ):map(function() return true end)
 end
 
-local function wait_after_commit(self, request, before_wait)
-  return request:wrap(function()
-    local runtime = Runtime.current()
-    if not runtime then
-      error('Stream closure requires a current runtime', 2)
-    end
-    if before_wait then
-      local ok, err = before_wait(runtime)
-      if not ok then
-        return nil, err
-      end
-    end
-    return runtime:_perform_current(self:closed_op(), nil, true)
-  end)
-end
-function Duplex:close_op(reason)
-  return wait_after_commit(self, close_request(self, reason, false), function(runtime)
-    return self._writer and runtime:_perform_current(self._writer:flush_op(), nil, true) or true
-  end)
+function Duplex:request_close_op(reason)
+  return close_request(self, reason, false)
 end
 
-
-function Duplex:abort_op(reason)
-  return wait_after_commit(self, close_request(self, reason, true))
+function Duplex:request_abort_op(reason)
+  return close_request(self, reason, true)
 end
 
 
@@ -216,6 +194,22 @@ function Duplex:closed_op()
     if self._close_error then return nil, self._close_error end
     return true
   end)
+end
+
+function Duplex:close(reason)
+  local requested, request_err = perform(self:request_close_op(reason))
+  if not requested then return nil, request_err end
+  if self._writer then
+    local flushed, flush_err = self._writer:flush()
+    if not flushed then return nil, flush_err end
+  end
+  return perform(self:closed_op())
+end
+
+function Duplex:abort(reason)
+  local requested, request_err = perform(self:request_abort_op(reason))
+  if not requested then return nil, request_err end
+  return perform(self:closed_op())
 end
 
 
@@ -250,6 +244,10 @@ function Stream.merge_lines_op(streams, opts)
 end
 Direct.install_static(Stream, { 'merge_lines' })
 
-Direct.install(Duplex, { 'read_some', 'read_until', 'read_line', 'write', 'write_some', 'flush', 'shutdown_read', 'shutdown_write', 'abort_write', 'close', 'abort', 'closed' })
+Direct.install(Duplex, {
+  'read_some', 'read_exactly', 'read_until', 'read_line', 'read_all',
+  'write', 'write_all', 'write_some', 'flush',
+  'shutdown_read', 'shutdown_write', 'abort_write', 'request_close', 'request_abort', 'closed',
+})
 
 return Stream

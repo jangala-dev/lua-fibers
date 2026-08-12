@@ -42,10 +42,10 @@ rejects('Runtime fractional budget', function() Runtime.new({ search_step_budget
 
 -- Public option tables are closed records rather than bags of hints.
 rejects('listener unknown option', function()
-  socket.listen_op(Address.ipv4('127.0.0.1', 0), { legacy_hint = true })
+  socket.submit_listen_op(Address.ipv4('127.0.0.1', 0), { legacy_hint = true })
 end)
 rejects('listener truthy boolean', function()
-  socket.listen_op(Address.ipv4('127.0.0.1', 0), { nodelay = 1 })
+  socket.submit_listen_op(Address.ipv4('127.0.0.1', 0), { nodelay = 1 })
 end)
 rejects('numeric dial unknown option', function()
   socket.dial_op(Address.ipv4('127.0.0.1', 80), { retry = true })
@@ -203,7 +203,7 @@ if type(File.RegularFile.read_some_op) ~= 'function' or type(File.RegularFile.wr
 end
 for _, name in ipairs({ 'read_exactly', 'read_all', 'write_all' }) do
   if type(File.RegularFile[name]) ~= 'function' or type(File.RegularFile[name .. '_op']) ~= 'function' then
-    error('v1 RegularFile bounded byte protocol must expose direct and atomic forms: ' .. name, 2)
+    error('v1 RegularFile byte fact must expose an exact direct/Option pair: ' .. name, 2)
   end
 end
 
@@ -211,7 +211,7 @@ end
 local left = Stream.memory_pair()
 for _, name in ipairs({ 'read_exactly', 'read_all', 'write_all' }) do
   if type(left[name]) ~= 'function' or type(left[name .. '_op']) ~= 'function' then
-    error('v1 Stream bounded byte protocol must expose direct and atomic forms: ' .. name, 2)
+    error('v1 Stream byte fact must expose an exact direct/Option pair: ' .. name, 2)
   end
 end
 if left.read ~= nil or left.read_op ~= nil then

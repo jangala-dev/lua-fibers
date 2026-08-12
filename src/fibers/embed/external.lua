@@ -113,6 +113,23 @@ function External.unsafe_clear(resource, ...)
   return publish(spec, resource, spec.clear, ...)
 end
 
+-- Trusted runtime-internal mutation of a managed location.  This is not an
+-- external Feed and grants no host delivery authority: it exists for monotonic
+-- administrative progress which must invalidate speculative observations.
+function External._internal_publish(runtime, resource, location, update, ...)
+  if not runtime then error('internal publication requires a Runtime', 2) end
+  runtime:_check_not_failed(2)
+  if type(location) ~= 'table' then error('internal publication requires a managed location', 2) end
+  if type(update) ~= 'function' then error('internal publication requires an update function', 2) end
+  local value = update(location.value, resource, ...)
+  rawset(location, 'value', value)
+  rawset(location, 'version', (location.version or 0) + 1)
+  local engine = runtime.engine
+  engine.epoch = engine.epoch + 1
+  Proof.touch_resource(engine, resource)
+  return value
+end
+
 -- Host-actionable retry interests.
 --
 -- Interests are not evidence that retry is justified.  RetryProof frontiers
@@ -157,6 +174,21 @@ function Interest.timer(deadline)
   return make('timer', tostring(deadline), { deadline = deadline })
 end
 
+-- Runtime-internal progress which can be discharged immediately by the Fibers
+-- driver without involving the embedding host.  Internal interests are a trusted
+-- substrate hook: they must be idempotent and may only advance administrative
+-- state which is not itself the result of the waiting participant operation.
+function Interest._internal(resource, interest, service, detail)
+  if type(service) ~= 'function' then error('internal interest requires a service function', 2) end
+  local rid = stable_resource_id(resource)
+  local key = tostring(rid) .. ':' .. tostring(interest or 'progress')
+  detail = detail or {}
+  detail.resource = resource
+  detail.interest = interest or 'progress'
+  detail.service = service
+  return make('internal', key, detail)
+end
+
 function Interest.external(resource, interest, detail)
   local rid = stable_resource_id(resource)
   local key = tostring(rid) .. ':' .. tostring(interest or 'ready')
@@ -166,6 +198,21 @@ function Interest.external(resource, interest, detail)
   detail.interest = interest or 'ready'
   detail.external_kind = detail.external_kind or resource and resource.kind
   return make('external', key, detail)
+end
+
+function Interest._service_internal(runtime, list)
+  local progressed, write = false, 1
+  for i = 1, #(list or {}) do
+    local interest = list[i]
+    if type(interest) == 'table' and interest._fibers_interest == true and interest.kind == 'internal' then
+      if interest.service(runtime, interest) then progressed = true end
+    else
+      list[write] = interest
+      write = write + 1
+    end
+  end
+  for i = write, #(list or {}) do list[i] = nil end
+  return progressed
 end
 
 function Interest.summarise(list)

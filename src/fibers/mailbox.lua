@@ -101,10 +101,14 @@ end
 
 function Tx:clone_op()
   local mailbox = self._mailbox
-  local clone = active_op(self, true):and_then(mailbox._senders:give_op(1)):wrap(function()
-    return tx(mailbox, true)
+  return Op.guard(function()
+    local active_clone = tx(mailbox, true)
+    local inactive_clone = tx(mailbox, false)
+    local clone = active_op(self, true):and_then(mailbox._senders:give_op(1)):map(function()
+      return active_clone
+    end)
+    return clone:or_else(active_op(self, false):map(function() return inactive_clone end))
   end)
-  return clone:or_else(active_op(self, false):wrap(function() return tx(mailbox, false) end))
 end
 
 function Tx:close_op(reason)

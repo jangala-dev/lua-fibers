@@ -1,4 +1,5 @@
--- Install direct twins for inert `_op` methods.
+-- Install exact direct twins for one-transaction `_op` methods.
+-- Every installed `foo(...)` is exactly `perform(foo_op(...))`.
 
 local perform = require('fibers.perform')
 

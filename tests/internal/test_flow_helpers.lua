@@ -161,23 +161,24 @@ do
   assert_eq(dst_got, 'abc')
 end
 
--- splice_to must not consume source bytes when the destination cannot accept
--- the bytes.  The derived law is peek -> write -> drop, not read -> write.
+-- splice_to is a whole transactional transfer. Like write_all_op it may raise
+-- the destination's working high-water capacity to admit the complete finite
+-- payload; source bytes are dropped only in the same committed world.
 do
-  local src = Flow.new(16):label('splice-too-large-src')
-  local dst = Flow.new(2):label('splice-too-large-dst')
-  local moved, err, src_left, dst_queued
+  local src = Flow.new(16):label('splice-elastic-src')
+  local dst = Flow.new(2):label('splice-elastic-dst')
+  local moved, src_left, dst_got
   local st = fibers.try_run(function()
-    fibers.perform(src:inlet():write_op('abc'))
-    moved, err = fibers.perform(src:outlet():splice_to_op(dst:inlet(), 3))
+    fibers.perform(src:inlet():write_op('abcdef'))
+    moved = fibers.perform(src:outlet():splice_to_op(dst:inlet(), 3))
     src_left = fibers.perform(src:outlet():read_exactly_op(3))
-    dst_queued = Inspect.queued(dst)
+    dst_got = fibers.perform(dst:outlet():read_exactly_op(3))
   end).runtime_status
   assert_status(st, 'found')
-  assert_nil(moved)
-  assert_eq(err, Errors.TOO_LARGE)
-  assert_eq(src_left, 'abc', 'failed destination write must not consume source')
-  assert_eq(dst_queued, 0, 'failed splice must not append destination bytes')
+  assert_eq(moved, 3)
+  assert_eq(src_left, 'def')
+  assert_eq(dst_got, 'abc')
+  assert_eq(dst._capacity, 3)
 end
 
 -- Destination closure is another write-side failure; it must also leave the

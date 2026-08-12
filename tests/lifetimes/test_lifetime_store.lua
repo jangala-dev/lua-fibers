@@ -185,7 +185,7 @@ do
     local op = scope:spawn_op(function() started = true; return 'ok' end, { label = 'inert-start' })
     eq(started, false)
     local task = fibers.perform(op)
-    eq(fibers.perform(task:await_op()), 'ok')
+    eq(task:await(), 'ok')
   end)
   eq(started, true)
 end

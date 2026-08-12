@@ -160,39 +160,83 @@ do
 end
 
 
--- Atomic byte facts cannot exceed bounded Flow capacity. Impossible exact
--- reads fail immediately and leave buffered bytes untouched.
+-- Exact reads may raise the Flow's working high-water capacity without
+-- consuming a prefix before the complete transactional fact is available.
 do
-  local flow = Flow.new(2):label('public-bounded-exact')
+  local flow = Flow.new(2):label('public-elastic-exact')
+  local value
+  local st = fibers.try_run(function(scope)
+    scope:spawn(function()
+      fibers.perform(flow:inlet():write_op('ab'))
+      fibers.perform(flow:inlet():write_op('c'))
+    end)
+    value = fibers.perform(flow:outlet():read_exactly_op(3))
+  end).runtime_status
+  assert_eq(st.tag, 'found')
+  assert_eq(value, 'abc')
+  assert_truthy(flow._capacity >= 3, 'exact demand should raise working capacity')
+  local written, write_err = fibers.try_run(function()
+    return fibers.perform(flow:inlet():write_op('abc'))
+  end):unpack()
+  assert_nil(written, 'elastic read growth must not widen write_op payload policy')
+  assert_eq(write_err, Errors.CAPACITY)
+end
+
+-- read_all_op is one bounded EOF fact.  Its finite max drives elastic capacity
+-- growth so producers can continue, while max+1 bytes prove TOO_LARGE without
+-- consuming the buffered value.
+do
+  local flow = Flow.new(2):label('public-elastic-read-all')
+  local value
+  local st = fibers.try_run(function(scope)
+    scope:spawn(function()
+      fibers.perform(flow:inlet():write_op('ab'))
+      fibers.perform(flow:inlet():write_op('cd'))
+      fibers.perform(flow:inlet():close_op())
+    end)
+    value = fibers.perform(flow:outlet():read_all_op({ max = 8 }))
+  end).runtime_status
+  assert_eq(st.tag, 'found')
+  assert_eq(value, 'abcd')
+  assert_truthy(flow._capacity >= 9, 'read_all must reserve one byte beyond max to prove oversize')
+end
+
+-- write_all_op may enlarge storage enough for one known payload, but it does
+-- not grow around pre-existing backlog.  Backpressure therefore remains between
+-- successive whole writes even though each admitted payload is indivisible.
+do
+  local flow = Flow.new(2):label('public-elastic-write-all-backpressure')
+  local inlet, outlet = flow:inlet(), flow:outlet()
+  local first, blocked, drained, second, after
+  local st = fibers.try_run(function()
+    first = fibers.perform(inlet:write_op('ab'))
+    blocked = fibers.perform(inlet:write_all_op('cdef'):or_else(Op.always('blocked')))
+    drained = fibers.perform(outlet:read_exactly_op(2))
+    second = fibers.perform(inlet:write_all_op('cdef'))
+    after = fibers.perform(outlet:read_exactly_op(4))
+  end).runtime_status
+  assert_eq(st.tag, 'found')
+  assert_eq(first, 2)
+  assert_eq(blocked, 'blocked', 'write_all must not grow around retained backlog')
+  assert_eq(drained, 'ab')
+  assert_eq(second, 4)
+  assert_eq(after, 'cdef')
+  assert_truthy(flow._capacity >= 4)
+end
+
+do
+  local flow = Flow.new(2):label('public-read-all-too-large')
   local value, err, after
   local st = fibers.try_run(function()
-    fibers.perform(flow:inlet():write_op('ab'))
-    value, err = fibers.perform(flow:outlet():read_exactly_op(3))
-    after = fibers.perform(flow:outlet():read_exactly_op(2))
+    fibers.perform(flow:inlet():write_all_op('abcd'))
+    fibers.perform(flow:inlet():close_op())
+    value, err = fibers.perform(flow:outlet():read_all_op({ max = 3 }))
+    after = fibers.perform(flow:outlet():read_exactly_op(4))
   end).runtime_status
   assert_eq(st.tag, 'found')
   assert_nil(value)
-  assert_eq(err, Errors.CAPACITY)
-  assert_eq(after, 'ab')
-end
-
--- Delimiter and EOF proofs report capacity when a bounded committed buffer is
--- saturated before the requested atomic fact can be established.
-do
-  local flow = Flow.new(2):label('public-bounded-proof')
-  local line, line_err, all, all_err, after
-  local st = fibers.try_run(function()
-    fibers.perform(flow:inlet():write_op('ab'))
-    line, line_err = fibers.perform(flow:outlet():read_line_op({ max = 8 }))
-    all, all_err = fibers.perform(flow:outlet():read_all_op({ max = 8 }))
-    after = fibers.perform(flow:outlet():read_exactly_op(2))
-  end).runtime_status
-  assert_eq(st.tag, 'found')
-  assert_nil(line)
-  assert_eq(line_err, Errors.CAPACITY)
-  assert_nil(all)
-  assert_eq(all_err, Errors.CAPACITY)
-  assert_eq(after, 'ab', 'capacity failures must not consume buffered bytes')
+  assert_eq(err, Errors.TOO_LARGE)
+  assert_eq(after, 'abcd', 'read_all limit failure must not consume buffered bytes')
 end
 
 print('tests/public/test_flow.lua: ok')

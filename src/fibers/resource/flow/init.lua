@@ -4,6 +4,7 @@
 -- one serial law. Streams and host adapters build on the inlet and outlet.
 
 local Closure = require('fibers.closure')
+local External = require('fibers.embed.external')
 local Effect = require('fibers.effect')
 local Facility = require('fibers.resource.authoring')
 local Lifetime = require('fibers.lifetime')
@@ -14,8 +15,6 @@ local Rope = require('fibers.resource.flow.rope')
 local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
 local Contract = require('fibers.internal.contract')
-local ByteProtocol = require('fibers.internal.byte_protocol')
-local perform = require('fibers.perform')
 
 local Ready, Wait = Machine.Ready, Machine.Wait
 local INF = math.huge
@@ -40,6 +39,12 @@ local function count(value, default, label, positive)
     error((label or 'flow byte count') .. ' must be a non-negative integer', 3)
   end
   if positive and value == 0 then error((label or 'flow byte count') .. ' must be positive', 3) end
+  return value
+end
+
+local function finite_count(value, default, label, positive)
+  value = count(value, default, label, positive)
+  if value == INF then error((label or 'flow byte count') .. ' must be finite', 3) end
   return value
 end
 
@@ -70,8 +75,9 @@ function SpaceLease:capacity() return self._capacity end
 
 -- State ---------------------------------------------------------------------
 
-local function new_state()
+local function new_state(initial_capacity)
   return {
+    capacity = initial_capacity,
     input_open = true,
     output_open = true,
     rope = Rope.new(),
@@ -93,12 +99,13 @@ local function retained(state)
   return state.rope:length() + leased + reserved
 end
 
-local function free(flow, state)
-  return flow._capacity == INF and INF or flow._capacity - retained(state)
+local function current_capacity(flow)
+  local state = flow and flow._state and flow._state._location.value
+  return state and state.capacity or flow._capacity
 end
 
-local function buffer_saturated(flow, state)
-  return flow._capacity ~= INF and state.rope:length() >= flow._capacity
+local function free(_, state)
+  return state.capacity == INF and INF or state.capacity - retained(state)
 end
 
 local function committed_closed(flow, endpoint)
@@ -151,6 +158,7 @@ Changed = Effect.kind({
       key = payload.flow._fibers_id,
       payload = payload,
       discharge = function(runtime, prepared)
+        prepared.payload.flow._capacity = current_capacity(prepared.payload.flow)
         local reactor = runtime.host_reactor
         if reactor and reactor._notify_flow_changed then
           reactor:_notify_flow_changed(prepared.payload.flow)
@@ -161,10 +169,24 @@ Changed = Effect.kind({
   end,
 })
 
-local function transition(flow, rule, payload)
+local function transition(flow, rule, payload, wake)
   payload = payload or {}
   payload.flow = flow
-  local option = flow._state:transition_op(rule, payload)
+  local option
+  if wake then
+    local specs = flow._wake_specs
+    if not specs then specs = {}; flow._wake_specs = specs end
+    local spec = specs[rule]
+    if not spec then
+      spec = Machine._compile(flow._state._location, flow._state, rule, {
+        wake = wake, semantics = flow._state._value_semantics,
+      })
+      specs[rule] = spec
+    end
+    option = Facility.bind(spec, payload)
+  else
+    option = flow._state:transition_op(rule, payload)
+  end
   if rule.rule_mode == 'inspect' then return option end
   return option:and_then(Op.guard(function(...)
     local result = Facility.pack(...)
@@ -172,6 +194,42 @@ local function transition(flow, rule, payload)
       return Facility.unpack(result, 1, result.n)
     end)
   end))
+end
+
+-- Elastic capacity ----------------------------------------------------------
+--
+-- Capacity is a working high-water mark, not preallocated storage.  Exact
+-- bounded read operations may ask the runtime to grow it while they wait; that
+-- administrative change is separate from the participant transaction and never
+-- consumes bytes.  Whole-write admission can grow the same high-water mark in
+-- its own transaction because the complete payload is already known.
+local function grow_capacity_state(state, _, target)
+  if state.capacity == INF or target <= state.capacity then return state end
+  local next = copy_state(state)
+  next.capacity = target
+  return next
+end
+
+local function service_capacity_interest(runtime, interest)
+  local flow, target = interest.resource, interest.target
+  if current_capacity(flow) == INF or target <= current_capacity(flow) then return false end
+  External._internal_publish(runtime, flow, flow._state._location, grow_capacity_state, target)
+  flow._capacity = current_capacity(flow)
+  local reactor = runtime.host_reactor
+  if reactor and reactor._notify_flow_changed then reactor:_notify_flow_changed(flow) end
+  return true
+end
+
+local function capacity_wake(runtime, _, payload)
+  local flow, target = payload.flow, payload.demand_capacity
+  if target == nil or current_capacity(flow) == INF or target <= current_capacity(flow) then return nil end
+  return External.Interest._internal(flow, 'grow-capacity:' .. tostring(target), service_capacity_interest, {
+    target = target,
+  })
+end
+
+local function demand_transition(flow, rule, payload)
+  return transition(flow, rule, payload, capacity_wake)
 end
 
 -- Rules ---------------------------------------------------------------------
@@ -193,15 +251,32 @@ local T = {}
 T.write = select_when('write', function(state, payload)
   local value = payload.bytes
   return write_error(state) ~= nil
-    or #value > payload.flow._capacity
+    or #value > payload.flow._write_limit
     or #value <= free(payload.flow, state)
 end, function(state, payload)
   local err = write_error(state)
   if err then return Ready.same(nil, err) end
   local value = payload.bytes
-  if #value > payload.flow._capacity then return Ready.same(nil, Errors.CAPACITY) end
+  if #value > payload.flow._write_limit then return Ready.same(nil, Errors.CAPACITY) end
   if #value > free(payload.flow, state) then return Wait end
   local next = copy_state(state, true)
+  next.rope:append(value)
+  return Ready.write(next, #value)
+end, 100)
+
+T.write_all = select_when('write_all', function(state, payload)
+  local value = payload.bytes
+  if write_error(state) ~= nil then return true end
+  local expanded = state.capacity == INF and INF or math.max(state.capacity, #value)
+  return #value <= (expanded == INF and INF or expanded - retained(state))
+end, function(state, payload)
+  local err = write_error(state)
+  if err then return Ready.same(nil, err) end
+  local value = payload.bytes
+  local expanded = state.capacity == INF and INF or math.max(state.capacity, #value)
+  if #value > (expanded == INF and INF or expanded - retained(state)) then return Wait end
+  local next = copy_state(state, true)
+  next.capacity = expanded
   next.rope:append(value)
   return Ready.write(next, #value)
 end, 100)
@@ -255,7 +330,7 @@ T.read_until = select_when('read_until', function(state, payload)
   local finish = find_until(state, payload.sep)
   if finish then return true end
   if state.rope:length() > payload.limit and not state.rope:ends_with_prefix(payload.sep) then return true end
-  return committed_closed(payload.flow, 'input') or buffer_saturated(payload.flow, state)
+  return committed_closed(payload.flow, 'input')
 end, function(state, payload)
   if state.input_error then return Ready.same(nil, state.input_error) end
   local finish, data_len = find_until(state, payload.sep)
@@ -276,15 +351,15 @@ end, function(state, payload)
     if payload.line then return Ready.write(next, partial) end
     return Ready.write(next, nil, Errors.EOF, partial)
   end
-  if buffer_saturated(payload.flow, state) then return Ready.same(nil, Errors.CAPACITY) end
   return Wait
 end, 50)
 
 T.read_all = select_when('read_all', function(state, payload)
-  return state.rope:length() > payload.max
+  return state.input_error ~= nil
+    or state.rope:length() > payload.max
     or committed_closed(payload.flow, 'input')
-    or buffer_saturated(payload.flow, state)
 end, function(state, payload)
+  if state.input_error then return Ready.same(nil, state.input_error) end
   local available = state.rope:length()
   if available > payload.max then return Ready.same(nil, Errors.TOO_LARGE) end
   if committed_closed(payload.flow, 'input') then
@@ -292,7 +367,6 @@ end, function(state, payload)
     local next = copy_state(state, true)
     return Ready.write(next, next.rope:take(available))
   end
-  if buffer_saturated(payload.flow, state) then return Ready.same(nil, Errors.CAPACITY) end
   return Wait
 end, 50)
 
@@ -536,15 +610,16 @@ function Inlet:write_op(value)
   return live(self, function() return transition(self._flow, T.write, { bytes = value }) end)
 end
 
+function Inlet:write_all_op(value)
+  value = bytes(value, 2)
+  if value == '' then return Op.always(0) end
+  return live(self, function() return transition(self._flow, T.write_all, { bytes = value }) end)
+end
+
 
 function Inlet:write_some_op(value)
   value = bytes(value, 2)
   return live(self, function() return transition(self._flow, T.write_some, { bytes = value }) end)
-end
-
-
-function Inlet:write_all_op(value)
-  return self:write_op(value)
 end
 
 
@@ -570,14 +645,11 @@ function Inlet:fail_op(err)
 end
 
 
-local function bounded_op(handle, n, default, label, empty, rule)
-  n = count(n, default, label)
+local function exact_op(handle, n, default, label, empty, rule)
+  n = finite_count(n, default, label)
   if n == 0 then return Op.always(empty) end
   return live(handle, function()
-    if handle._flow._capacity ~= INF and n > handle._flow._capacity then
-      return Op.always(nil, Errors.CAPACITY)
-    end
-    return transition(handle._flow, rule, { n = n })
+    return demand_transition(handle._flow, rule, { n = n, demand_capacity = n })
   end)
 end
 
@@ -591,11 +663,11 @@ end
 
 
 function Outlet:read_exactly_op(n)
-  return bounded_op(self, n, 0, 'flow exact read size', '', T.read_exactly)
+  return exact_op(self, n, 0, 'flow exact read size', '', T.read_exactly)
 end
 
 function Outlet:peek_exactly_op(n)
-  return bounded_op(self, n, 1, 'flow peek size', '', T.peek)
+  return exact_op(self, n, 1, 'flow peek size', '', T.peek)
 end
 
 
@@ -604,9 +676,11 @@ function Outlet:read_until_op(sep, opts)
   Contract.optional_boolean(opts.include, 'read_until_op opts.include', 2)
   sep = separator(sep, 'flow read_until separator')
   return live(self, function()
-    return transition(self._flow, T.read_until, {
+    local limit = finite_count(opts.max, 8192, 'flow read_until max')
+    return demand_transition(self._flow, T.read_until, {
       sep = sep,
-      limit = count(opts.max, 8192, 'flow read_until max'),
+      limit = limit,
+      demand_capacity = limit + #sep,
       include = opts.include == true,
       err = Errors.TOO_LARGE,
     })
@@ -619,9 +693,12 @@ function Outlet:read_line_op(opts)
   Contract.optional_boolean(opts.keep_terminator, 'read_line_op opts.keep_terminator', 2)
   if opts.terminator ~= nil then separator(opts.terminator, 'flow line terminator') end
   return live(self, function()
-    return transition(self._flow, T.read_until, {
-      sep = separator(opts.terminator or '\n', 'flow line terminator'),
-      limit = count(opts.max, 8192, 'flow line max'),
+    local sep = separator(opts.terminator or '\n', 'flow line terminator')
+    local limit = finite_count(opts.max, 8192, 'flow line max')
+    return demand_transition(self._flow, T.read_until, {
+      sep = sep,
+      limit = limit,
+      demand_capacity = limit + #sep,
       include = opts.keep_terminator == true,
       err = Errors.LINE_TOO_LONG,
       line = true,
@@ -633,21 +710,25 @@ end
 function Outlet:read_all_op(opts)
   opts = options(opts, { max = true }, 'read_all_op options')
   if opts.max == nil then error('read_all_op expects opts.max', 2) end
+  local maximum = finite_count(opts.max, nil, 'flow read_all max')
   return live(self, function()
-    return transition(self._flow, T.read_all, { max = count(opts.max, nil, 'flow read_all max') })
+    return demand_transition(self._flow, T.read_all, {
+      max = maximum,
+      demand_capacity = maximum + 1,
+    })
   end)
 end
 
 
 function Outlet:drop_op(n)
-  return bounded_op(self, n, 0, 'flow drop size', 0, T.drop)
+  return exact_op(self, n, 0, 'flow drop size', 0, T.drop)
 end
 
 
 function Outlet:splice_to_op(inlet, n)
   n = count(n, 0, 'flow splice size')
   return self:peek_exactly_op(n):and_then(Op.guard(function(value)
-    return inlet:write_op(value):and_then(Op.guard(function(written, err)
+    return inlet:write_all_op(value):and_then(Op.guard(function(written, err)
       if not written then
         return Op.always(nil, err == Errors.CAPACITY and Errors.TOO_LARGE or err)
       end
@@ -727,8 +808,12 @@ end
 -- Flow ----------------------------------------------------------------------
 
 function Flow.new(limit)
-  local flow = Facility.identity(setmetatable({ _capacity = capacity(limit) }, Flow), Kind)
-  flow._state = Machine._trusted(new_state())
+  local initial_capacity = capacity(limit)
+  local flow = Facility.identity(setmetatable({
+    _capacity = initial_capacity,
+    _write_limit = initial_capacity,
+  }, Flow), Kind)
+  flow._state = Machine._trusted(new_state(initial_capacity))
   Label.child(flow._state, flow, 'state')
   flow._inlet = Label.attach(setmetatable({
     _fibers_id = flow._fibers_id .. ':inlet',
@@ -808,40 +893,13 @@ Flow.Error = {
   RETIRED = Errors.RETIRED,
 }
 
-local DEFAULT_PROTOCOL_CHUNK = 16 * 1024
-
-function Inlet:write_all(value)
-  value = bytes(value, 2)
-  if value == '' then return 0 end
-  local limit = self._flow._capacity
-  if limit == 0 then return nil, Errors.CAPACITY end
-  local chunk = limit == INF and #value or limit
-  return ByteProtocol.write_all(function(part) return perform(self:write_op(part)) end, value, chunk)
-end
-
-function Outlet:read_exactly(n)
-  n = count(n, 0, 'flow exact read size')
-  if n == 0 then return '' end
-  if self._flow._capacity == 0 then return nil, Errors.CAPACITY end
-  return ByteProtocol.read_exactly(function(want) return perform(self:read_some_op(want)) end, n, Errors.EOF)
-end
-
-function Outlet:read_all(opts)
-  opts = options(opts, { max = true, chunk_size = true }, 'read_all options')
-  if opts.max == nil then error('read_all expects opts.max', 2) end
-  local maximum = count(opts.max, nil, 'flow read_all max')
-  local chunk = count(opts.chunk_size, DEFAULT_PROTOCOL_CHUNK, 'flow read_all chunk_size', true)
-  return ByteProtocol.read_all(
-    function(want) return perform(self:read_some_op(want)) end,
-    function() return perform(self:peek_exactly_op(1)) end,
-    maximum, chunk, Errors.EOF, Errors.TOO_LARGE
-  )
-end
-
 Direct.install(Lease, { 'ack', 'release', 'fail' })
 Direct.install(SpaceLease, { 'commit', 'release', 'fail' })
-Direct.install(Inlet, { 'write', 'write_some', 'reserve_some', 'flush', 'close', 'closed', 'fail' })
-Direct.install(Outlet, { 'read_some', 'peek_exactly', 'read_until', 'read_line', 'drop', 'splice_to', 'lease_some', 'close', 'closed', 'fail' })
+Direct.install(Inlet, { 'write', 'write_all', 'write_some', 'reserve_some', 'flush', 'close', 'closed', 'fail' })
+Direct.install(Outlet, {
+  'read_some', 'read_exactly', 'peek_exactly', 'read_until', 'read_line', 'read_all',
+  'drop', 'splice_to', 'lease_some', 'close', 'closed', 'fail',
+})
 Direct.install(Flow, { 'abort', 'closed' })
 
 return Flow

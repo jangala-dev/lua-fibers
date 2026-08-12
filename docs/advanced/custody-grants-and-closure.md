@@ -57,11 +57,13 @@ local task = fibers.perform(scope:spawn_op(function(child)
   return 42
 end))
 
-local value = fibers.perform(task:await_op())
+local outcome = fibers.perform(task:outcome_op())
 ```
 
-`Task:await_op()` waits for the complete Lifetime outcome. The body result is
-available separately through `Task:body_result_op()` for advanced diagnostics.
+`Task:outcome_op()` waits transactionally for the complete Lifetime outcome.
+`Task:await()` is the participant-level convenience which waits for that outcome
+and raises structured failure. The body result is available separately through
+`Task:body_result_op()` for advanced diagnostics.
 A body can return successfully while Closure later fails, or fail while all
 retained consequences close correctly.
 

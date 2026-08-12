@@ -170,7 +170,7 @@ end
 function tests.file_data_ops_are_values_and_control_submissions_are_explicit()
   local provider = memory_provider({ ['/x'] = 'value' })
   fibers.run(function()
-    assert(fibers.perform(file.read_all_op('/x', { max = 32 })) == 'value')
+    assert(file.read_all('/x', { max = 32 }) == 'value')
     local job = fibers.perform(file.submit_read_all_op('/x', { max = 32 }))
     assert(job and fibers.perform(job:result_op()) == 'value')
 
@@ -208,14 +208,14 @@ function tests.read_line_eof_is_successful_nil()
   end, { host = host_with_provider(provider) })
 end
 
-function tests.bounded_handle_read_restores_position()
+function tests.bounded_handle_read_failure_is_non_consuming()
   local provider = memory_provider({ ['/bounded'] = 'abcdef' })
   fibers.run(function()
     local opened = assert(file.open('/bounded', 'rb', {}))
-    local value, err = opened:read_all({ max = 3, chunk_size = 2 })
+    local value, err = opened:read_all({ max = 3 })
     assert(value == nil)
     assert(HostError.is(err, 'system'))
-    assert(opened:read(3) == 'def')
+    assert(opened:read(3) == 'abc')
     assert(opened:close())
   end, { host = host_with_provider(provider) })
 end
@@ -641,30 +641,27 @@ function tests.native_evented_file_provider_when_available()
 end
 
 
-function tests.bounded_file_ops_are_atomic_while_direct_methods_are_procedural()
+function tests.elastic_whole_byte_facts_are_exact_twins()
   local provider = memory_provider({ ['/bounded-byte-protocol'] = 'abcdefgh' })
   fibers.run(function()
     local opened = assert(file.open('/bounded-byte-protocol', 'r+b', {
-      read_capacity = 2,
+      read_capacity = 4,
       read_chunk_size = 2,
       write_capacity = 2,
       write_chunk_size = 2,
     }))
 
-    local exact, exact_err = fibers.perform(opened:read_exactly_op(3))
-    assert(exact == nil)
-    assert(HostError.is(exact_err, 'invalid_argument'))
+    assert(fibers.perform(opened:read_exactly_op(5)) == 'abcde')
+    assert(opened:seek('set', 0) == 0)
     assert(opened:read_exactly(5) == 'abcde')
 
     assert(opened:seek('set', 0) == 0)
-    local all, all_err = fibers.perform(opened:read_all_op({ max = 16 }))
-    assert(all == nil)
-    assert(HostError.is(all_err, 'invalid_argument'))
+    assert(fibers.perform(opened:read_all_op({ max = 16 })) == 'abcdefgh')
     assert(opened:seek('set', 0) == 0)
-    assert(opened:read_all({ max = 16, chunk_size = 2 }) == 'abcdefgh')
+    assert(opened:read_all({ max = 16 }) == 'abcdefgh')
 
     assert(opened:seek('set', 0) == 0)
-    local written, write_err = fibers.perform(opened:write_all_op('WXYZ'))
+    local written, write_err = fibers.perform(opened:write_op('WXYZ'))
     assert(written == nil)
     assert(HostError.is(write_err, 'invalid_argument'))
     assert(opened:write_all('WXYZ') == 4)

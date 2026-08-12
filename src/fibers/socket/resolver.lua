@@ -118,7 +118,7 @@ end
 function Query:addresses_op() return result_side(self, true) end
 function Query:failed_op() return result_side(self, false) end
 
-function Query:close_op(reason)
+function Query:request_close_op(reason)
   reason = reason or 'resolver query closed'
   local cancel = self._driver and self._driver:request_cancel_op(reason) or Op.always(true)
   local err = IOError.closed('resolver', 'resolve', {
@@ -136,6 +136,12 @@ end
 
 function Query:closed_op()
   return IO.closed_after_driver_op(self._driver)
+end
+
+function Query:close(reason)
+  local requested, request_err = perform(self:request_close_op(reason))
+  if not requested then return nil, request_err end
+  return perform(self:closed_op())
 end
 
 local function normalise_addresses(values, endpoint, allow_empty, expected_family)
@@ -429,6 +435,6 @@ end
 
 
 Module.Query = Query
-Direct.install(Query, { 'family_addresses', 'family_failed', 'family_result', 'family_finished', 'addresses', 'failed', 'result', 'close', 'closed' })
+Direct.install(Query, { 'family_addresses', 'family_failed', 'family_result', 'family_finished', 'addresses', 'failed', 'result', 'request_close', 'closed' })
 
 return Module

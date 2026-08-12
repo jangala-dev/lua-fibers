@@ -15,7 +15,7 @@ export LUA_PATH := $(REPO_LUA_PATH)
 	test-native test-stress test-full test-matrix test-lua51 test-lua52 test-lua53 \
 	test-lua54 test-lua55 test-luajit test-luajit-interpreter test-texlua \
 	build-luau check-luau-build check-luau test-luau test-luau-smoke \
-	test-luau-portable examples bench bench-io profile-proof-io profile-exchange-frontier performance \
+	test-luau-portable examples performance-smoke bench bench-io profile-proof-io profile-exchange-frontier performance \
 	check-format check-links check-modules check-scripts check build-profile \
 	check-packages build-packages
 
@@ -107,7 +107,7 @@ test-native:
 test-stress:
 	$(LUA) tests/run_group.lua stress
 
-test-full: test-matrix test-native test-stress examples
+test-full: test-matrix test-native test-stress examples performance-smoke
 
 test-matrix: test-lua51 test-lua52 test-lua53 test-lua54 test-lua55 \
 	test-luajit test-luajit-interpreter test-texlua test-luau
@@ -121,6 +121,13 @@ examples:
 		examples/recipes/*_example.lua; do \
 		echo "$$example"; $(LUA) "$$example"; \
 	done
+
+# Execute every validating performance case at minimum scale.  This is a
+# correctness/API smoke check, not a benchmark; it catches migration residue in
+# performance code without adding meaningful runtime to test-full.
+performance-smoke:
+	FIBERS_BENCH_SCALE=0 FIBERS_BENCH_REPEATS=1 FIBERS_BENCH_WARMUP=0 FIBERS_BENCH_FORMAT=csv $(LUA) performance/bench.lua >/dev/null
+	FIBERS_PERF_SCALE=0.01 FIBERS_PERF_REPEATS=1 FIBERS_PERF_WARMUP=0 FIBERS_PERF_DIAGNOSTICS=0 FIBERS_PERF_TIERS=all FIBERS_PERF_FORMAT=csv $(LUA) performance/suite.lua >/dev/null
 
 bench:
 	$(LUAJIT) performance/bench.lua
@@ -157,6 +164,7 @@ check-modules:
 check-scripts:
 	@for file in scripts/*.sh; do sh -n "$$file"; done
 	$(LUA) scripts/check-lua-syntax.lua
+	$(LUA) scripts/check-library-wrap.lua
 
 PROFILE ?= core
 PROFILE_OUTPUT ?= build/profile-$(PROFILE)

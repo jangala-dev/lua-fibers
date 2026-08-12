@@ -202,7 +202,7 @@ add('moderate', 'scope', 'spawn await closure', 36, function(ctx, n)
       local task = fibers.spawn(function()
         return i
       end, { label = 'perf-task-' .. tostring(i) })
-      total = total + fibers.perform(task:await_op())
+      total = total + task:await()
     end
   end, ctx:run_options({ label = 'perf-scope' }))
   ctx:add_runtime(result.runtime)

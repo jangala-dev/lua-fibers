@@ -54,23 +54,28 @@ local which, value = fibers.perform(Op.named_choice({
 ```
 
 `read_some_op(n)` is the Stream-style name for the same operation; `read_op(n)`
-is retained as the ordinary file spelling. `read_exactly_op` and `read_all_op`
-remain one transactional byte decision: if a finite read-ahead Flow cannot hold
-the fact required by that atomic operation they report a capacity error without
-consuming buffered bytes. The direct `read_exactly` and bounded `read_all` methods
-use the same shared procedural byte layer as Streams and may perform several
-`read_some_op` decisions. Fibers therefore never makes a buffer unbounded merely
-to pretend that a multi-decision protocol is one transaction.
+is retained as the ordinary file spelling. `read_exactly_op` and bounded
+`read_all_op` remain one transactional byte decision even when the requested fact
+is larger than the file's initial read-ahead capacity. While such an Option waits,
+the Flow may raise its logical high-water mark so the private file driver can
+continue publishing bytes. No prefix is consumed until the participant transaction
+commits. `read_all_op` has a finite maximum (16 MiB by default for RegularFile) and
+reports an oversize file without consuming it. Direct `read_exactly` and `read_all`
+are exactly their performing twins.
 
-Writes follow the corresponding TX law. `write_op(bytes)` and `write_all_op(bytes)`
-mean that the file Lifetime has transactionally accepted responsibility for all
-of `bytes`; an atomic request larger than finite TX capacity reports a capacity
-error. The direct `write_all(bytes)` procedure chunks larger values through
-repeated admissions. `write_some_op` accepts as much as the current Flow capacity
-permits. `flush_op()` is the
-settlement barrier: it waits until every byte accepted before that command has
-reached the provider, then performs the provider flush operation. `sync_op()`
-adds the requested storage synchronisation boundary.
+Writes follow the corresponding TX law. `write_op(bytes)` means that the file
+Lifetime has transactionally accepted responsibility for all of `bytes` within the
+file's configured TX write-unit limit. `write_all_op(bytes)` is the elastic whole-write form:
+it may raise that high-water mark to the size of the known payload and admit it in
+one transaction, while still waiting for pre-existing backlog to leave enough room.
+`write_all` is exactly its performing twin. `write_some_op` accepts as much as the
+current Flow capacity permits. File control is deliberately split into submission
+and completion:
+`submit_flush_op()` commits the flush command and returns a `File.Command`;
+`command:result_op()` observes the host-side settlement barrier after admission.
+`submit_sync_op()` provides the corresponding storage synchronisation command.
+The direct `flush()` and `sync()` conveniences submit and then wait for the command
+result, so they have no `_op` twin.
 
 ```lua
 local f = assert(file.open('/tmp/example', 'w+b'))
@@ -122,21 +127,25 @@ process pipes.
 
 ## Pipes
 
-`file.pipe_op()` describes acquisition of an anonymous pipe. Constructing the
-option creates no host handles. Once it commits, the result is the familiar pair
-of directional Streams:
+Pipe creation is a causal host protocol. `file.submit_pipe_op()` transactionally
+admits a `File.Job`; the job's Lifetime-owned driver performs the irreversible
+host acquisition after commitment and publishes the resulting Streams through
+`job:result_op()`:
 
 ```lua
 local file = require('fibers.file')
 
-local reader, writer, err = file.pipe()
+local job = assert(fibers.perform(file.submit_pipe_op()))
+local reader, writer, err = fibers.perform(job:result_op())
 assert(reader, err)
 
--- Equivalent composable acquisition:
--- local reader, writer, err = fibers.perform(file.pipe_op())
+-- Friendly procedure: submit and observe the result.
+local reader2, writer2, err2 = file.pipe()
+assert(reader2, err2)
 ```
 
-The writer produces graceful EOF when closed:
+Constructing the submission Option creates no host handles. The writer produces
+graceful EOF when closed:
 
 ```lua
 writer:write('hello')
@@ -160,16 +169,18 @@ stream:read_exactly_op(16)
 stream:read_line_op({ max = 8192 })
 stream:read_all_op({ max = 1024 * 1024 })
 stream:write_op('hello', ' ', 'world')
-stream:write_all_op('atomic bytes')
+stream:write_all_op('whole elastic payload')
 stream:flush_op()
-stream:close_op()
+stream:request_close_op()
+stream:closed_op()
 ```
 
 There is deliberately no Lua-file-style `read`/`read_op` compatibility shim.
 Choosing `read_some`, `read_exactly`, `read_line` or `read_all` states the byte
-contract at the call site. The `_op` forms remain one transactional byte fact;
-the direct `read_exactly`, `read_all` and `write_all` conveniences may compose
-several such facts when a bounded Stream is smaller than the requested protocol.
+contract at the call site. The `_op` forms remain one transactional byte fact.
+`read_exactly`, bounded `read_all` and `write_all` are exact performing twins of
+their Options; elastic Flow high-water growth lets those whole facts remain atomic
+without silently making the stream unbounded.
 
 ## Processes
 
@@ -303,14 +314,16 @@ local result = proc:communicate({
 Process requests and completed Closure are distinct:
 
 ```lua
-proc:terminate_op() -- commit the configured graceful signal request
-proc:kill_op()      -- commit the configured forceful signal request
+proc:submit_terminate_op() -- commit delivery of a request to the supervisor
+proc:submit_kill_op()      -- likewise for the configured forceful signal
 proc:request_close_op(reason)
 proc:closed_op()
 ```
 
-The direct `terminate()`, `kill()` and `signal()` methods perform their request
-options. `close(reason)` performs `request_close_op(reason)` and then waits for
+The exact direct twins `submit_terminate()`, `submit_kill()` and
+`submit_signal()` return a signal request. The causal `terminate()`, `kill()` and
+`signal()` conveniences submit that request and then wait for its `result_op()`.
+`close(reason)` performs `request_close_op(reason)` and then waits for
 `closed_op()`. The supervisor closes stdin, waits for the grace interval,
 escalates where necessary, observes the reactor-owned exit completion, and
 finishes its Streams and supervisor Task. Scope Closure invokes the same
@@ -535,9 +548,14 @@ socket.connect(endpoint, opts)
 Convenience forms include:
 
 ```lua
-socket.listen_ipv4_op(host, port, opts)
-socket.listen_ipv6_op(host, port, opts)
-socket.listen_unix_op(path, opts)
+socket.submit_listen_ipv4_op(host, port, opts)
+socket.submit_listen_ipv6_op(host, port, opts)
+socket.submit_listen_unix_op(path, opts)
+
+-- Causal conveniences submit and then wait for listener readiness:
+socket.listen_ipv4(host, port, opts)
+socket.listen_ipv6(host, port, opts)
+socket.listen_unix(path, opts)
 
 socket.dial_op(socket.ipv4_address(host, port), opts)
 socket.dial_op(socket.ipv6_address(host, port), opts)
@@ -783,8 +801,9 @@ socket after another attempt has already won.
 
 ## Datagram sockets
 
-Datagram sockets are message-oriented resources, not Streams. Construction is
-inert until the option commits:
+Datagram sockets are message-oriented resources, not Streams. Admission is
+inert until the submission Option commits; fallible host activation then belongs
+to the Datagram's Lifetime-owned driver:
 
 ```lua
 local socket = require('fibers.socket')
@@ -794,8 +813,9 @@ local udp = socket.udp_ipv4('0.0.0.0', 0, {
   send_capacity = 64,
 })
 
--- Equivalent composable construction:
--- local udp = fibers.perform(socket.udp_ipv4_op('0.0.0.0', 0))
+-- Composable admission/start, before the readiness handshake:
+-- local udp = fibers.perform(socket.submit_udp_ipv4_op('0.0.0.0', 0))
+-- local ready, err = fibers.perform(udp:ready_op())
 ```
 
 The ordinary surface is:
@@ -804,12 +824,14 @@ The ordinary surface is:
 udp:send_to_op(payload, destination)
 udp:receive_from_op({ max_size = 4096 })
 udp:flush_op()
-udp:close_op(reason)
+udp:request_close_op(reason)
 udp:closed_op()
+udp:close(reason) -- causal convenience: request then observe closed
 ```
 
-Each has the exact direct twin described in
-[`options.md`](options.md). A received value is a record:
+Readiness, addressing, send, receive, flush, request-close and closed have the
+exact direct twins described in [`options.md`](options.md). `close()` is the full
+causal close procedure and deliberately has no `_op` twin. A received value is a record:
 
 ```lua
 {

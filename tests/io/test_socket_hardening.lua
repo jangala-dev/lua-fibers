@@ -108,9 +108,9 @@ do
   end, { host = host })
 end
 
--- Listener and Dial are each one Lifetime root held by their caller. Listener
--- readiness is reactor-owned and therefore needs no running body; Dial retains
--- a body because Happy Eyeballs is a genuine protocol process.
+-- Listener and Dial are each one Lifetime root held by their caller. Both now
+-- have Lifetime-owned drivers: Listener owns fallible activation and closure,
+-- while Dial owns the Happy Eyeballs protocol process.
 do
   local host = SimulatedHost.new({ sockets = true })
   fibers.run(function(root)
@@ -118,7 +118,7 @@ do
     fibers.scope({ label = 'listener-origin' }, function(origin)
       listener = socket.listen_inet('127.0.0.1', 0, { label = 'moved-listener' })
       assert_eq(Lifetime.of(listener), listener:lifetime())
-      assert_eq(listener:lifetime():_task(), nil, 'Listener Lifetime should not carry a ceremonial Task view')
+      assert_truthy(listener:lifetime():_task() ~= nil, 'Listener Lifetime should expose its activation/closure driver')
       local listener_children = Lifetimes.children(origin)
       assert_eq(#listener_children, 1, "Listener should be the one root in its caller\'s custody")
       assert_eq(listener_children[1], listener)
@@ -430,13 +430,14 @@ do
       label = 'snapshotted-listener',
       accept_capacity = 1,
     }
-    local listen = socket.listen_op(address, opts)
+    local listen = socket.submit_listen_op(address, opts)
 
     address.host = '203.0.113.99'
     opts.label = 'mutated-listener'
     opts.accept_capacity = 99
 
     local listener = fibers.perform(listen)
+    assert(listener:ready())
     assert_eq(listener:label(), 'snapshotted-listener')
     assert_eq(listener:local_address().host, '127.0.0.1')
     assert_eq(listener._offers._capacity, 1)
