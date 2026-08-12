@@ -94,7 +94,7 @@ end
 -- reductions. Large closed resources begin as implicit complete bipartite
 -- graphs; adjacency is materialised only when the first missing edge is found.
 local function exchange_frontier(state, compatible, closed)
-  local degree, active_exchange = {}, 0
+  local degree = {}
   local analyse_matching = closed and (state.active_intent_count or 0) >= BULK_MATCH_THRESHOLD
   local resources, by_resource
 
@@ -113,8 +113,7 @@ local function exchange_frontier(state, compatible, closed)
       if put_count + get_count > 0 then
         if put_count ~= get_count then
           return {
-            selected = nil, selected_degree = 0, partners = {}, zero_domains = 0,
-            active = state.active_intent_count or 0, balanced = false,
+            selected = nil, partners = {}, zero_domains = 0, balanced = false,
           }
         end
         local info = { puts = {}, gets = {} }
@@ -140,7 +139,7 @@ local function exchange_frontier(state, compatible, closed)
     for i = 1, #raw_puts do
       local put = frontier_active(raw_puts[i])
       if put then
-        active_exchange, put_count = active_exchange + 1, put_count + 1
+        put_count = put_count + 1
         local neighbours
         if info then
           info.puts[#info.puts + 1] = put
@@ -175,11 +174,10 @@ local function exchange_frontier(state, compatible, closed)
 
     if info then
       get_count = #gets
-      active_exchange = active_exchange + get_count
     else
       for i = 1, #raw_gets do
         if frontier_active(raw_gets[i]) then
-          active_exchange, get_count = active_exchange + 1, get_count + 1
+          get_count = get_count + 1
         end
       end
     end
@@ -227,8 +225,7 @@ local function exchange_frontier(state, compatible, closed)
     matching = maximum_exchange_matching(resources)
   end
   return {
-    selected = selected, selected_degree = selected_degree or 0, partners = partners,
-    zero_domains = zero_domains, active = active_exchange,
+    selected = selected, partners = partners, zero_domains = zero_domains,
     balanced = balanced, matching = matching,
   }
 end
@@ -275,13 +272,10 @@ local function analyse_frontier(state, compatible, closed_exchange)
     return ac ~= bc and ac < bc or ac == bc and a.serial < b.serial
   end)
   local exchange = exchange_frontier(state, compatible, closed_exchange)
-  return {
-    exchange = exchange, witnesses = witnesses, claims = claim_frontier(state), choices = choices,
-    accepts_participant_supply = exchange.active > 0 or (state.accepts_supply_count or 0) > 0,
-  }
+  return exchange, witnesses, claim_frontier(state), choices,
+    exchange.selected ~= nil or exchange.zero_domains > 0 or (state.accepts_supply_count or 0) > 0
 end
 
-local unpack_ = table.unpack or unpack
 local pack_ = Values.pack
 local EMPTY_INPUT = pack_()
 local A_ID, A_ROOT, A_NEXT, A_GUARDS, A_CLOCKS = {}, {}, {}, {}, {}
@@ -339,24 +333,19 @@ local function activation_guard(engine, request, guard, activation, input_pack)
       if Values.equal(entries[i], input) then return entries[i + 1] end
     end
   end
-  local residual = engine.runtime:_call_in_phase('guard', 'callback_error', guard.fn, unpack_(input, 1, input.n))
+  local residual = engine.runtime:_call_in_phase('guard', 'callback_error', guard.fn, Values.unpack(input))
   if not Operation.is(residual) then error('guard callback must return an Op', 0) end
   if not entries then entries = {}; activation[A_GUARDS] = entries end
   entries[#entries + 1], entries[#entries + 2] = input, residual
   if request.op == guard and activation == request.activation_root then request.metadata = Operation.shape(residual) end
   return residual
 end
-local leaf_kind = Operation.leaf_kind
 local PACK_TRUE = pack_(true)
 local ACT = {
   and_then_prefix = {}, and_then_result = {}, choice = {}, exchange = {},
   fallback = {}, guard = {}, map = {}, preferred = {}, product_lane = {}, product_result = {},
   transition = {}, witness = {},
 }
-
-local function unpack_pack(p)
-  return unpack_(p, 1, p.n)
-end
 
 local function new_outcome(task, packed, wrap)
   return { pack = packed, wrap = wrap, activation = task and task.activation or nil }
@@ -422,16 +411,12 @@ local function copy_array(xs)
   return out
 end
 
-local function merge_group_views(group)
-  return Journal.join_segments(group.parent_segment, group.lane_segments, group.mode)
-end
-
 local function compose_wrap(inner, fn)
   return function(packed)
     if inner then
       packed = inner(packed)
     end
-    return pack_(fn(unpack_pack(packed)))
+    return pack_(fn(Values.unpack(packed)))
   end
 end
 
@@ -459,22 +444,20 @@ end
 local function continue_task(state, task, expr, activation)
   setv(state, task, 'expr', expr)
   setv(state, task, 'activation', activation)
-  setv(state, task, 'status', 'active')
   pushv(state, state.active, task)
 end
 
 local complete_task
 
-local function finish_group_lane(state, task, frame, outcome)
+local function finish_group_lane(state, frame, outcome)
   local group = frame.group
   setv(state, group.lane_outcomes, frame.lane, outcome)
   bump(state, group, 'completed')
-  setv(state, task, 'status', 'done')
 
   if group.completed < group.count then
     return true
   end
-  if not merge_group_views(group) then
+  if not Journal.join_segments(group.parent_segment, group.lane_segments, group.mode) then
     return false
   end
 
@@ -486,7 +469,6 @@ local function finish_group_lane(state, task, frame, outcome)
   local activation_parts = {}
   for i = 1, group.count do activation_parts[i] = group.lane_outcomes[i].activation end
   setv(state, parent, 'activation', activation_child_array(group.activation, ACT.product_result, activation_parts))
-  setv(state, parent, 'status', 'active')
   return complete_task(state, parent, new_outcome(parent, pack_(rows), product_wrap(group.lane_outcomes)))
 end
 
@@ -495,9 +477,7 @@ complete_task = function(state, task, outcome)
     local frame = task.frame
     if not frame then
       local root = task.root
-      setv(state, root, 'done', true)
       setv(state, root, 'outcome', outcome)
-      setv(state, task, 'status', 'done')
       return true
     end
 
@@ -507,12 +487,12 @@ complete_task = function(state, task, outcome)
       require_transactional_outcome(state, outcome, 'map')
       outcome = new_outcome(
         task,
-        pack_(state.engine.runtime:_call_in_phase('map', 'callback_error', frame.fn, unpack_pack(outcome.pack))),
+        pack_(state.engine.runtime:_call_in_phase('map', 'callback_error', frame.fn, Values.unpack(outcome.pack))),
         nil
       )
     elseif frame.kind == 'bind' then
       require_transactional_outcome(state, outcome, 'and_then')
-      local input_pack = pack_(unpack_pack(outcome.pack))
+      local input_pack = pack_(Values.unpack(outcome.pack))
       local next_activation = activation_child(frame.activation, ACT.and_then_result, outcome.activation)
       -- The provisional values supplied by and_then are dynamically scoped to
       -- its right-hand expression. Nested and_then continuations may install
@@ -527,7 +507,7 @@ complete_task = function(state, task, outcome)
     elseif frame.kind == 'wrap' then
       outcome = new_outcome(task, outcome.pack, compose_wrap(outcome.wrap, frame.fn))
     elseif frame.kind == 'group_lane' then
-      return finish_group_lane(state, task, frame, outcome)
+      return finish_group_lane(state, frame, outcome)
     else
       error('unknown evaluator frame: ' .. tostring(frame.kind), 0)
     end
@@ -540,7 +520,6 @@ local function add_root(state, request, required_intents)
 
   local root = {
     serial = activation_id(request.activation_root), request = request, expr = request.op,
-    status = 'active',
     activation = request.activation_root,
     required_intents = required_intents,
   }
@@ -556,7 +535,6 @@ local function start_product(state, task, op)
     parent_task = task, parent_segment = task.segment, mode = op.mode, count = #op.lanes,
     lane_segments = {}, lane_outcomes = {}, completed = 0, activation = task.activation,
   }
-  setv(state, task, 'status', 'waiting_group')
 
   for i = 1, #op.lanes do
     local segment = state.journal:new_segment(task.root, task.segment, group, i)
@@ -565,7 +543,7 @@ local function start_product(state, task, op)
     local child = {
       serial = activation_id(activation), root = task.root, expr = op.lanes[i],
       frame = { kind = 'group_lane', group = group, lane = i },
-      segment = segment, status = 'active',
+      segment = segment,
       activation = activation,
       guard_input_pack = task.guard_input_pack,
     }
@@ -583,7 +561,7 @@ local function intents_compatible(a, b)
   if a.role == b.role then
     return false
   end
-  if a.root ~= b.root then
+  if a.task.root ~= b.task.root then
     return true
   end
   return Journal.relation(a.task.segment, b.task.segment) == 'interacting'
@@ -597,21 +575,7 @@ local function root_requires(root, intent)
 end
 
 local function obligated_pair(a, b)
-  return root_requires(a and a.root, b) or root_requires(b and b.root, a)
-end
-
-local function active_intents(state)
-  local out = {}
-  local n = 0
-  for i = 1, #(state.intents or EMPTY) do
-    local intent = state.intents[i]
-    if intent.active then
-      n = n + 1
-      out[n] = intent
-    end
-  end
-  for i = #out, n + 1, -1 do out[i] = nil end
-  return out
+  return root_requires(a and a.task.root, b) or root_requires(b and b.task.root, a)
 end
 
 local function index_intent(state, intent)
@@ -643,8 +607,7 @@ local function index_intent(state, intent)
   end
 end
 
-local function register_intent(state, task, intent)
-  setv(state, task, 'status', 'blocked')
+local function register_intent(state, intent)
   pushv(state, ensure_table(state, 'intents'), intent)
   bump(state, state, 'active_intent_count')
   index_intent(state, intent)
@@ -659,37 +622,27 @@ local function remove_intent(state, intent)
   end
 end
 
-local function remove_intents(state, intents)
-  for i = 1, #intents do remove_intent(state, intents[i]) end
-end
-
-local result_pack = Operation.result_pack
-
 local function block_intent(state, task, occurrence, observed_version)
   local leaf = occurrence.spec
   local serial = #(state.intents or EMPTY) + 1
   local intent = {}
-  intent.serial, intent.kind = serial, leaf_kind(leaf)
-  intent.task, intent.root, intent.request, intent.spec = task, task.root, task.root.request, leaf
+  intent.serial, intent.kind = serial, Operation.leaf_kind(leaf)
+  intent.task, intent.request, intent.spec = task, task.root.request, leaf
   if intent.kind == 'transition' then intent.rule = leaf.transition end
   intent.payload, intent.activation = occurrence.arg, task.activation
-  intent.resource, intent.role, intent.value = leaf.resource, leaf.role, occurrence.arg
-  intent.name = leaf.name
+  intent.resource, intent.role = leaf.resource, leaf.role
   intent.active = true
   intent.interest = type(leaf.interest) == 'function' and leaf.interest(state.engine.runtime, leaf, occurrence.arg)
     or leaf.interest
-  intent.absence_check = leaf.absence_check
   intent.observed_version = observed_version
-  register_intent(state, task, intent)
+  register_intent(state, intent)
 end
 local function block_choice(state, task, expr)
   local serial = #(state.intents or EMPTY) + 1
   local intent = {
     serial = serial,
     kind = 'choice',
-    task = task,
-    root = task.root, request = task.root.request,
-    expr = expr,
+    task = task, request = task.root.request,
     order = choice_indices(
       state.engine,
       task,
@@ -698,35 +651,35 @@ local function block_choice(state, task, expr)
       state.choice_generation
     ),
     activation = task.activation,
-    required_intents = task.required_intents,
     active = true,
   }
-  register_intent(state, task, intent)
+  register_intent(state, intent)
   return true
 end
 
 local function match_intents(state, a, b)
   if not a or not b or not a.active or not b.active then return false end
-  local satisfy_a = root_requires(a.root, b)
-  local satisfy_b = root_requires(b.root, a)
+  local satisfy_a = root_requires(a.task.root, b)
+  local satisfy_b = root_requires(b.task.root, a)
   remove_intent(state, a)
   remove_intent(state, b)
-  if satisfy_a then setv(state, a.root, 'required_intents', nil) end
-  if satisfy_b then setv(state, b.root, 'required_intents', nil) end
+  if satisfy_a then setv(state, a.task.root, 'required_intents', nil) end
+  if satisfy_b then setv(state, b.task.root, 'required_intents', nil) end
   local put = a.role == 'put' and a or b
   local get = a.role == 'get' and a or b
   local put_task = put.task
   local get_task = get.task
   local left, right = a.activation, b.activation
-  if b.request.order < a.request.order
-    or (b.request.order == a.request.order and activation_id(right) < activation_id(left))
+  local a_request, b_request = a.task.root.request, b.task.root.request
+  if b_request.order < a_request.order
+    or (b_request.order == a_request.order and activation_id(right) < activation_id(left))
   then
     left, right = right, left
   end
   setv(state, put_task, 'activation', activation_child(put_task.activation, ACT.exchange, left, right, a.resource))
   setv(state, get_task, 'activation', activation_child(get_task.activation, ACT.exchange, left, right, a.resource))
   if not complete_task(state, put_task, new_outcome(put_task, PACK_TRUE)) then return false end
-  if not complete_task(state, get_task, new_outcome(get_task, pack_(put.value))) then return false end
+  if not complete_task(state, get_task, new_outcome(get_task, pack_(put.payload))) then return false end
   return true
 end
 
@@ -742,14 +695,6 @@ local function transition_context(state, occurrence_serial)
   return context
 end
 
-local function transition_ready(state, leaf, value, payload, occurrence_serial)
-  return Operation.transition_ready(leaf, value, transition_context(state, occurrence_serial), payload)
-end
-
-local function transition_outcome(state, leaf, value, phase, payload, occurrence_serial)
-  return Operation.transition_cursor(leaf, value, transition_context(state, occurrence_serial), phase, payload):next()
-end
-
 local function stage_outcome(state, task, leaf, outcome)
   local source = outcome.patch
   if source and source.kind == 'machine_value' then
@@ -763,20 +708,14 @@ local function stage_outcome(state, task, leaf, outcome)
   end
 end
 
-local function transition_activation(selected)
-  local keys = {}
+local function finish_transitions(state, selected, resolved)
+  local facts = {}
   for i = 1, #selected do
     local intent, leaf = selected[i], selected[i].spec
-    keys[#keys + 1] = intent.activation
-    keys[#keys + 1] = leaf.location
-    keys[#keys + 1] = intent.observed_version or leaf.location.version or 0
+    facts[#facts + 1], facts[#facts + 2], facts[#facts + 3] =
+      intent.activation, leaf.location, intent.observed_version or leaf.location.version or 0
   end
-  return keys
-end
-
-local function finish_transitions(state, selected, resolved)
-  local facts = transition_activation(selected)
-  remove_intents(state, selected)
+  for i = 1, #selected do remove_intent(state, selected[i]) end
   for i = 1, #resolved do
     local row = resolved[i]
     setv(state, row.task, 'activation', activation_child_array(row.task.activation, ACT.transition, facts))
@@ -785,16 +724,6 @@ local function finish_transitions(state, selected, resolved)
     end
   end
   return true
-end
-
-local function selected_intents(intents)
-  local selected = {}
-  for i = 1, #intents do
-    local intent = intents[i]
-    if intent and intent.active then selected[#selected + 1] = intent end
-  end
-  table.sort(selected, serial_less)
-  return selected
 end
 
 local function resolve_serial_transitions(state, selected)
@@ -807,9 +736,9 @@ local function resolve_serial_transitions(state, selected)
     local intent, leaf = selected[i], selected[i].spec
     local task, rule = intent.task, intent.rule
     local value = Journal.project_machine(task, leaf.location, function(candidate)
-      return transition_ready(state, leaf, candidate, intent.payload, intent.serial)
+      return Operation.transition_ready(leaf, candidate, transition_context(state, intent.serial), intent.payload)
     end, rule.accepts_supply)
-    local outcome = transition_outcome(state, leaf, value, nil, intent.payload, intent.serial)
+    local outcome = Operation.transition_cursor(leaf, value, transition_context(state, intent.serial), nil, intent.payload):next()
     if not outcome then
       return false
     end
@@ -820,7 +749,8 @@ local function resolve_serial_transitions(state, selected)
 end
 
 local function resolve_transitions(state, intents)
-  local selected = selected_intents(intents)
+  local selected = indexed_active(intents)
+  table.sort(selected, serial_less)
   if #selected == 0 then
     return false
   end
@@ -835,7 +765,7 @@ local function resolve_transitions(state, intents)
       local task = intent.task
       local value, projected = Journal.project(task, leaf.location, leaf.orientation)
       if projected then
-        local outcome = transition_outcome(state, leaf, value, nil, intent.payload, intent.serial)
+        local outcome = Operation.transition_cursor(leaf, value, transition_context(state, intent.serial), nil, intent.payload):next()
         if outcome then
           chosen_index, chosen_outcome, chosen_task = i, outcome, task
           break
@@ -856,7 +786,7 @@ end
 local function witness_cursor(state, intent)
   local leaf, task, rule = intent.spec, intent.task, intent.rule
   local value = Journal.project_machine(task, leaf.location, function(candidate)
-    return transition_ready(state, leaf, candidate, intent.payload, intent.serial)
+    return Operation.transition_ready(leaf, candidate, transition_context(state, intent.serial), intent.payload)
   end, rule.accepts_supply)
   return Operation.transition_cursor(leaf, value, transition_context(state, intent.serial), nil, intent.payload)
 end
@@ -907,20 +837,19 @@ local function final_candidate(state)
   local observations, writes
   if #participants == 1 then
     local root = state.roots[participants[1]]
-    if not root.done or (state.active_intent_count or 0) > 0 then return nil end
+    if not root.outcome or (state.active_intent_count or 0) > 0 then return nil end
     observations = next(state.journal.observed) and state.journal.observed or nil
     writes = next(root.segment.delta) and root.segment.delta or nil
   else
     local root_views = {}
     for i = 1, #participants do
       local root = state.roots[participants[i]]
-      if not root.done then return nil end
+      if not root.outcome then return nil end
       root_views[i] = root.segment
     end
     if (state.active_intent_count or 0) > 0 then return nil end
-    local collected
-    observations, writes, collected = state.journal:collect_candidate(root_views)
-    if not collected then return nil end
+    observations, writes = state.journal:collect_candidate(root_views)
+    if not writes then return nil end
   end
   observations = observations and next(observations) and observations or nil
   writes = writes and next(writes) and writes or nil
@@ -940,7 +869,6 @@ local function final_candidate(state)
     absence_gate = state.absence_gate,
   })
   if candidate.absence_gate then
-    Proof.ensure(state.engine); Proof.acknowledge(state.engine, state)
     candidate.absence_gate.snapshot = Proof.capture(state.engine, state, candidate.absence_gate)
   end
   if not candidate:prepare(state.engine) then return nil end
@@ -949,7 +877,7 @@ end
 
 local function execute_leaf(state, task, occurrence)
   local leaf = occurrence.spec
-  local kind = leaf_kind(leaf)
+  local kind = Operation.leaf_kind(leaf)
   if kind == 'exchange' then
     block_intent(state, task, occurrence)
     return true
@@ -977,21 +905,21 @@ local function execute_leaf(state, task, occurrence)
 
   if kind == 'read' then
     advance_activation(state, task, leaf, loc.version or 0)
-    return complete_task(state, task, new_outcome(task, result_pack(leaf, Journal.read(view, loc))))
+    return complete_task(state, task, new_outcome(task, Operation.result_pack(leaf, Journal.read(view, loc))))
   end
 
   if kind == 'patch' then
     local patch = occurrence.arg
     Journal.stage(view, loc, patch)
     advance_activation(state, task, leaf, loc.version or 0)
-    return complete_task(state, task, new_outcome(task, result_pack(leaf, Journal.read(view, loc))))
+    return complete_task(state, task, new_outcome(task, Operation.result_pack(leaf, Journal.read(view, loc))))
   end
 
   if kind == 'transition' then
     local rule = leaf.transition
     if rule.eager then
       local value = Journal.read(view, loc)
-      local outcome = transition_outcome(state, leaf, value, 'eager', occurrence.arg)
+      local outcome = Operation.transition_cursor(leaf, value, transition_context(state), 'eager', occurrence.arg):next()
       if outcome then
         stage_outcome(state, task, leaf, outcome)
         advance_activation(state, task, leaf, loc.version or 0)
@@ -1005,47 +933,31 @@ local function execute_leaf(state, task, occurrence)
   error('unknown leaf kind: ' .. tostring(kind), 0)
 end
 
-local function frontier_supply_score(frontier, intents)
-  if not frontier then return 0 end
-  local score = 0
-  for i = 1, #(intents or EMPTY) do
-    local demand = intents[i]
-    if demand.kind == 'exchange' then
-      local exchanges = frontier.dependencies and frontier.dependencies.exchanges
-      local latent_exchanges = frontier.latent and frontier.latent.exchanges
-      local roles = exchanges and exchanges[demand.resource]
-      local latent = latent_exchanges and latent_exchanges[demand.resource]
-      local opposite = demand.role == 'put' and 'get' or demand.role == 'get' and 'put' or nil
-      if opposite and ((roles and roles[opposite]) or (latent and latent[opposite])) then score = score + 1 end
+local function supplier_score(request, intents)
+  local frontier, exact = request._proof, 0
+  if frontier then
+    for i = 1, #(intents or EMPTY) do
+      local demand = intents[i]
+      if demand.kind == 'exchange' then
+        local roles = frontier.dependencies and frontier.dependencies.exchanges
+        roles = roles and roles[demand.resource]
+        local latent = frontier.latent and frontier.latent.exchanges
+        latent = latent and latent[demand.resource]
+        local opposite = demand.role == 'put' and 'get' or demand.role == 'get' and 'put' or nil
+        if opposite and ((roles and roles[opposite]) or (latent and latent[opposite])) then exact = exact + 1 end
+      end
     end
   end
-  return score
-end
-
-local function supplier_score(state, request, intents)
-  local frontier = request._proof
-  -- Dirty invalidates a retained proof or suspended search, not the frontier's
-  -- value as positive supplier evidence. A stale positive hint may recruit an
-  -- extra root, which execution then rechecks; suppressing it can hide a
-  -- continuation which static active shape has not yet reached.
-  local exact = frontier and frontier_supply_score(frontier, intents) or 0
-  local metadata = request.metadata or Operation.shape(request.op)
-  request.metadata = metadata
-  local structural = Operation.supply_score(Operation.active_shape(metadata), intents)
-  if exact > 0 then
-    return exact * 1000 + structural
-  end
-  -- Metadata is derived mechanically from the actual immutable Op graph.  Dynamic
-  -- guards remain conservative in Operation.supply_score; no user declaration is
-  -- trusted.  Observed frontiers improve ordering without becoming proof.
-  return structural
+  -- Dirty invalidates retained proof, not its value as positive supplier evidence.
+  local structural = Operation.supply_score(Operation.shape(request.op, true), intents)
+  return exact > 0 and exact * 1000 + structural or structural
 end
 
 local function has_supplier(state, intents)
-  for i = 1, #(state.all_requests or EMPTY) do
-    local request = state.all_requests[i]
+  for i = 1, #(state.engine.pending or EMPTY) do
+    local request = state.engine.pending[i]
     if request.pending and not state.roots[request] then
-      local score = supplier_score(state, request, intents)
+      local score = supplier_score(request, intents)
       if score > 0 then return true end
     end
   end
@@ -1053,41 +965,23 @@ local function has_supplier(state, intents)
 end
 
 local function terminal_refutation(state)
-  return Proof.from_intents(active_intents(state))
+  return Proof.from_intents(state.intents)
 end
 
 local function collect_defeat_effects(expr, out)
   out = out or {}
-  if not expr then
-    return out
-  end
   for i = 1, #(expr.defeats or {}) do
     out[#out + 1] = expr.defeats[i]
   end
   local kind = expr.kind
-  if kind == 'product' then
-    for i = 1, #expr.lanes do
-      collect_defeat_effects(expr.lanes[i], out)
-    end
-  elseif kind == 'choice' then
-    for i = 1, #expr.choices do
-      collect_defeat_effects(expr.choices[i], out)
-    end
-  elseif kind == 'or_else' then
-    -- The preferred occurrence is entered immediately; fallback is residual
-    -- and does not become entered unless preferred retry is certified.
-    collect_defeat_effects(expr.p, out)
-  elseif kind == 'map' then
-    collect_defeat_effects(expr.p, out)
-  elseif kind == 'and_then' then
-    -- Only the prefix is entered before sequencing reaches the right-hand side.
+  local children = kind == 'product' and expr.lanes or kind == 'choice' and expr.choices
+  if children then
+    for i = 1, #children do collect_defeat_effects(children[i], out) end
+  elseif kind == 'or_else' or kind == 'map' or kind == 'and_then' then
+    -- Fallback/right-hand continuations have not been entered yet.
     collect_defeat_effects(expr.p, out)
   end
   return out
-end
-
-local function table_empty(value)
-  return value == nil or next(value) == nil
 end
 
 local function exchange_partner_available(state, task, resource, role)
@@ -1095,7 +989,7 @@ local function exchange_partner_available(state, task, resource, role)
     kind = 'exchange',
     resource = resource,
     role = role,
-    task = task, root = task.root, request = task.root.request,
+    task = task,
   }
   local bucket = state.exchange_buckets and state.exchange_buckets[resource]
   local opposite = role == 'put' and 'get' or 'put'
@@ -1108,16 +1002,16 @@ end
 
 local function alternative_rank(state, intent, choice_index, rank_partners)
   local task = intent.task
-  local alternative = intent.expr.choices[choice_index]
-  local metadata = Operation.active_shape(Operation.shape(alternative))
+  local alternative = intent.task.expr.choices[choice_index]
+  local metadata = Operation.shape(alternative, true)
   local score = 0
 
-  local required = intent.required_intents
+  local required = intent.task.required_intents
   if required and #required > 0 then
     local supplied, certainty = Operation.supply_score(metadata, required)
     if supplied > 0 then
       score = score + 1000 + supplied * 20
-      if certainty == Operation.SUPPLY_EXACT then score = score + 5 end
+      if certainty then score = score + 5 end
     elseif metadata.dynamic then
       score = score + 500
     else
@@ -1133,9 +1027,9 @@ local function alternative_rank(state, intent, choice_index, rank_partners)
     rank_partners
     and not metadata.dynamic
     and not metadata.external
-    and table_empty(metadata.locations)
-    and table_empty(metadata.resources)
-    and not table_empty(metadata.exchanges)
+    and next(metadata.locations or EMPTY) == nil
+    and next(metadata.resources or EMPTY) == nil
+    and next(metadata.exchanges or EMPTY) ~= nil
   then
     local needed, available = 0, 0
     for resource, roles in pairs(metadata.exchanges) do
@@ -1156,20 +1050,12 @@ local function alternative_rank(state, intent, choice_index, rank_partners)
 end
 
 local function single_exchange_shape(metadata)
-  metadata = Operation.active_shape(metadata)
-  if metadata.dynamic or metadata.external or next(metadata.locations or EMPTY) or next(metadata.resources or EMPTY) then
-    return nil
-  end
-  local found_resource, found_role
-  for resource, roles in pairs(metadata.exchanges or EMPTY) do
-    for role, enabled in pairs(roles) do
-      if enabled then
-        if found_resource ~= nil then return nil end
-        found_resource, found_role = resource, role
-      end
-    end
-  end
-  return found_resource, found_role
+  if metadata.dynamic or metadata.external or next(metadata.locations or EMPTY) or next(metadata.resources or EMPTY) then return nil end
+  local resource, roles = next(metadata.exchanges or EMPTY)
+  if not resource or next(metadata.exchanges, resource) then return nil end
+  local role, enabled = next(roles)
+  if enabled ~= true or next(roles, role) then return nil end
+  return resource, role
 end
 
 -- Find one structurally viable all-different assignment for unresolved choices.
@@ -1179,12 +1065,10 @@ local function supplier_matching_preferences(state, choices)
   if #choices < 3 then return nil end
 
   local suppliers = {}
-  for i = 1, #(state.all_requests or EMPTY) do
-    local request = state.all_requests[i]
+  for i = 1, #(state.engine.pending or EMPTY) do
+    local request = state.engine.pending[i]
     if request.pending and not state.roots[request] then
-      local metadata = request.metadata or Operation.shape(request.op)
-      request.metadata = metadata
-      local resource, role = single_exchange_shape(metadata)
+      local resource, role = single_exchange_shape(Operation.shape(request.op, true))
       if resource and (role == 'put' or role == 'get') then
         local by_role = suppliers[resource]
         if not by_role then by_role = { put = {}, get = {} }; suppliers[resource] = by_role end
@@ -1198,7 +1082,7 @@ local function supplier_matching_preferences(state, choices)
     local choice, edges = choices[i], {}
     for position = 1, #(choice.order or EMPTY) do
       local choice_index = choice.order[position]
-      local metadata = Operation.shape(choice.expr.choices[choice_index])
+      local metadata = Operation.shape(choice.task.expr.choices[choice_index], true)
       local resource, role = single_exchange_shape(metadata)
       local opposite = role == 'put' and 'get' or role == 'get' and 'put' or nil
       local ids = resource and opposite and suppliers[resource] and suppliers[resource][opposite] or EMPTY
@@ -1229,7 +1113,7 @@ local function supplier_matching_preferences(state, choices)
 end
 
 local function ranked_choice_order(state, intent, rank_partners, preferred_index)
-  if not intent.required_intents and not rank_partners then return intent.order end
+  if not intent.task.required_intents and not rank_partners then return intent.order end
   local order = copy_array(intent.order)
   local base_position = {}
   for i = 1, #order do base_position[order[i]] = i end
@@ -1248,7 +1132,7 @@ local function ranked_choice_order(state, intent, rank_partners, preferred_index
 end
 
 local function resolve_choice(state, intent, choice_index)
-  local expr, task = intent.expr, intent.task
+  local expr, task = intent.task.expr, intent.task
   remove_intent(state, intent)
   local effects = ensure_table(state, 'effects')
   for i = 1, #expr.choices do
@@ -1272,15 +1156,12 @@ local function hard_stop(state, reason)
   return false
 end
 
-local function await_search_budget(state)
-  if not state.resumable then return end
-  while state.work_remaining <= 0 do state:yield_search('search_quantum') end
-end
-
 local function note_search_step(state)
   local engine = state.engine
   local resumable = state.resumable
-  await_search_budget(state)
+  if resumable then
+    while state.work_remaining <= 0 do state:yield_search('search_quantum') end
+  end
 
   while engine._cycle_budget and not engine:charge('work') do
     if not resumable then return false end
@@ -1322,6 +1203,11 @@ local function explore(state, apply)
 end
 
 
+local function explore_branch(state, refutation, apply)
+  local candidate, branch_refutation, unknown = explore(state, apply)
+  return candidate, merge_refutation(refutation, branch_refutation), unknown
+end
+
 local function propagate(state, fn)
   local mark = state.journal:mark()
   local ok = fn()
@@ -1350,7 +1236,6 @@ local function prefer(state, task, expr)
   local previous_gate = state.absence_gate
   local gate = Proof.merge({}, previous_gate)
   Proof.merge(gate, preferred_refutation)
-  Proof.mark_absence_gate_frontier(gate)
   -- A proof may stop at a deferred choice before branch-local frontiers are
   -- materialised.  The immutable preferred shape is used only to decide whether
   -- newly admitted participants could invalidate this candidate; it never proves
@@ -1418,16 +1303,15 @@ local function reduce_one(state, task)
 end
 
 local function recruit_supplier(state, refutation)
-  local intents = active_intents(state)
-  for i = 1, #(state.all_requests or EMPTY) do
-    local request = state.all_requests[i]
-    if request.pending and not state.roots[request] and supplier_score(state, request, intents) > 0 then
-      local candidate, ref, unknown = explore(state, function()
+  local intents = indexed_active(state.intents)
+  for i = 1, #(state.engine.pending or EMPTY) do
+    local request = state.engine.pending[i]
+    if request.pending and not state.roots[request] and supplier_score(request, intents) > 0 then
+      local candidate, unknown
+      candidate, refutation, unknown = explore_branch(state, refutation, function()
         return add_root(state, request, intents)
       end)
-      if candidate then return candidate end
-      refutation = merge_refutation(refutation, ref)
-      if unknown then return nil, refutation, true end
+      if candidate or unknown then return candidate, refutation, unknown end
     end
   end
   return nil, merge_refutation(refutation, terminal_refutation(state)), false
@@ -1436,7 +1320,7 @@ end
 local PROPAGATED = {}
 
 local function resolve_frontier(state)
-  local intents = active_intents(state)
+  local intents = indexed_active(state.intents)
 
   if #intents == 1 and intents[1].kind == 'exchange' then
     return recruit_supplier(state)
@@ -1460,14 +1344,14 @@ local function resolve_frontier(state)
     if intents[i].kind ~= 'exchange' then exchange_only = false; break end
   end
   local closed_exchange = exchange_only and not has_supplier(state, intents)
-  local frontier = analyse_frontier(state, intents_compatible, closed_exchange)
-  local exchange = frontier.exchange
+  local exchange, witnesses, claims, choices, accepts_supply =
+    analyse_frontier(state, intents_compatible, closed_exchange)
 
   if closed_exchange then
     if not exchange.balanced or exchange.zero_domains > 0 then
       return nil, terminal_refutation(state), false
     end
-    if exchange.selected and exchange.selected_degree == 1 and #exchange.partners == 1 then
+    if exchange.selected and #exchange.partners == 1 then
       if match_intents(state, exchange.selected, exchange.partners[1]) then return PROPAGATED end
       return nil, terminal_refutation(state), false
     end
@@ -1478,34 +1362,28 @@ local function resolve_frontier(state)
     local complete_matching = exchange.matching
     if complete_matching == false then return nil, terminal_refutation(state), false end
     if complete_matching then
-      local candidate, matching_refutation, matching_unknown = explore(state, function()
+      local candidate, unknown
+      candidate, refutation, unknown = explore_branch(state, refutation, function()
         for i = 1, #complete_matching do
           local pair = complete_matching[i]
           if not match_intents(state, pair[1], pair[2]) then return false end
         end
         return true
       end)
-      if candidate then return candidate end
-      refutation = merge_refutation(refutation, matching_refutation)
-      if matching_unknown then return nil, refutation, true end
+      if candidate or unknown then return candidate, refutation, unknown end
     end
   end
   for i = 1, #exchange.partners do
     local partner = exchange.partners[i]
-    local candidate, ref, unknown = explore(state, function()
+    local candidate, unknown
+    candidate, refutation, unknown = explore_branch(state, refutation, function()
       return match_intents(state, exchange.selected, partner)
     end)
-    if candidate then
-      return candidate
-    end
-    refutation = merge_refutation(refutation, ref)
-    if unknown then
-      return nil, refutation, true
-    end
+    if candidate or unknown then return candidate, refutation, unknown end
   end
 
-  for i = 1, #frontier.witnesses do
-    local intent = frontier.witnesses[i]
+  for i = 1, #witnesses do
+    local intent = witnesses[i]
     local cursor = witness_cursor(state, intent)
     local alternative_index = 0
     while true do
@@ -1514,21 +1392,16 @@ local function resolve_frontier(state)
         break
       end
       alternative_index = alternative_index + 1
-      local candidate, ref, unknown = explore(state, function()
+      local candidate, unknown
+      candidate, refutation, unknown = explore_branch(state, refutation, function()
         return resolve_witness(state, intent, outcome, alternative_index)
       end)
-      if candidate then
-        return candidate
-      end
-      refutation = merge_refutation(refutation, ref)
-      if unknown then
-        return nil, refutation, true
-      end
+      if candidate or unknown then return candidate, refutation, unknown end
     end
   end
 
-  for i = 1, #frontier.claims do
-    local group = frontier.claims[i]
+  for i = 1, #claims do
+    local group = claims[i]
     local all_machine = group.all_machine
     local accepts_supply = group.accepts_supply
     if all_machine and not accepts_supply then
@@ -1540,29 +1413,19 @@ local function resolve_frontier(state)
       return nil, merge_refutation(refutation, terminal_refutation(state)), false
     else
       if all_machine and #group.intents > 1 then
-        local candidate, ref, unknown = explore(state, function()
+        local candidate, unknown
+        candidate, refutation, unknown = explore_branch(state, refutation, function()
           return resolve_claim_set(state, group, group.intents)
         end)
-        if candidate then
-          return candidate
-        end
-        refutation = merge_refutation(refutation, ref)
-        if unknown then
-          return nil, refutation, true
-        end
+        if candidate or unknown then return candidate, refutation, unknown end
       end
       for j = 1, #group.intents do
         local intent = group.intents[j]
-        local candidate, ref, unknown = explore(state, function()
+        local candidate, unknown
+        candidate, refutation, unknown = explore_branch(state, refutation, function()
           return resolve_claim_set(state, group, { intent })
         end)
-        if candidate then
-          return candidate
-        end
-        refutation = merge_refutation(refutation, ref)
-        if unknown then
-          return nil, refutation, true
-        end
+        if candidate or unknown then return candidate, refutation, unknown end
       end
     end
   end
@@ -1576,29 +1439,28 @@ local function resolve_frontier(state)
       end
     end
   end
-  if frontier.accepts_participant_supply and not obligated_supplier_present then
+  if accepts_supply and not obligated_supplier_present then
     local candidate, supplied_refutation, supplied_unknown = recruit_supplier(state, refutation)
     if candidate or supplied_unknown then return candidate, supplied_refutation, supplied_unknown end
     refutation = supplied_refutation
   end
 
-  local choice = frontier.choices and frontier.choices[1]
+  local choice = choices[1]
   if choice then
-    local preferences = supplier_matching_preferences(state, frontier.choices)
+    local preferences = supplier_matching_preferences(state, choices)
     local order = ranked_choice_order(
       state,
       choice,
-      #(frontier.choices or EMPTY) > 2,
+      #choices > 2,
       preferences and preferences[choice]
     )
     for i = 1, #order do
       local choice_index = order[i]
-      local candidate, branch_refutation, unknown = explore(state, function()
+      local candidate, unknown
+      candidate, refutation, unknown = explore_branch(state, refutation, function()
         return resolve_choice(state, choice, choice_index)
       end)
-      if candidate then return candidate end
-      refutation = merge_refutation(refutation, branch_refutation)
-      if unknown then return nil, refutation, true end
+      if candidate or unknown then return candidate, refutation, unknown end
     end
   end
 
@@ -1614,7 +1476,7 @@ search = function(state)
     while state.active_head <= #state.active do
       local task = state.active[state.active_head]
       setv(state, state, 'active_head', state.active_head + 1)
-      if task and task.status == 'active' then
+      if task then
         local result = reduce_one(state, task)
         if result == 'conflict' then
           return nil, terminal_refutation(state), false
@@ -1632,48 +1494,40 @@ search = function(state)
 end
 
 
-local function publish_frontiers(state, result)
+local function publish_frontiers(state, certificate, retry)
   -- During an unbounded driver pass, a completed Retry while more ready fibers
   -- are still being admitted is provisional scheduler knowledge. Persisting it
   -- would build and tear down an index for the common two-party rendezvous path.
   -- Bounded sessions still publish because their retained coroutine requires a
   -- versioned snapshot across host turns.
-  if result and result.retry and state.provisional_admission and not state.resumable then
-    return nil
-  end
+  if retry and state.provisional_admission and not state.resumable then return end
   Proof.ensure(state.engine)
-  local published = Proof.frontiers(state.intents, state.roots, result and result.certificate)
+  local published = Proof.frontiers(state.intents, state.roots, certificate)
   for request, frontier in pairs(published) do Proof.publish(state.engine, request, frontier) end
-  local snapshot = Proof.capture(state.engine, state, result and result.certificate)
+  local snapshot = Proof.capture(state.engine, state, certificate)
   if state.resumable then state.frontier_snapshot = snapshot end
   local focus = published[state.focus]
-  if focus and result and result.retry then
+  if focus and retry then
     focus.retry = true
     focus.snapshot = snapshot
-    focus.interests = Proof.interests(result.certificate) or focus.interests
+    focus[Proof.INTERESTS] = certificate and certificate[Proof.INTERESTS] or focus[Proof.INTERESTS]
   end
-  return snapshot
 end
 
 local function new_state(engine, requests, focus, component, provisional_admission)
   if not requests[focus] then return nil end
   local instrumentation = engine.instrumentation
-  local journal = Journal.new()
   local state = setmetatable({
     engine = engine,
-    all_requests = engine.pending,
     focus = focus,
     choice_generation = component and component.order_generation or nil,
     provisional_admission = provisional_admission == true,
     active = {},
     active_head = 1,
     roots = {},
-    next_machine_serial = 0,
-    active_intent_count = 0,
-    accepts_supply_count = 0,
     search_depth = 0,
     steps = 0,
-    journal = journal,
+    journal = Journal.new(),
   }, Search)
   if instrumentation then
     instrumentation:begin_search(state, {
@@ -1687,19 +1541,10 @@ local function new_state(engine, requests, focus, component, provisional_admissi
   return state
 end
 
-local function finish_profile(state, candidate, outcome)
+local function finish_profile(state, outcome)
   local instrumentation = state.engine.instrumentation
   if not instrumentation then return end
   instrumentation:finish_search(state, outcome, { search_steps = state.steps })
-end
-
-local function new_search(engine, requests, focus, component, provisional_admission)
-  local state = new_state(engine, requests, focus, component, provisional_admission)
-  if not state then return nil end
-  state.resumable, state.hard_limit, state.work_remaining = true, false, 0
-  if engine.instrumentation then engine.instrumentation:pause_search(state) end
-  state.thread = coroutine.create(function() return search(state) end)
-  return state
 end
 
 function Search:yield_search(reason)
@@ -1718,7 +1563,7 @@ function Search:advance(max_work)
   if not ok then error(first, 0) end
 
   if coroutine.status(self.thread) ~= 'dead' then
-    publish_frontiers(self, { unknown = true })
+    publish_frontiers(self)
     if instrumentation then instrumentation:inc('retained_search_suspensions') end
     self.unknown_reason = second or self.unknown_reason or 'search_quantum'
     return nil, first, true
@@ -1727,38 +1572,37 @@ function Search:advance(max_work)
   local candidate, certificate, unknown = first, second, third
   if candidate then
     candidate._search = self
-    self.candidate = candidate
-    finish_profile(self, candidate, 'found')
+    finish_profile(self, 'found')
     return candidate, certificate, false
   end
-  publish_frontiers(self, { retry = not unknown, unknown = unknown, certificate = certificate })
-  finish_profile(self, nil, unknown and 'unknown' or 'retry')
+  publish_frontiers(self, certificate, not unknown)
+  finish_profile(self, unknown and 'unknown' or 'retry')
   return nil, certificate, unknown == true
 end
 
 function Search:discard(reason)
   if not self.thread then return end
   if coroutine.status(self.thread) ~= 'dead' then
-    finish_profile(self, nil, reason or 'invalidated')
+    finish_profile(self, reason or 'invalidated')
   end
   self.thread = nil
-  if self.journal then self.journal:reset() end
-  if self.candidate then self.candidate._search = nil end
-  self.candidate, self.frontier_snapshot = nil, nil
+  self.journal:reset()
+  self.frontier_snapshot = nil
 end
 
 function M.search(engine, requests, focus, search_limit, component, provisional_admission)
+  local state = new_state(engine, requests, focus, component, provisional_admission)
+  if not state then return nil end
   if search_limit == nil and not engine.explicit_search_limit then
-    local state = new_state(engine, requests, focus, component, provisional_admission)
-    if not state then return nil end
     local candidate, refutation, unknown = search(state)
-    if not candidate then publish_frontiers(state, { retry = not unknown, certificate = refutation }) end
-    finish_profile(state, candidate, candidate and 'found' or (unknown and 'unknown' or 'retry'))
+    if not candidate then publish_frontiers(state, refutation, not unknown) end
+    finish_profile(state, candidate and 'found' or (unknown and 'unknown' or 'retry'))
     return candidate, refutation, unknown
   end
 
-  local state = new_search(engine, requests, focus, component, provisional_admission)
-  if not state then return nil end
+  state.resumable, state.hard_limit, state.work_remaining = true, false, 0
+  if engine.instrumentation then engine.instrumentation:pause_search(state) end
+  state.thread = coroutine.create(function() return search(state) end)
   local candidate, refutation, unknown = state:advance(search_limit or engine.search_limit)
   return candidate, refutation, unknown, state
 end

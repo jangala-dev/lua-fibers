@@ -54,6 +54,22 @@ do
   eq(rt.engine.proof_graph.dirty[right_request] ~= nil, false)
 end
 
+
+-- Committed location changes invalidate Retry through the captured location
+-- version; no second dirty-mark traversal is required at commit.
+do
+  local rt = Runtime.new({ instrumentation = true })
+  local cell, observed = Cell.new(0):label('versioned-retry'), nil
+  rt:spawn_raw(function() observed = rt:perform(cell:expect_op(1)) end)
+  local blocked = rt:run().tag
+  assert(blocked == 'pending' or blocked == 'quiescent')
+  local snapshot = assert(rt.engine.pending[1]._proof.snapshot)
+  eq(snapshot.locations[cell._location], cell._location.version)
+  rt:spawn_raw(function() rt:perform(cell:write_op(1)) end)
+  rt:run()
+  eq(observed, true, 'location version should invalidate completed Retry')
+end
+
 -- Residual fallback discards the preferred live wait, but retains a latent
 -- membership dependency. A newly admitted compatible participant must reopen
 -- the preferred world rather than leave the completed Retry cached.

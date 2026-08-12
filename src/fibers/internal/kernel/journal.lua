@@ -188,16 +188,12 @@ function Journal.observe(segment, location)
   end
 end
 
-local function inherited_value(segment, location)
-  local cached = segment.values[location]
-  if cached ~= nil then return cached end
-  if segment.parent then return Journal.read(segment.parent, location) end
-  return location.value
-end
-
 function Journal.read(segment, location)
   Journal.observe(segment, location)
-  local value = inherited_value(segment, location)
+  local value = segment.values[location]
+  if value == nil then
+    if segment.parent then value = Journal.read(segment.parent, location) else value = location.value end
+  end
   local summary = segment.delta[location]
   if summary and segment.values[location] == nil then
     value = Algebra.apply(location, value, summary)
@@ -205,17 +201,12 @@ function Journal.read(segment, location)
   return value
 end
 
-local function stage_summary(segment, location, patch)
-  local journal = segment.journal
-  local old = segment.delta[location]
-  local summary = Algebra.stage(location, old, patch, journal)
-  if summary ~= old then journal:set(segment.delta, location, summary) end
-end
-
 function Journal.stage(segment, location, patch)
   local journal = segment.journal
   local value = Journal.read(segment, location)
-  stage_summary(segment, location, patch)
+  local old = segment.delta[location]
+  local summary = Algebra.stage(location, old, patch, journal)
+  if summary ~= old then journal:set(segment.delta, location, summary) end
   journal:set(segment.values, location, Algebra.apply(location, value, patch))
   journal.writers[location] = nil
 end
@@ -246,14 +237,6 @@ end
 
 Journal.relation = relation
 
-local function visible_patch(location, patch, relation, orientation)
-  if relation == 'external' or relation == 'interacting' then
-    return patch
-  elseif relation == 'independent' then
-    return Algebra.constraint(location, patch, orientation)
-  end
-end
-
 function Journal.project(task, location, orientation)
   local own = task.segment
   local journal = own.journal
@@ -264,12 +247,10 @@ function Journal.project(task, location, orientation)
     local segment = writers[i]
     local patch = segment.delta[location]
     if segment ~= own and not segment.retired and patch then
-      local relation = relation(own, segment)
-      local visible = visible_patch(location, patch, relation, orientation)
+      local mode = relation(own, segment)
+      local visible = mode and patch
+      if mode == 'independent' then visible = Algebra.constraint(location, patch, orientation) end
       if visible then
-        local mode = relation == 'interacting' and 'interacting'
-          or relation == 'external' and 'external'
-          or 'independent'
         combined = Algebra.join(location, combined, visible, mode)
         if not combined then
           return nil, false
@@ -293,10 +274,8 @@ function Journal.project_machine(task, location, succeeds, accepts_supply)
     local segment = writers[i]
     local patch = segment.delta[location]
     if segment ~= own and not segment.retired and patch then
-      local relation = relation(own, segment)
-      if relation == 'external' or relation == 'interacting' or relation == 'independent' then
-        Algebra.serialise(location, patch, relation, steps)
-      end
+      local mode = relation(own, segment)
+      if mode then Algebra.serialise(location, patch, mode, steps) end
     end
   end
   table.sort(steps, function(left, right)
@@ -344,8 +323,7 @@ end
 
 function Journal:collect_candidate(root_segments)
   local writes = merge_segments(root_segments, 'external')
-  if not writes then return nil, nil, false end
-  return self.observed, writes, true
+  if writes then return self.observed, writes end
 end
 
 function Journal.validate(observations)

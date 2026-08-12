@@ -65,7 +65,6 @@ local function merge_effects(engine, source)
 end
 
 function Candidate:prepare(engine)
-  if self.prepared_effects then return self.prepared_effects end
   local source = self.effects
   if not source or #source == 0 then self.prepared_effects = EMPTY; return EMPTY end
   local effects = merge_effects(engine, source)
@@ -104,7 +103,6 @@ function Candidate:settle(engine)
   local prepared = self.prepared_effects
 
   Journal.commit(self.writes)
-  for location in pairs(self.writes or EMPTY) do Proof.touch_location(engine, location) end
   engine.epoch = engine.epoch + 1
   if instrumentation then instrumentation:inc('commits') end
 

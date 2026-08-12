@@ -154,7 +154,6 @@ local function remove_requests(engine, requests, one)
   if engine.instrumentation then engine.instrumentation:inc('pending_removed', count) end
 end
 
-function Engine:remove_one(request) return remove_requests(self, nil, request) end
 function Engine:remove(requests) return remove_requests(self, requests) end
 
 local function component_requests(engine, focus, provisional_admission)
@@ -279,14 +278,19 @@ function Engine:resolve_without_suspension(fiber)
 
   if fiber.pending then
     local reason = self._last_search_unknown_reason or 'operation_not_immediately_committable'
-    self:remove_one(fiber)
+    remove_requests(self, nil, fiber)
     self:resume(fiber, nil, suspension_error(self, fiber, reason))
   end
   return false
 end
 
 local function pending_status(engine, refs, unknown)
-  local waits = Interest.summarise(Proof.collect_interests(refs))
+  local interests = scratch(engine, '_driver_interests')
+  for i = 1, #refs do
+    local values = refs[i] and refs[i][Proof.INTERESTS]
+    for j = 1, #(values or {}) do interests[#interests + 1] = values[j] end
+  end
+  local waits = Interest.summarise(interests)
   clear(refs)
   if unknown then
     return {

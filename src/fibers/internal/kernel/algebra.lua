@@ -54,14 +54,8 @@ function M.merge_supply(dst, src)
   return dst
 end
 
-local function supply_empty(value)
-  return not (value and (value.up or value.down or value.any))
-end
-
 function M.may_supply(value, demand)
-  if supply_empty(value) then
-    return false
-  end
+  if not (value and (value.up or value.down or value.any)) then return false end
   if value.any or demand == nil then
     return true
   end
@@ -151,28 +145,12 @@ local function log_supplies(patch)
   return out
 end
 
-local function assign(trail, target, key, value)
-  if trail then
-    trail:set(target, key, value)
-  else
-    target[key] = value
-  end
-end
-
-local function push(trail, target, value)
-  if trail then
-    trail:push(target, value)
-  else
-    target[#target + 1] = value
-  end
-end
-
 local function stage_log(summary, patch, trail)
   if not summary then
     return clone_log(patch)
   end
   for i = 1, #patch.ops do
-    push(trail, summary.ops, patch.ops[i])
+    trail:push(summary.ops, patch.ops[i])
   end
   return summary
 end
@@ -205,12 +183,9 @@ function Replace.join(location, left, right)
   end
   return Replace.clone(left)
 end
-function Replace.constraint(_, patch)
-  return Replace.clone(patch)
-end
-function Replace.supplies()
-  return { any = true }
-end
+Replace.constraint = Replace.clone
+local function any_supply() return { any = true } end
+Replace.supplies = any_supply
 
 local Add = { name = 'add' }
 function Add.clone(patch)
@@ -223,7 +198,7 @@ function Add.stage(summary, patch, trail)
   if not summary then
     return Add.clone(patch)
   end
-  assign(trail, summary, 'delta', summary.delta + patch.delta)
+  trail:set(summary, 'delta', summary.delta + patch.delta)
   return summary
 end
 function Add.join(_, left, right)
@@ -270,19 +245,15 @@ function Machine.stage(summary, patch, trail)
   end
   for i = 1, #patch.steps do
     local step = patch.steps[i]
-    push(trail, summary.steps, step)
+    trail:push(summary.steps, step)
   end
   return summary
 end
 function Machine.join(_, left, right)
   return { kind = 'machine', steps = merge_steps(left.steps, right.steps) }
 end
-function Machine.constraint(_, patch)
-  return Machine.clone(patch)
-end
-function Machine.supplies()
-  return { any = true }
-end
+Machine.constraint = Machine.clone
+Machine.supplies = any_supply
 function Machine.serialise(patch, relation, out)
   for i = 1, #patch.steps do
     local step = patch.steps[i]

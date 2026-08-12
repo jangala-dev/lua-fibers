@@ -167,19 +167,13 @@ function Operation.result_pack(leaf, value)
   return Values.pack(result(value, leaf))
 end
 
-local function one(value)
-  local done = false
-  return {
-    next = function()
-      if done then return nil end
-      done = true
-      return value
-    end,
-  }
-end
-
-local function none()
-  return { next = function() return nil end }
+local function once(value)
+  local done = value == nil
+  return { next = function()
+    if done then return nil end
+    done = true
+    return value
+  end }
 end
 
 function Operation.transition_cursor(leaf, value, context, phase, occurrence)
@@ -205,7 +199,7 @@ function Operation.transition_cursor(leaf, value, context, phase, occurrence)
     if outcome and not transition.writes and outcome.patch ~= nil then
       error('inspect rule cannot stage a patch', 2)
     end
-    return outcome and one(outcome) or none()
+    return once(outcome)
   end
   error('transition has neither step nor cursor', 2)
 end
@@ -229,10 +223,6 @@ function Operation.transition_patch(leaf, outcome, serial)
 end
 
 
-Operation.SUPPLY_NONE = 0
-Operation.SUPPLY_OPAQUE = 1
-Operation.SUPPLY_EXACT = 2
-
 local function empty()
   return {
     exchanges = {}, locations = {}, resources = {},
@@ -240,24 +230,19 @@ local function empty()
   }
 end
 
-local function mark_location(out, location, fields)
-  if not location then return end
-  local access = out.locations[location]
-  if not access then access = {}; out.locations[location] = access end
-  for key, value in pairs(fields or {}) do
-    if key == 'supplies' then
-      access.supplies = Algebra.merge_supply(access.supplies, value)
-    elseif value then
-      access[key] = true
-    end
-  end
+local function ensure_access(store, key)
+  if not key then return nil end
+  local value = store[key]
+  if not value then value = {}; store[key] = value end
+  return value
 end
 
-local function mark_resource(out, resource, fields)
-  if not resource then return end
-  local access = out.resources[resource]
-  if not access then access = {}; out.resources[resource] = access end
-  for key, value in pairs(fields or {}) do if value then access[key] = true end end
+local function merge_access(target, source)
+  for key, value in pairs(source or {}) do
+    if key == 'supplies' then
+      target.supplies = Algebra.merge_supply(target.supplies, value)
+    elseif value then target[key] = true end
+  end
 end
 
 local function merge(dst, src)
@@ -269,8 +254,8 @@ local function merge(dst, src)
     if not target then target = {}; dst.exchanges[resource] = target end
     for role in pairs(roles) do target[role] = true end
   end
-  for location, access in pairs(src.locations or {}) do mark_location(dst, location, access) end
-  for resource, access in pairs(src.resources or {}) do mark_resource(dst, resource, access) end
+  for location, source in pairs(src.locations or {}) do merge_access(ensure_access(dst.locations, location), source) end
+  for resource, source in pairs(src.resources or {}) do merge_access(ensure_access(dst.resources, resource), source) end
   return dst
 end
 
@@ -278,40 +263,28 @@ local function leaf_shape(op, out)
   local leaf = op.spec
   local kind = Operation.leaf_kind(leaf)
   if kind == 'exchange' then
-    local roles = out.exchanges[leaf.resource]
-    if not roles then roles = {}; out.exchanges[leaf.resource] = roles end
-    roles[leaf.role] = true
+    ensure_access(out.exchanges, leaf.resource)[leaf.role] = true
     return
   end
-  local location = leaf.location
-  if not location then return end
-  if kind == 'read' then
-    mark_location(out, location, { read = true })
-  elseif kind == 'patch' then
+  local access = ensure_access(out.locations, leaf.location)
+  if not access then return end
+  access.read = true
+  if kind == 'patch' then
     local supplies = leaf.supplies
-    if not supplies then
-      local patch = op.arg
-      supplies = patch and Algebra.supplies(location, patch) or {}
-    end
-    mark_location(out, location, { read = true, write = true, supplies = supplies })
+    if not supplies then supplies = op.arg and Algebra.supplies(leaf.location, op.arg) or {} end
+    access.write = true
+    access.supplies = Algebra.merge_supply(access.supplies, supplies)
   elseif kind == 'version_wait' then
-    mark_location(out, location, { read = true, wait = true })
-    out.external = true
+    access.wait, out.external = true, true
   elseif kind == 'transition' then
-    local transition = leaf.transition
-    mark_location(out, location, {
-      read = true,
-      write = transition.writes,
-      wait = true,
-      supplies = transition.supplies,
-    })
-  else
+    access.write, access.wait = leaf.transition.writes or false, true
+    access.supplies = Algebra.merge_supply(access.supplies, leaf.transition.supplies)
+  elseif kind ~= 'read' then
     error('unknown trusted leaf kind ' .. tostring(kind), 0)
   end
   if leaf.interest ~= nil or leaf.absence_check ~= nil then out.external = true end
 end
 
-local describe
 local function describe_mode(op, seen, mode)
   if not op then return empty() end
   -- Most primitive shape belongs to the shared executable leaf. A patch
@@ -342,8 +315,7 @@ local function describe_mode(op, seen, mode)
   elseif kind == 'product' then
     for i = 1, #op.lanes do merge(out, describe_mode(op.lanes[i], seen, mode)) end
   elseif kind == 'or_else' then
-    merge(out, describe_mode(op.p, seen, mode))
-    if mode ~= 'preferred' then merge(out, describe_mode(op.q, seen, mode)) end
+    merge(out, describe_mode(op.p, seen, mode)); merge(out, describe_mode(op.q, seen, mode))
   elseif kind == 'map' then
     merge(out, describe_mode(op.p, seen, mode))
   elseif kind == 'guard' then
@@ -357,64 +329,33 @@ local function describe_mode(op, seen, mode)
   return out
 end
 
-describe = function(op) return describe_mode(op, {}, 'full') end
-
-function Operation.shape(op)
-  local shape = describe(op)
-  if shape.active == nil then shape.active = describe_mode(op, {}, 'active') end
-  return shape
-end
-function Operation.active_shape(value)
-  if value and value.kind then return describe_mode(value, {}, 'active') end
-  return value and value.active or value
-end
-function Operation.active_dynamic(value)
-  local active = Operation.active_shape(value)
-  return active and active.dynamic == true
+function Operation.shape(op, active)
+  return describe_mode(op, {}, active and 'active' or 'full')
 end
 
-local function opposite(role)
-  if role == 'put' then return 'get' end
-  if role == 'get' then return 'put' end
-end
+local OPPOSITE = { put = 'get', get = 'put' }
 
-function Operation.supply_relation(shape, intent)
+function Operation.may_supply(shape, intent)
   shape = shape or empty()
-  if Operation.active_dynamic(shape) then return Operation.SUPPLY_OPAQUE, 'dynamic' end
-  if not intent then return Operation.SUPPLY_NONE end
+  if shape.dynamic then return true end
+  if not intent then return false end
   if intent.kind == 'exchange' then
-    local roles, role = shape.exchanges[intent.resource], opposite(intent.role)
-    if roles and role and roles[role] then return Operation.SUPPLY_EXACT, 'exchange' end
-    return Operation.SUPPLY_NONE
+    local roles, role = shape.exchanges[intent.resource], OPPOSITE[intent.role]
+    return roles ~= nil and role ~= nil and roles[role] == true
   end
   local leaf = intent.spec
   local location = leaf and leaf.location
   local access = location and shape.locations[location]
-  local demand = leaf and leaf.orientation
-  if access and Algebra.may_supply(access.supplies, demand) then
-    return Operation.SUPPLY_EXACT, 'location', demand
-  end
-  return Operation.SUPPLY_NONE
+  return access ~= nil and Algebra.may_supply(access.supplies, leaf and leaf.orientation)
 end
-
-function Operation.may_supply(shape, intent)
-  local relation, reason = Operation.supply_relation(shape, intent)
-  if relation == Operation.SUPPLY_OPAQUE then return true, reason end
-  return relation == Operation.SUPPLY_EXACT, reason or 'none'
-end
-
 
 function Operation.supply_score(shape, intents)
-  if Operation.active_dynamic(shape) then
-    return math.max(1, #(intents or {})), Operation.SUPPLY_OPAQUE, 'dynamic'
-  end
-  local score, reason = 0, nil
+  if shape and shape.dynamic then return math.max(1, #(intents or {})), false end
+  local score = 0
   for i = 1, #(intents or {}) do
-    local ok, why = Operation.may_supply(shape, intents[i])
-    if ok then score = score + 1; reason = reason or why end
+    if Operation.may_supply(shape, intents[i]) then score = score + 1 end
   end
-  if score == 0 then return 0, Operation.SUPPLY_NONE, 'none' end
-  return score, Operation.SUPPLY_EXACT, reason
+  return score, score > 0
 end
 
 
