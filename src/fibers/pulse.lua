@@ -10,18 +10,12 @@ local Contract = require('fibers.internal.contract')
 local Pulse = {}
 Pulse.__index = Pulse
 
-local next_id = 0
-
 function Pulse.new(initial)
   initial = initial or 0
-  Contract.non_negative_integer(initial, 'pulse initial version', 2)
-  next_id = next_id + 1
-  local id = 'pulse-' .. tostring(next_id)
-  local pulse = Label.attach(setmetatable({
-    _fibers_id = id,
+  local pulse = Label.attach(Label.identity(setmetatable({
     _version = Counter.new(initial),
     _closed = Completion.new(),
-  }, Pulse))
+  }, Pulse), 'pulse'))
   Label.child(pulse._version, pulse, 'version')
   Label.child(pulse._closed, pulse, 'closed')
   return pulse
@@ -32,17 +26,8 @@ function Pulse:version_op()
 end
 
 
-function Pulse:why_op()
-  return self._closed:read_op():map(function(state)
-    return state.kind == 'succeeded' and state.values[1] or nil
-  end)
-end
-
-function Pulse:is_closed_op()
-  return self._closed:read_op():map(function(state)
-    return state.kind ~= 'pending'
-  end)
-end
+function Pulse:why_op() return self._closed:value_op() end
+function Pulse:is_closed_op() return self._closed:is_terminal_op() end
 
 function Pulse:signal_op()
   local signal = Op.each({

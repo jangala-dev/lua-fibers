@@ -15,20 +15,15 @@ local Contract = require('fibers.internal.contract')
 
 local Stream, Duplex = {}, {}
 Duplex.__index = Duplex
-local next_id = 0
-
 
 local function compose(opts)
   opts = opts or {}
-  next_id = next_id + 1
-  local id = 'stream-' .. tostring(next_id)
-  local stream = Label.attach(setmetatable({
-    _fibers_id = id,
+  local stream = Label.attach(Label.identity(setmetatable({
     kind = opts.kind or 'stream',
     mode = opts.mode or 'composed',
     _reader = opts.reader,
     _writer = opts.writer,
-  }, Duplex), opts.label)
+  }, Duplex), 'stream'), opts.label)
   local children = {}
   if opts.reader then children[#children + 1] = opts.reader end
   if opts.writer then children[#children + 1] = opts.writer end
@@ -110,70 +105,37 @@ local function endpoint(self, side, level)
   return value
 end
 
-function Duplex:read_some_op(n)
-  return endpoint(self, 'read'):read_some_op(n)
+local function forward_ops(side, names)
+  for i = 1, #names do
+    local name = names[i]
+    Duplex[name .. '_op'] = function(self, ...)
+      local ep = endpoint(self, side)
+      return ep[name .. '_op'](ep, ...)
+    end
+  end
 end
 
+forward_ops('read', { 'read_some', 'read_exactly', 'read_until', 'read_line', 'read_all' })
+forward_ops('write', { 'write_some', 'flush' })
 
-function Duplex:read_exactly_op(n)
-  return endpoint(self, 'read'):read_exactly_op(n)
-end
-
-function Duplex:read_exactly(n)
-  return endpoint(self, 'read'):read_exactly(n)
-end
-
-
-function Duplex:read_until_op(separator, opts)
-  return endpoint(self, 'read'):read_until_op(separator, opts)
-end
-
-
-function Duplex:read_line_op(opts)
-  return endpoint(self, 'read'):read_line_op(opts)
-end
-
-
-function Duplex:read_all_op(opts)
-  return endpoint(self, 'read'):read_all_op(opts)
-end
-
-function Duplex:read_all(opts)
-  return endpoint(self, 'read'):read_all(opts)
-end
-
+function Duplex:read_exactly(n) return endpoint(self, 'read'):read_exactly(n) end
+function Duplex:read_all(opts) return endpoint(self, 'read'):read_all(opts) end
 
 local function write_bytes(...)
   local count = select('#', ...)
-  if count == 0 then
-    return ''
-  end
+  if count == 0 then return '' end
   local parts = {}
   for i = 1, count do
     local part = select(i, ...)
-    if type(part) ~= 'string' then
-      error('stream write expects string arguments', 3)
-    end
+    if type(part) ~= 'string' then error('stream write expects string arguments', 3) end
     parts[i] = part
   end
   return table.concat(parts)
 end
-function Duplex:write_op(...)
-  return endpoint(self, 'write'):write_op(write_bytes(...))
-end
-function Duplex:write_some_op(bytes)
-  return endpoint(self, 'write'):write_some_op(bytes)
-end
-function Duplex:write_all_op(...)
-  return endpoint(self, 'write'):write_all_op(write_bytes(...))
-end
-function Duplex:write_all(...)
-  return endpoint(self, 'write'):write_all(write_bytes(...))
-end
-function Duplex:flush_op()
-  return endpoint(self, 'write'):flush_op()
-end
 
+function Duplex:write_op(...) return endpoint(self, 'write'):write_op(write_bytes(...)) end
+function Duplex:write_all_op(...) return endpoint(self, 'write'):write_all_op(write_bytes(...)) end
+function Duplex:write_all(...) return endpoint(self, 'write'):write_all(write_bytes(...)) end
 
 
 local function flow_of(value)
@@ -211,17 +173,10 @@ end
 
 
 local function close_request(self, reason, abort_write)
-  local operations = {}
-  if self._reader then
-    operations[#operations + 1] = self:shutdown_read_op(reason)
-  end
-  if self._writer then
-    operations[#operations + 1] = abort_write and self:abort_write_op(reason)
-      or self:shutdown_write_op(reason)
-  end
-  return #operations == 0 and Op.always(true) or Op.together(operations):map(function()
-    return true
-  end)
+  return Op.together(
+    self:shutdown_read_op(reason),
+    abort_write and self:abort_write_op(reason) or self:shutdown_write_op(reason)
+  ):map(function() return true end)
 end
 
 local function wait_after_commit(self, request, before_wait)
@@ -252,23 +207,13 @@ end
 
 
 function Duplex:closed_op()
-  local operations = {}
-  if self._reader then
-    operations[#operations + 1] = self._reader:closed_op()
-  end
-  if self._writer then
-    operations[#operations + 1] = self._writer:closed_op()
-  end
-  if self._read_registration then
-    operations[#operations + 1] = self._read_registration:retired_op()
-  end
-  if self._write_registration then
-    operations[#operations + 1] = self._write_registration:retired_op()
-  end
-  return Op.each(operations):map(function()
-    if self._close_error then
-      return nil, self._close_error
-    end
+  return Op.each({
+    self._reader and self._reader:closed_op() or Op.always(true),
+    self._writer and self._writer:closed_op() or Op.always(true),
+    self._read_registration and self._read_registration:retired_op() or Op.always(true),
+    self._write_registration and self._write_registration:retired_op() or Op.always(true),
+  }):map(function()
+    if self._close_error then return nil, self._close_error end
     return true
   end)
 end

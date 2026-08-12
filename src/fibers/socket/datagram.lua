@@ -13,7 +13,8 @@ local Activation = require('fibers.socket.activation')
 local Lifecycle = require('fibers.socket.lifecycle')
 local HostOffer = require('fibers.io.offer')
 local FIFO = require('fibers.resource.fifo')
-local StateMachine = require('fibers.resource.machine')
+local Counter = require('fibers.resource.counter')
+local Completion = require('fibers.resource.completion')
 local Protected = require('fibers.protected')
 local perform = require('fibers.perform')
 local Direct = require('fibers.internal.direct')
@@ -28,113 +29,40 @@ local DatagramLifecycle = Lifecycle.define({
   closed_reason = 'datagram socket closed',
 })
 
-local Ready, Wait = StateMachine.Ready, StateMachine.Wait
-local SendState = {}
-SendState.__index = SendState
-
-local Allocate = StateMachine.isolated_update('socket.datagram.allocate_send', function(current)
-  if current.terminal_error ~= nil then
-    return Ready.same(nil, current.terminal_error)
-  end
-  local next_state = {
-    next_seq = current.next_seq + 1,
-    completed_seq = current.completed_seq,
-  }
-  return Ready.write(next_state, next_state.next_seq)
-end)
-
-local Complete = StateMachine.isolated_update('socket.datagram.complete_send', function(current, payload)
-  if payload.seq <= current.completed_seq then
-    return Ready.same(true)
-  end
-  if payload.seq ~= current.completed_seq + 1 then
-    return Ready.same(nil, {
-      kind = 'datagram_send_order_violation',
-      expected = current.completed_seq + 1,
-      got = payload.seq,
-    })
-  end
-  local next_state = {
-    next_seq = current.next_seq,
-    completed_seq = payload.seq,
-    terminal_error = current.terminal_error,
-    failure_seq = current.failure_seq,
-  }
-  return Ready.write(next_state, true)
-end)
-
-local Fail = StateMachine.isolated_update('socket.datagram.fail_send', function(current, payload)
-  if current.terminal_error ~= nil then
-    return Ready.same(false, current)
-  end
-  local next_state = {
-    next_seq = current.next_seq,
-    completed_seq = current.completed_seq,
-    terminal_error = payload.error,
-    failure_seq = payload.seq or (current.completed_seq + 1),
-  }
-  return Ready.write(next_state, true, next_state)
-end)
-
-local Flush = StateMachine.isolated_query('socket.datagram.flush_send', function(value, target)
-  if value.completed_seq >= target then return Ready.same(true) end
-  if value.terminal_error ~= nil and (value.failure_seq or 0) <= target then
-    return Ready.same(nil, value.terminal_error)
-  end
-  return Wait
-end)
-
-function SendState.new(capacity)
-  local self = Label.attach(setmetatable({
-    state = StateMachine._trusted({
-      next_seq = 0,
-      completed_seq = 0,
-    }),
-    queue = FIFO.new(capacity),
-  }, SendState))
-  Label.child(self.state, self, 'state')
-  Label.child(self.queue, self, 'queue')
-  return self
-end
-
-function SendState:admit_op(data, address)
-  return self.state:transition_op(Allocate):and_then(Op.guard(function(seq, err)
-    if seq == nil then
-      return Op.always(nil, err)
-    end
-    return self.queue:put_op({ seq = seq, data = data, address = address }):map(function()
-      return true, seq
-    end)
+local function admit_send_op(socket, data, address)
+  return socket._send_failed:pending_op():and_then(socket._send_admitted:bump_op()):and_then(Op.guard(function(seq)
+    return socket._send_queue:put_op({ seq = seq, data = data, address = address }):map(function() return true, seq end)
   end))
 end
 
-function SendState:next_op()
-  return self.queue:get_op()
+local function complete_send_op(socket, seq)
+  return socket._send_completed:read_op():and_then(Op.guard(function(done)
+    if seq <= done then return Op.always(true) end
+    if seq ~= done + 1 then
+      return Op.always(nil, { kind = 'datagram_send_order_violation', expected = done + 1, got = seq })
+    end
+    return socket._send_completed:bump_op():map(function() return true end)
+  end))
 end
 
-function SendState:complete_op(seq)
-  return self.state:transition_op(Complete, { seq = seq })
+local function fail_send_op(socket, seq, err)
+  return socket._send_failed:publish_success_op({ seq = seq, error = err })
 end
 
-function SendState:fail_op(seq, err)
-  return self.state:transition_op(Fail, { seq = seq, error = err })
-end
-
-function SendState:close_op(err)
-  return self:fail_op(nil, err)
-end
-
-function SendState:flush_op()
-  local state = self.state
-  return state:read_op():and_then(Op.guard(function(value)
-    return state:transition_op(Flush, value.next_seq)
+local function flush_send_op(socket)
+  return socket._send_admitted:read_op():and_then(Op.guard(function(target)
+    local complete = socket._send_completed:at_least_op(target):map(function() return true end)
+    local failed = socket._send_failed:success_op():and_then(Op.guard(function(failure)
+      if failure.seq == nil or failure.seq <= target then return Op.always(nil, failure.error) end
+      return Op.never()
+    end))
+    return complete:or_else(failed)
   end))
 end
 
 local Module = {}
 local Datagram = {}
 Datagram.__index = Datagram
-local next_datagram = 0
 
 local function close_handle(value, reason)
   return IO.close_value('datagram', value, reason)
@@ -183,7 +111,7 @@ function Datagram:send_to_op(data, address)
     )
   end
   local send = self._lifecycle:available_op():and_then(
-    self._sends:admit_op(data, Address.copy(address)):map(function(ok, seq)
+    admit_send_op(self, data, Address.copy(address)):map(function(ok, seq)
       if not ok then
         return nil, seq
       end
@@ -196,7 +124,7 @@ function Datagram:send_to_op(data, address)
 end
 
 function Datagram:flush_op()
-  return self._sends:flush_op()
+  return flush_send_op(self)
 end
 
 local RECEIVE_OPTIONS = { max_size = Contract.non_negative_integer }
@@ -249,7 +177,7 @@ local function close_from_driver(socket, rt, reason, err, fatal)
       reason = reason,
       address = Lifecycle.address(socket),
     })
-  IO.masked_perform(rt, socket._sends:close_op(pending_error))
+  IO.masked_perform(rt, fail_send_op(socket, nil, pending_error))
   if first then close_socket_handle(socket, rt, state, reason) end
   local _, terminal = IO.masked_perform(rt, socket._lifecycle:stopped_op(reason, err, fatal))
   return Lifecycle.close_result(terminal)
@@ -309,10 +237,10 @@ local function service_send(socket, handle, record)
         actual = n,
         address = record.address,
       })
-      perform(socket._sends:fail_op(record.seq, protocol))
+      perform(fail_send_op(socket, record.seq, protocol))
       error(protocol, 0)
     end
-    perform(socket._sends:complete_op(record.seq))
+    perform(complete_send_op(socket, record.seq))
     return nil
   end
   if IOError.is_would_block(err) then return record end
@@ -321,7 +249,7 @@ local function service_send(socket, handle, record)
     action = 'send_to',
     address = record.address,
   })
-  perform(socket._sends:fail_op(record.seq, err))
+  perform(fail_send_op(socket, record.seq, err))
   error(err, 0)
 end
 
@@ -331,7 +259,7 @@ local function next_driver_event(socket, handle, pending)
   end)
   local send = pending and handle:write_ready_op():map(function()
     return 'send', pending
-  end) or socket._sends:next_op():map(function(record)
+  end) or socket._send_queue:get_op():map(function(record)
     return 'send', record
   end)
   -- Once packet reception has terminated, do not admit another send turn at the
@@ -344,7 +272,7 @@ local function driver(socket, driver_scope)
   local ok, driver_err = Protected.pcall(function()
     local handle, start_err = perform(socket._lifecycle:start_result_op())
     if not handle then
-      if start_err then IO.masked_perform(rt, socket._sends:close_op(start_err)) end
+      if start_err then IO.masked_perform(rt, fail_send_op(socket, nil, start_err)) end
       return
     end
 
@@ -400,18 +328,18 @@ function Module.udp_op(address, opts)
   local send_capacity = opts.send_capacity or 64
   local max_datagram_size = opts.max_datagram_size or 65535
   local scope = IO.current_scope(opts, 'socket.udp_op')
-  next_datagram = next_datagram + 1
-  local id = 'datagram-' .. tostring(next_datagram)
-  local socket = Label.attach(setmetatable({
+  local socket = Label.attach(Label.identity(setmetatable({
     kind = 'datagram_socket',
-    _fibers_id = id,
     _address = address,
     _lifecycle = DatagramLifecycle.new(address),
-    _sends = SendState.new(send_capacity),
+    _send_admitted = Counter.new(0), _send_completed = Counter.new(0),
+    _send_failed = Completion.new(), _send_queue = FIFO.new(send_capacity),
     _max_datagram_size = max_datagram_size,
-  }, Datagram), opts.label)
+  }, Datagram), 'datagram'), opts.label)
   Label.child(socket._lifecycle, socket, 'lifecycle')
-  Label.child(socket._sends, socket, 'sends')
+  for _, name in ipairs({ 'admitted', 'completed', 'failed', 'queue' }) do
+    Label.child(socket['_send_' .. name], socket, 'sends:' .. name)
+  end
   socket._packets = packet_source(socket, receive_capacity)
 
   return scope:_drive_op( socket, {

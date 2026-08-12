@@ -5,6 +5,14 @@
 -- ownership, authority or equality.
 
 local Label = {}
+local identities = {}
+
+function Label.identity(value, prefix)
+  local id = (identities[prefix] or 0) + 1
+  identities[prefix] = id
+  rawset(value, '_fibers_id', prefix .. '-' .. tostring(id))
+  return value
+end
 
 local function validate(value, level)
   if value ~= nil and type(value) ~= 'string' then

@@ -26,8 +26,8 @@ local Direct = require('fibers.internal.direct')
 local Label = require('fibers.internal.label')
 local Cell = require('fibers.resource.cell')
 
-local next_process = 0
 local ENDPOINTS = { 'stdin', 'stdout', 'stderr' }
+local OUTPUTS = { 'stdout', 'stderr' }
 
 local function process_label(proc)
   return Label.describe(proc, proc._fibers_id or 'process')
@@ -39,8 +39,6 @@ local Process = {}
 Process.__index = Process
 
 local copy_table = CommandModule.copy_table
-local copy_list = CommandModule.copy_list
-local copy_spec = CommandModule.copy_spec
 local redirect_stream = CommandModule.redirect_stream
 
 Module.command = CommandModule.command
@@ -58,8 +56,18 @@ function Process:lifetime()
   return self._lifetime
 end
 
+local function launch_op(proc, want)
+  return proc._state:select_op(function(state)
+    if state.kind == 'created' or state.kind == 'launching' then return end
+    local succeeded = state.kind ~= 'failed'
+    if want == nil then return succeeded and Op.always(proc) or Op.always(nil, state.error) end
+    if want ~= succeeded then return Op.never() end
+    return Op.always(succeeded and proc or state.error)
+  end)
+end
+
 local function after_launch(proc, field)
-  return proc._launch_completion:result_op():map(function(launched, err)
+  return launch_op(proc):map(function(launched, err)
     if launched == nil then return nil, err end
     return field == '_pid' and proc._pid or proc._streams[field]
   end)
@@ -69,9 +77,7 @@ function Process:pid_op()
   return after_launch(self, '_pid')
 end
 
-function Process:argv()
-  return copy_list(self._command._spec.argv)
-end
+function Process:argv() return self._command:argv() end
 
 function Process:stdin_op()
   return after_launch(self, 'stdin')
@@ -83,17 +89,9 @@ function Process:stderr_op()
   return after_launch(self, 'stderr')
 end
 
-function Process:launch_succeeded_op()
-  return self._launch_completion:success_op()
-end
-
-function Process:launch_failed_op()
-  return self._launch_completion:failure_op()
-end
-
-function Process:launch_result_op()
-  return self._launch_completion:result_op()
-end
+function Process:launch_succeeded_op() return launch_op(self, true) end
+function Process:launch_failed_op() return launch_op(self, false) end
+function Process:launch_result_op() return launch_op(self) end
 
 function Process:result_op()
   return self._exit_completion:result_op()
@@ -152,13 +150,9 @@ end
 
 function Process:communicate(opts)
   opts = copy_table(opts)
-  local stdout_limit = opts.stdout_limit or 4 * 1024 * 1024
-  local stderr_limit = opts.stderr_limit or 4 * 1024 * 1024
-  if type(stdout_limit) ~= 'number' or stdout_limit < 0 then
-    error('stdout_limit must be a non-negative number', 2)
-  end
-  if type(stderr_limit) ~= 'number' or stderr_limit < 0 then
-    error('stderr_limit must be a non-negative number', 2)
+  local limits = { stdout = opts.stdout_limit or 4 * 1024 * 1024, stderr = opts.stderr_limit or 4 * 1024 * 1024 }
+  for _, name in ipairs(OUTPUTS) do
+    if type(limits[name]) ~= 'number' or limits[name] < 0 then error(name .. '_limit must be a non-negative number', 2) end
   end
 
   -- Communicate is deliberately a direct, committed multi-phase procedure.
@@ -224,65 +218,48 @@ function Process:communicate(opts)
     end
   end
 
-  local stdout_stream = self._streams.stdout
-  local stderr_stream = self._streams.stderr
-  if stderr_stream == stdout_stream then
-    stderr_stream = nil
+  local streams = { stdout = self._streams.stdout, stderr = self._streams.stderr }
+  if streams.stderr == streams.stdout then streams.stderr = nil end
+  local spawn_ops = {}
+  for _, name in ipairs(OUTPUTS) do
+    local output, stream = name, streams[name]
+    spawn_ops[name] = stream and scope:spawn_op(function()
+      return stream:read_all({ max = limits[output] })
+    end, { label = process_label(self) .. ':communicate-' .. output }) or Op.always(nil)
   end
-  local tasks = perform(Op.named_each({
-    stdout = stdout_stream and scope:spawn_op(function()
-      return stdout_stream:read_all({ max = stdout_limit })
-    end, { label = process_label(self) .. ':communicate-stdout' }) or Op.always(nil),
-    stderr = stderr_stream and scope:spawn_op(function()
-      return stderr_stream:read_all({ max = stderr_limit })
-    end, { label = process_label(self) .. ':communicate-stderr' }) or Op.always(nil),
-  }))
-  local stdout_task, stderr_task = tasks.stdout, tasks.stderr
+  local tasks = perform(Op.named_each(spawn_ops))
 
-  local complete_op = Op.named_each({
-    stdout = stdout_task and stdout_task:body_result_op() or Op.always(nil),
-    stderr = stderr_task and stderr_task:body_result_op() or Op.always(nil),
-    status = self:result_op(),
-  })
-
-  local alternatives = { complete = complete_op }
+  local complete, alternatives = { status = self:result_op() }, {}
   local function failure_op(task)
     return task:body_result_op():and_then(Op.guard(function(exit)
       local _, task_err = Exit.unwrap(exit)
-      if task_err ~= nil then return Op.always(task_err) end
-      return Op.never()
+      return task_err ~= nil and Op.always(task_err) or Op.never()
     end))
   end
-  if stdout_task then alternatives.stdout_failed = failure_op(stdout_task) end
-  if stderr_task then alternatives.stderr_failed = failure_op(stderr_task) end
+  for _, name in ipairs(OUTPUTS) do
+    local task = tasks[name]
+    complete[name] = task and task:body_result_op() or Op.always(nil)
+    if task then alternatives[name .. '_failed'] = failure_op(task) end
+  end
+  alternatives.complete = Op.named_each(complete)
 
-  local event, value = rt:_perform_current(Op.named_choice(alternatives), nil, true)
-  if event == 'stdout_failed' then
-    return fail('communicate stdout failed', value)
-  elseif event == 'stderr_failed' then
-    return fail('communicate stderr failed', value)
-  end
+  local event, parts = rt:_perform_current(Op.named_choice(alternatives), nil, true)
+  if event ~= 'complete' then return fail('communicate ' .. event:gsub('_failed$', '') .. ' failed', parts) end
 
-  local parts = value
-  local stdout, stdout_err
-  if stdout_task then
-    stdout, stdout_err = Exit.unwrap(parts.stdout)
-  end
-  if stdout_task and stdout == nil and stdout_err ~= nil then
-    return fail('communicate stdout failed', stdout_err)
-  end
-  local stderr, stderr_err
-  if stderr_task then
-    stderr, stderr_err = Exit.unwrap(parts.stderr)
-  end
-  if stderr_task and stderr == nil and stderr_err ~= nil then
-    return fail('communicate stderr failed', stderr_err)
+  local result = { status = parts.status }
+  for _, name in ipairs(OUTPUTS) do
+    local task = tasks[name]
+    if task then
+      local value, err = Exit.unwrap(parts[name])
+      if value == nil and err ~= nil then return fail('communicate ' .. name .. ' failed', err) end
+      result[name] = value
+    end
   end
   local status_row = parts._rows and parts._rows.status
   if status_row and status_row.n and status_row.n >= 2 and status_row[1] == nil then
     return fail('communicate process result failed', status_row[2])
   end
-  return { status = parts.status, stdout = stdout, stderr = stderr }
+  return result
 end
 
 
@@ -343,7 +320,6 @@ local function publish_launch_failure(rt, proc, err)
     if proc._host_process then proc._host_process:close(err) end
   end)
   publish_state(rt, proc, { kind = 'failed', error = err })
-  IO.masked_perform(rt, proc._launch_completion:publish_failure_op(err))
   IO.masked_perform(rt, proc._exit_completion:publish_failure_op(err))
 end
 
@@ -356,16 +332,6 @@ local function wait_exit_until(proc, deadline)
   return perform(proc._host_process:exit_op():or_else(Sleep.sleep_until_op(deadline):map(function()
     return nil, 'timeout'
   end)))
-end
-
-local function close_stream(stream, reason, abort)
-  if not stream then
-    return true
-  end
-  if abort then
-    return stream:abort(reason)
-  end
-  return stream:close(reason)
 end
 
 local function finish_close(proc, reason)
@@ -381,7 +347,7 @@ local function finish_close(proc, reason)
     local stream = proc._pipe_streams[which] or proc._streams[which]
     if stream and not seen[stream] then
       seen[stream] = true
-      record_close_error(which, function() return close_stream(stream, reason, true) end)
+      record_close_error(which, function() return stream:abort(reason) end)
     end
   end
   record_close_error('host_process', function()
@@ -399,7 +365,7 @@ end
 
 local function supervise(proc, driver_scope, opts, acquired)
   local rt = Runtime.current()
-  local spec = copy_spec(proc._command._spec)
+  local spec = proc._command:spec()
   local stdin_mode, stdin_source, stdin_redirect = endpoint_opts(spec, 'stdin')
   local stdout_mode, stdout_destination, stdout_redirect = endpoint_opts(spec, 'stdout')
   local stderr_mode, stderr_destination, stderr_redirect = endpoint_opts(spec, 'stderr')
@@ -528,7 +494,6 @@ local function supervise(proc, driver_scope, opts, acquired)
   end
 
   publish_state(rt, proc, { kind = 'running', pid = proc._pid })
-  IO.masked_perform(rt, proc._launch_completion:publish_success_op(proc))
 
   local status, close_error
   local close_requested = proc._lifetime:_close_requested()
@@ -609,12 +574,13 @@ local function driver_body(proc, driver_scope, opts)
       pid = proc._pid,
       argv = proc._command._spec.argv,
     })
-  if proc._launch_completion:_is_pending() then
+  local state = proc._state._location.value
+  if state.kind == 'created' or state.kind == 'launching' then
     publish_launch_failure(rt, proc, failure)
   elseif proc._exit_completion:_is_pending() then
     IO.masked_perform(rt, proc._exit_completion:publish_failure_op(failure))
   end
-  local state = proc._state._location.value
+  state = proc._state._location.value
   if state.kind ~= 'failed' then
     publish_state(rt, proc, { kind = 'closed', pid = proc._pid, status = state.status, error = failure })
   end
@@ -642,23 +608,18 @@ function Command:launch_op(opts)
   -- attempt. The guard is speculative and pure: no host action occurs until the
   -- Process root and its private custody have committed and its Task view starts.
   return Op.guard(function()
-    next_process = next_process + 1
-    local id = 'process-' .. tostring(next_process)
-    local proc = Label.attach(setmetatable({
+    local proc = Label.attach(Label.identity(setmetatable({
       kind = 'process',
-      _fibers_id = id,
       _command = command,
       _state = Cell._trusted({ kind = 'created' }),
-      _launch_completion = Completion.new(),
       _exit_completion = Completion.new(),
       _communicating = false,
       _host_process = nil,
       _streams = {},
       _pipe_streams = {},
       _pid = nil,
-    }, Process), opts.label)
+    }, Process), 'process'), opts.label)
     Label.child(proc._state, proc, 'state')
-    Label.child(proc._launch_completion, proc, 'launch')
     Label.child(proc._exit_completion, proc, 'exit')
     local admitted = parent_scope:_drive_op(proc, {
       label = opts.label,

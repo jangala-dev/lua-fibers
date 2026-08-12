@@ -43,6 +43,18 @@ end
 
 local copy_table = Contract.copy_table
 
+local function normalise_environment(values, mode, label, level)
+  local env = copy_table(values, label .. ' env')
+  for key, value in pairs(env) do
+    if type(key) ~= 'string' or key == '' or type(value) ~= 'string' then
+      error(label .. ' env must map non-empty string names to strings', level)
+    end
+  end
+  mode = mode or 'extend'
+  if mode ~= 'extend' and mode ~= 'replace' then error(label .. " mode must be 'extend' or 'replace'", level) end
+  return env, mode
+end
+
 local function copy_spec(spec)
   local out = copy_table(spec)
   out.argv = copy_list(spec.argv)
@@ -54,7 +66,7 @@ local function copy_spec(spec)
 end
 
 local function command_value(spec)
-  return setmetatable({ _spec = copy_spec(spec) }, Command)
+  return setmetatable({ _spec = spec }, Command)
 end
 
 local function is_stream(value)
@@ -121,16 +133,7 @@ local function parse_command(...)
     spec.stdin = normalise_stdio(spec.stdin, 'stdin')
     spec.stdout = normalise_stdio(spec.stdout, 'stdout')
     spec.stderr = normalise_stdio(spec.stderr, 'stderr')
-    spec.env_mode = spec.env_mode or 'extend'
-    if spec.env_mode ~= 'extend' and spec.env_mode ~= 'replace' then
-      error("env_mode must be 'extend' or 'replace'", 3)
-    end
-    spec.env = copy_table(spec.env, 'process command env')
-    for key, value in pairs(spec.env) do
-      if type(key) ~= 'string' or key == '' or type(value) ~= 'string' then
-        error('process command env must map non-empty string names to strings', 3)
-      end
-    end
+    spec.env, spec.env_mode = normalise_environment(spec.env, spec.env_mode, 'process command', 3)
     spec.unset_env = copy_list(spec.unset_env, 'process command unset_env', Contract.non_empty_string)
     spec.pass_fds = copy_list(spec.pass_fds, 'process command pass_fds', Contract.non_negative_integer)
     validate_process_group(spec.process_group, 3)
@@ -216,17 +219,8 @@ end
 function Command:with_env(values, opts)
   opts = Contract.options(opts, { mode = true, unset = true }, 'Command:with_env options', 2)
   local spec = copy_spec(self._spec)
-  spec.env = copy_table(values, 'Command:with_env values')
-  for key, value in pairs(spec.env) do
-    if type(key) ~= 'string' or key == '' or type(value) ~= 'string' then
-      error('Command:with_env values must map non-empty string names to strings', 2)
-    end
-  end
-  spec.env_mode = opts.mode or spec.env_mode or 'extend'
+  spec.env, spec.env_mode = normalise_environment(values, opts.mode or spec.env_mode, 'Command:with_env', 2)
   spec.unset_env = copy_list(opts.unset == nil and spec.unset_env or opts.unset, 'Command:with_env unset', Contract.non_empty_string)
-  if spec.env_mode ~= 'extend' and spec.env_mode ~= 'replace' then
-    error("environment mode must be 'extend' or 'replace'", 2)
-  end
   return command_value(spec)
 end
 
@@ -252,7 +246,5 @@ end
 
 CommandModule.Command = Command
 CommandModule.copy_table = copy_table
-CommandModule.copy_list = copy_list
-CommandModule.copy_spec = copy_spec
 
 return CommandModule

@@ -19,8 +19,6 @@ local Module = {}
 local Dial = {}
 Dial.__index = Dial
 
-local next_dial = 0
-
 -- Keep strategy loading lazy to avoid the socket/resolver module cycle, while
 -- retaining literal require sites so portable-build dependency discovery can
 -- include both strategy modules.
@@ -244,16 +242,13 @@ end
 
 local function new_op(endpoint, opts, strategy)
   local scope = IO.current_scope(opts, 'socket.dial_op')
-  next_dial = next_dial + 1
-  local id = 'dial-' .. tostring(next_dial)
-  local dial = Label.attach(setmetatable({
+  local dial = Label.attach(Label.identity(setmetatable({
     kind = 'socket_dial',
-    _fibers_id = id,
     _endpoint = endpoint,
     _lifecycle = DialLifecycle.new(endpoint),
     _strategy = strategy,
     _options = opts,
-  }, Dial), opts.label)
+  }, Dial), 'dial'), opts.label)
   Label.child(dial._lifecycle, dial, 'lifecycle')
 
   return scope:_drive_op( dial, {

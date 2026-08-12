@@ -52,6 +52,16 @@ function Completion:pending_op()
   end)
 end
 
+function Completion:value_op()
+  return self:read_op():map(function(state)
+    return state.kind == 'succeeded' and state.values[1] or nil
+  end)
+end
+
+function Completion:is_terminal_op()
+  return self:read_op():map(function(state) return state.kind ~= 'pending' end)
+end
+
 function Completion:result_op()
   return self:terminal_op():map(function(state)
     if state.kind == 'succeeded' then

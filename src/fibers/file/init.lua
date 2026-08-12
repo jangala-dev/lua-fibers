@@ -109,34 +109,13 @@ function File.pipe_op(opts)
   end)
 end
 
-File.Error = IOError
-File.RegularFile = Regular.RegularFile
-File.Command = Regular.Command
-File.Job = Regular.Job
-File.submit_open_op = Regular.submit_open_op
-File.open_op = Regular.open_op
-File.open = Regular.open
-File.submit_tmpfile_op = Regular.submit_tmpfile_op
-File.tmpfile_op = Regular.tmpfile_op
-File.tmpfile = Regular.tmpfile
-File.submit_read_all_op = Regular.submit_read_all_op
-File.read_all_op = Regular.read_all_op
-File.read_all = Regular.read_all
-File.submit_write_all_op = Regular.submit_write_all_op
-File.write_all_op = Regular.write_all_op
-File.write_all = Regular.write_all
-File.submit_rename_op = Regular.submit_rename_op
-File.rename_op = Regular.rename_op
-File.rename = Regular.rename
-File.submit_unlink_op = Regular.submit_unlink_op
-File.unlink_op = Regular.unlink_op
-File.unlink = Regular.unlink
-File.submit_mkdir_op = Regular.submit_mkdir_op
-File.mkdir_op = Regular.mkdir_op
-File.mkdir = Regular.mkdir
-File.submit_mkdir_p_op = Regular.submit_mkdir_p_op
-File.mkdir_p_op = Regular.mkdir_p_op
-File.mkdir_p = Regular.mkdir_p
+File.Error, File.RegularFile, File.Command, File.Job = IOError, Regular.RegularFile, Regular.Command, Regular.Job
+for _, name in ipairs({
+  'submit_open_op', 'open_op', 'open', 'submit_tmpfile_op', 'tmpfile_op', 'tmpfile',
+  'submit_read_all_op', 'read_all_op', 'read_all', 'submit_write_all_op', 'write_all_op', 'write_all',
+  'submit_rename_op', 'rename_op', 'rename', 'submit_unlink_op', 'unlink_op', 'unlink',
+  'submit_mkdir_op', 'mkdir_op', 'mkdir', 'submit_mkdir_p_op', 'mkdir_p_op', 'mkdir_p',
+}) do File[name] = Regular[name] end
 
 Direct.install_static(File, { 'pipe' })
 

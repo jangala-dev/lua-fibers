@@ -271,9 +271,8 @@ do
   IOAudit.assert_clean(result.runtime, { label = 'listener address accessor failure' })
 end
 
--- Once a connected host handle has become a Stream, address discovery must not
--- be able to strand that Stream in the target Scope. The Stream owns the handle;
--- an accessor defect aborts the new Stream and returns a structured error.
+-- Address discovery happens before Stream admission. An accessor defect closes
+-- the still-unadmitted host handle and returns a structured error.
 do
   local result = fibers.try_run(function(scope)
     local closed = 0
@@ -302,15 +301,15 @@ do
     assert_eq(connection, nil)
     assert_truthy(HostError.is(err, 'protocol'))
     assert_truthy(tostring(err):match('injected connected local_address defect'))
-    assert_eq(closed, 1, 'failed address discovery must abort the admitted Stream')
+    assert_eq(closed, 1, 'failed address discovery must close the unadmitted handle')
   end, { host = SimulatedHost.new() })
 
   assert_truthy(result.ok, result:tostring())
   IOAudit.assert_clean(result.runtime, { label = 'connected address accessor failure' })
 end
 
--- If address discovery fails after Stream admission and aborting that Stream
--- also fails, the returned setup error retains both failures.
+-- If address discovery and disposal both fail, the returned setup error retains
+-- both failures without admitting a structurally broken Stream.
 do
   local returned_err
   local result = fibers.try_run(function(scope)
@@ -336,8 +335,8 @@ do
       'setup error should retain address and Stream-abort failures')
   end, { host = SimulatedHost.new() })
 
-  assert_eq(result.ok, false, 'failed Stream close should remain a Scope Closure failure')
-  assert_truthy(returned_err and tostring(returned_err):match('cleanup both failed'))
+  assert_eq(result.ok, true, 'failed pre-admission handle close must not create a Scope Closure failure')
+  assert_truthy(returned_err and tostring(returned_err):match('handle disposal both failed'))
 end
 
 

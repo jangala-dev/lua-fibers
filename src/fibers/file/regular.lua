@@ -587,31 +587,28 @@ local function new_file_op(path, mode, opts, operation, temporary)
   })
 end
 
+local function ready_file(submission)
+  return submission:wrap(function(file, err)
+    if not file then return nil, err end
+    local ready, ready_err = file:ready()
+    if not ready then return nil, ready_err end
+    return file
+  end)
+end
+
 function File.submit_open_op(path, mode, opts)
   path, mode = validate_path(path, 'submit_open_op'), validate_mode(mode)
   return new_file_op(path, mode, opts, 'file.submit_open_op', false)
 end
 function File.open_op(path, mode, opts)
   path, mode = validate_path(path, 'open_op'), validate_mode(mode)
-  local submission = new_file_op(path, mode, opts, 'file.open_op', false)
-  return submission:wrap(function(file, err)
-    if not file then return nil, err end
-    local ready, ready_err = file:ready()
-    if not ready then return nil, ready_err end
-    return file
-  end)
+  return ready_file(new_file_op(path, mode, opts, 'file.open_op', false))
 end
 function File.submit_tmpfile_op(opts)
   return new_file_op('', 'w+b', opts, 'file.submit_tmpfile_op', true)
 end
 function File.tmpfile_op(opts)
-  local submission = new_file_op('', 'w+b', opts, 'file.tmpfile_op', true)
-  return submission:wrap(function(file, err)
-    if not file then return nil, err end
-    local ready, ready_err = file:ready()
-    if not ready then return nil, ready_err end
-    return file
-  end)
+  return ready_file(new_file_op('', 'w+b', opts, 'file.tmpfile_op', true))
 end
 
 function Job:result_op()
@@ -728,22 +725,15 @@ function File.rename_op(from, to, opts)
   from, to = validate_path(from, 'rename_op'), validate_path(to, 'rename_op')
   return path_action_result('rename', { from, to }, opts)
 end
-function File.submit_unlink_op(path, opts)
-  path = validate_path(path, 'submit_unlink_op')
-  return (path_action('unlink', { path }, opts))
+local function unary_path_action(action, path, opts, submit)
+  path = validate_path(path, (submit and 'submit_' or '') .. action .. '_op')
+  local fn = submit and path_action or path_action_result
+  return fn(action, { path }, opts)
 end
-function File.unlink_op(path, opts)
-  path = validate_path(path, 'unlink_op')
-  return path_action_result('unlink', { path }, opts)
-end
-function File.submit_mkdir_op(path, opts)
-  path = validate_path(path, 'submit_mkdir_op')
-  return (path_action('mkdir', { path }, opts))
-end
-function File.mkdir_op(path, opts)
-  path = validate_path(path, 'mkdir_op')
-  return path_action_result('mkdir', { path }, opts)
-end
+function File.submit_unlink_op(path, opts) return unary_path_action('unlink', path, opts, true) end
+function File.unlink_op(path, opts) return unary_path_action('unlink', path, opts, false) end
+function File.submit_mkdir_op(path, opts) return unary_path_action('mkdir', path, opts, true) end
+function File.mkdir_op(path, opts) return unary_path_action('mkdir', path, opts, false) end
 local function mkdir_p_job(path, opts, label)
   path = validate_path(path, label)
   return path_job_op('mkdir_p', function(job_opts)

@@ -105,12 +105,7 @@ function Address.inet(host, port, opts)
 end
 
 function Address.copy(value)
-  Contract.table(value, 'socket address copy source', 2)
-  local out = {}
-  for key, item in pairs(value) do
-    out[key] = item
-  end
-  return out
+  return Contract.copy_table(value, 'socket address copy source', 2)
 end
 
 function Address.is_numeric(value)
@@ -121,17 +116,16 @@ function Address.is_name(value)
   return type(value) == 'table' and value.kind == 'name'
 end
 
-function Address.key(value)
-  value = Address.validate(value, 'socket address')
-  if value.kind == 'unix' then
-    return 'unix:' .. value.path
-  elseif value.kind == 'inet6' then
+local function key(value)
+  if value.kind == 'unix' then return 'unix:' .. value.path end
+  if value.kind == 'inet6' then
     return 'inet6:[' .. value.host .. ']:' .. tostring(value.port) .. ':' .. tostring(value.scope_id or 0)
-  elseif value.kind == 'inet4' then
-    return 'inet4:' .. value.host .. ':' .. tostring(value.port)
   end
+  if value.kind == 'inet4' then return 'inet4:' .. value.host .. ':' .. tostring(value.port) end
   return 'name:' .. value.host .. ':' .. tostring(value.service)
 end
+
+function Address.key(value) return key(Address.validate(value, 'socket address')) end
 
 function Address.validate(value, label)
   label = label or 'socket address'
@@ -171,7 +165,7 @@ function Address.equal(a, b)
   if not ok_a or not ok_b then
     return false
   end
-  return Address.key(aa) == Address.key(bb)
+  return key(aa) == key(bb)
 end
 
 function Address.display(value)
@@ -198,13 +192,9 @@ function Address.with_port(value, port)
   if value.kind == 'unix' then
     error('Unix socket addresses do not have ports', 2)
   end
-  local out = Address.copy(value)
-  if out.kind == 'name' then
-    out.service = port
-  else
-    out.port = port_number(port, 'socket address')
-  end
-  return Address.validate(out, 'socket address')
+  if value.kind == 'name' then value.service = port
+  else value.port = port_number(port, 'socket address') end
+  return value
 end
 
 return Address

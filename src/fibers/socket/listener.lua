@@ -31,7 +31,6 @@ local ListenerLifecycle = Lifecycle.define({
 local Module = {}
 local Listener = {}
 Listener.__index = Listener
-local next_listener = 0
 
 local LISTEN_OPTIONS = {
   scope = true, host = true, label = Contract.non_empty_string,
@@ -179,15 +178,12 @@ function Module.listen_op(address, opts)
   address = Address.validate(address, 'socket.listen_op')
   opts = validate_listen_options(opts)
   local scope = IO.current_scope(opts, 'socket.listen_op')
-  next_listener = next_listener + 1
-  local id = 'listener-' .. tostring(next_listener)
-  local listener = Label.attach(setmetatable({
+  local listener = Label.attach(Label.identity(setmetatable({
     kind = 'socket_listener',
-    _fibers_id = id,
     _address = address,
     _lifecycle = ListenerLifecycle.new(address),
     _options = opts,
-  }, Listener), opts.label)
+  }, Listener), 'listener'), opts.label)
   Label.child(listener._lifecycle, listener, 'lifecycle')
 
   Lifetime.define(listener, {

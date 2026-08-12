@@ -14,9 +14,7 @@ function Latch:set_op(value)
 end
 
 function Latch:get_op() return self:success_op() end
-function Latch:is_set_op()
-  return self:read_op():map(function(state) return state.kind ~= 'pending' end)
-end
+function Latch:is_set_op() return self:is_terminal_op() end
 
 Direct.install(Latch, { 'set', 'get', 'is_set' })
 return Latch

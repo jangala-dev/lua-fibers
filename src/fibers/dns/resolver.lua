@@ -26,7 +26,6 @@ local Contract = require('fibers.internal.contract')
 local Resolver = {}
 Resolver.__index = Resolver
 
-local next_resolver = 0
 local weak_id_counter = 0
 
 local LoadClaim = StateMachine.isolated_update('dns.load_once.claim', function(current)
@@ -78,9 +77,7 @@ local integer_12_65535 = Contract.range(Contract.integer, 12, 65535)
 local integer_0_64 = Contract.range(Contract.integer, 0, 64)
 local number_001_30 = Contract.range(Contract.finite_number, 0.01, 30.0)
 
-local function dense(values, label, level)
-  return Contract.dense(values, label, level)
-end
+local dense = Contract.dense
 
 local function search_list(values, label, level)
   Contract.dense(values, label, (level or 2) + 1, Contract.non_empty_string)
@@ -110,8 +107,7 @@ local COMMON_OPTIONS = {
   maximum_timeout = Contract.non_negative_number, maximum_cnames = integer_0_64,
 }
 
-local QUERY_OPTIONS = {}
-for key, rule in pairs(COMMON_OPTIONS) do QUERY_OPTIONS[key] = rule end
+local QUERY_OPTIONS = COMMON_OPTIONS
 
 local ENDPOINT_OPTIONS = {}
 for key, rule in pairs(QUERY_OPTIONS) do ENDPOINT_OPTIONS[key] = rule end
@@ -163,14 +159,10 @@ local function validate_query_options(value, endpoint)
   )
 end
 
-local ALL_OPTIONS = {}
-for key, rule in pairs(CONSTRUCTOR_OPTIONS) do ALL_OPTIONS[key] = rule end
-for key, rule in pairs(ENDPOINT_OPTIONS) do ALL_OPTIONS[key] = rule end
-
 local function validate_options(value, extras, label)
   value = value == nil and {} or Contract.table(value, label, 3)
   for key, item in pairs(value) do
-    local rule = extras and extras[key] or ALL_OPTIONS[key]
+    local rule = extras and extras[key] or CONSTRUCTOR_OPTIONS[key] or ENDPOINT_OPTIONS[key]
     if rule == nil then error(label .. ' does not accept ' .. tostring(key), 3) end
     if rule ~= true then rule(item, label .. '.' .. tostring(key), 4) end
   end
@@ -409,10 +401,8 @@ function Resolver.new(opts)
     maximum_cache_entries = 1024
   end
   opts.maximum_cache_entries = maximum_cache_entries
-  next_resolver = next_resolver + 1
   local hosts, hosts_loaded = initial_hosts(opts)
-  local self = Label.attach(setmetatable({
-    _fibers_id = 'dns-resolver-' .. tostring(next_resolver),
+  local self = Label.attach(Label.identity(setmetatable({
     opts = opts,
     host = opts.host,
     config = nil,
@@ -421,13 +411,12 @@ function Resolver.new(opts)
     cache_order = {},
     no_edns = {},
     hosts = hosts,
-    hosts_loaded = hosts_loaded,
     hosts_error = nil,
     hosts_load = StateMachine.new(hosts_loaded and 'loaded' or 'idle'):label('dns:hosts-load'),
     config_load = StateMachine.new('idle'):label('dns:config-load'),
     random_u16 = opts.random_u16,
     secure_ids = nil,
-  }, Resolver), opts.label)
+  }, Resolver), 'dns-resolver'), opts.label)
   if opts.nameservers or opts.resolv_conf then
     local config, err = Config.load(opts)
     self.config, self.config_error = config, err
@@ -448,7 +437,6 @@ function Resolver:_load_hosts()
       self.hosts_error = err
     end
     ensure_localhost(self.hosts)
-    self.hosts_loaded = true
   end)
   return self.hosts, self.hosts_error
 end

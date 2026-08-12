@@ -20,7 +20,6 @@ local Label = require('fibers.internal.label')
 local Module = {}
 local Query = {}
 Query.__index = Query
-local next_query = 0
 
 local SOCKET_RESOLVE_OPTIONS = { scope = true, resolver = true, dns = true }
 
@@ -52,23 +51,15 @@ local function family_completion(query, family)
   return query._family_completions[family]
 end
 
-function Query:family_addresses_op(family)
-  return family_completion(self, family):success_op()
+local function family_op(self, family, method)
+  local completion = family_completion(self, family)
+  return completion[method](completion)
 end
 
-
-function Query:family_failed_op(family)
-  return family_completion(self, family):failure_op()
-end
-
-function Query:family_result_op(family)
-  return family_completion(self, family):result_op()
-end
-
-function Query:family_finished_op(family)
-  return family_completion(self, family):terminal_op()
-end
-
+function Query:family_addresses_op(family) return family_op(self, family, 'success_op') end
+function Query:family_failed_op(family) return family_op(self, family, 'failure_op') end
+function Query:family_result_op(family) return family_op(self, family, 'result_op') end
+function Query:family_finished_op(family) return family_op(self, family, 'terminal_op') end
 
 function Query:_families_op()
   return Op.named_each({
@@ -117,23 +108,15 @@ function Query:result_op()
   end)
 end
 
-function Query:addresses_op()
-  return self:result_op():and_then(Op.guard(function(addresses)
-    if addresses then
-      return Op.always(addresses)
-    end
+local function result_side(self, success)
+  return self:result_op():and_then(Op.guard(function(addresses, err)
+    if success == (addresses ~= nil) then return Op.always(success and addresses or err) end
     return Op.never()
   end))
 end
 
-function Query:failed_op()
-  return self:result_op():and_then(Op.guard(function(addresses, err)
-    if not addresses then
-      return Op.always(err)
-    end
-    return Op.never()
-  end))
-end
+function Query:addresses_op() return result_side(self, true) end
+function Query:failed_op() return result_side(self, false) end
 
 function Query:close_op(reason)
   reason = reason or 'resolver query closed'
@@ -418,17 +401,14 @@ function Module.resolve_op(endpoint, opts)
     error('socket.resolve_op expects a name endpoint', 2)
   end
   local scope = IO.current_scope(opts, 'socket.resolve_op')
-  next_query = next_query + 1
-  local id = 'resolver-query-' .. tostring(next_query)
-  local query = Label.attach(setmetatable({
+  local query = Label.attach(Label.identity(setmetatable({
     kind = 'resolver_query',
-    _fibers_id = id,
     _endpoint = endpoint,
     _family_completions = {
       inet6 = Completion.new(),
       inet4 = Completion.new(),
     },
-  }, Query), opts.label)
+  }, Query), 'resolver-query'), opts.label)
   Label.child(query._family_completions.inet6, query, 'inet6')
   Label.child(query._family_completions.inet4, query, 'inet4')
 
@@ -446,14 +426,6 @@ function Module.resolve_op(endpoint, opts)
     run = function() return drive(query, opts) end,
   })
 end
-
-
-
-
-
-
-
-
 
 
 Module.Query = Query

@@ -16,28 +16,6 @@ local function address_options(opts)
   return { flowinfo = opts.flowinfo, scope_id = opts.scope_id }
 end
 
-local function name_address_options(opts)
-  if opts == nil then return nil end
-  Contract.table(opts, 'socket.resolve_name options', 3)
-  if opts.family_hint ~= nil and opts.family ~= nil then
-    error('socket.resolve_name options must not specify both family_hint and family', 3)
-  end
-  return {
-    family_hint = opts.family_hint ~= nil and opts.family_hint or opts.family,
-    socket_type = opts.socket_type,
-  }
-end
-
-local function resolve_operation_options(opts)
-  if opts == nil then return nil end
-  Contract.table(opts, 'socket.resolve_name options', 3)
-  local out = {}
-  for key, value in pairs(opts) do
-    if key ~= 'family_hint' and key ~= 'socket_type' then out[key] = value end
-  end
-  return out
-end
-
 local function operation_options(opts)
   if type(opts) ~= 'table' then return opts end
   local out = {}
@@ -111,7 +89,16 @@ end
 Socket.resolve_op = Resolver.resolve_op
 
 function Socket.resolve_name_op(host, service, opts)
-  return Socket.resolve_op(Address.name(host, service, name_address_options(opts)), resolve_operation_options(opts))
+  if opts == nil then return Socket.resolve_op(Address.name(host, service)) end
+  local resolve_opts = Contract.copy_table(opts, 'socket.resolve_name options', 3)
+  if resolve_opts.family_hint ~= nil and resolve_opts.family ~= nil then
+    error('socket.resolve_name options must not specify both family_hint and family', 3)
+  end
+  local endpoint = Address.name(host, service, {
+    family_hint = resolve_opts.family_hint or resolve_opts.family, socket_type = resolve_opts.socket_type,
+  })
+  resolve_opts.family_hint, resolve_opts.socket_type = nil, nil
+  return Socket.resolve_op(endpoint, resolve_opts)
 end
 
 -- One Dial constructor dispatches by endpoint kind. Name endpoints select the
